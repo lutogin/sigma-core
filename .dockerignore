@@ -1,0 +1,65 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv
+ENV
+env
+
+# IDE
+.idea
+.vscode
+.cursor
+*.swp
+*.swo
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov
+.tox
+.nox
+
+# Build
+*.egg-info
+dist
+build
+*.egg
+
+# Logs and cache (will be created at runtime)
+logs/
+logs/*
+cache/
+cache/*
+*.log
+
+# Results (regenerated at runtime)
+cointegration-results/
+_static-tools/
+optimization_results.csv
+optimization_results_*.csv
+
+# Environment (use docker env vars or secrets)
+.env
+.env.*
+!.env.example
+
+# Documentation
+*.md
+!README.md
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+.cursor/
+.idea/
+.vscode/

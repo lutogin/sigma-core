@@ -1,0 +1,27 @@
+# Types
+types-requests
+pandas-stubs
+
+# Exchange & Data
+python-binance
+
+# Data Processing
+pandas
+numpy
+
+# Visualization
+matplotlib
+seaborn
+
+# Infra
+python-dotenv
+loguru
+loguru-loki-handler
+requests
+
+# Database
+pymongo
+psycopg2-binary
+
+# Linting
+pylint

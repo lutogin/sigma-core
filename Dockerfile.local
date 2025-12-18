@@ -1,0 +1,39 @@
+# ============================================================================
+# Alpha Simple Trading Bot - Development Dockerfile
+# ============================================================================
+# Optimized for fast local builds with layer caching
+# ============================================================================
+
+FROM python:3.14-slim
+
+WORKDIR /app
+
+# Install system dependencies in one layer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies (this layer will be cached if requirements.txt doesn't change)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Set Python environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+# Copy application code (this layer changes most often)
+COPY . .
+
+# Create directories for logs and cache
+RUN mkdir -p /app/logs /app/cache
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)"
+
+# Default command
+CMD ["python", "main.py"]
