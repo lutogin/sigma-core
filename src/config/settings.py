@@ -39,7 +39,7 @@ class Settings:
 
     WORKERS_AMOUNT: int = 10
 
-    # CORE Settings
+    # Screener Settings
     TIMEFRAME: str = "15m"
     PRIMARY_PAIR: str = "ETH/USDT:USDT"
     CONSISTENT_PAIRS: list[str] = [
@@ -61,6 +61,9 @@ class Settings:
     # Scan settings
     LOOKBACK_WINDOW_DAYS: int = 3  # 3 days (244 candles for 15m timeframe)
     MIN_CORRELATION: float = 0.8  # Если корреляция упала ниже, пару не торгуем!
+    Z_ENTRY_THRESHOLD: float = 2.1  # Вход
+    Z_TP_THRESHOLD: float = 0.0  # Выход
+    Z_SL_THRESHOLD: float = 4.5  # Стоп-лосс
 
     # Exchange Settings
     EXCHANGE_NAME: str = "binance"
@@ -104,6 +107,9 @@ class Settings:
 
         self.LOOKBACK_WINDOW_DAYS = int(os.getenv("LOOKBACK_WINDOW_DAYS", "3"))
         self.MIN_CORRELATION = float(os.getenv("MIN_CORRELATION", "0.8"))
+        self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.1"))
+        self.Z_TP_THRESHOLD = float(os.getenv("Z_TP_THRESHOLD", "0.0"))
+        self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "4.5"))
 
         # Exchange
         self.EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "binance")

@@ -49,6 +49,9 @@ class ZScoreService:
         logger,
         lookback_window_days: int,
         timeframe: str = "15m",
+        z_entry_threshold: float = 2.1,
+        z_tp_threshold: float = 0.0,
+        z_sl_threshold: float = 4.5,
     ):
         """
         Initialize ZScoreService.
@@ -64,6 +67,9 @@ class ZScoreService:
         self._lookback_window = calculate_lookback_window(
             lookback_window_days, timeframe
         )
+        self._z_entry_threshold = z_entry_threshold
+        self._z_tp_threshold = z_tp_threshold
+        self._z_sl_threshold = z_sl_threshold
 
     def calculate(
         self,
@@ -272,7 +278,7 @@ class ZScoreService:
 
         # Build table
         lines = []
-        header = f"{'Symbol':<20} {'Z-Score':>10} {'Beta (hedge ratio)':>10} {'Corr':>10} {'Signal':>12}"
+        header = f"{'Symbol':<20} {'Z-Score':>10} {'β (hedge)':>12} {'Corr':>8} {'Signal':>12}"
         separator = "-" * len(header)
 
         lines.append("")
@@ -288,9 +294,9 @@ class ZScoreService:
             # Determine signal based on z-score
             if np.isnan(z):
                 signal = "N/A"
-            elif z >= 2.0:
+            elif z >= self._z_entry_threshold and z <= self._z_sl_threshold:
                 signal = "🔴 SHORT"
-            elif z <= -2.0:
+            elif z <= -self._z_entry_threshold and z <= -self._z_sl_threshold:
                 signal = "🟢 LONG"
             elif abs(z) >= 1.5:
                 signal = "⚠️ WATCH"
@@ -298,8 +304,8 @@ class ZScoreService:
                 signal = "—"
 
             z_str = f"{z:>10.4f}" if not np.isnan(z) else f"{'N/A':>10}"
-            beta_str = f"{beta:>10.4f}" if not np.isnan(beta) else f"{'N/A':>10}"
-            corr_str = f"{corr:>10.4f}" if not np.isnan(corr) else f"{'N/A':>10}"
+            beta_str = f"{beta:>12.4f}" if not np.isnan(beta) else f"{'N/A':>12}"
+            corr_str = f"{corr:>8.4f}" if not np.isnan(corr) else f"{'N/A':>8}"
 
             lines.append(
                 f"{row['symbol']:<20} {z_str} {beta_str} {corr_str} {signal:>12}"
