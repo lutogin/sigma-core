@@ -18,6 +18,7 @@ python-dotenv
 loguru
 loguru-loki-handler
 requests
+pyee
 
 # Database
 pymongo

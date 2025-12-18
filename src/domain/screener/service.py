@@ -2,8 +2,8 @@
 Orchestrator Service.
 """
 
-from src.domain.correlation.service import CorrelationService
-from src.domain.z_score.service import ZScoreResult, ZScoreService
+from src.domain.screener.correlation.service import CorrelationService
+from src.domain.screener.z_score import ZScoreResult, ZScoreService
 from typing import Dict
 from datetime import datetime, timedelta, timezone
 import pandas as pd

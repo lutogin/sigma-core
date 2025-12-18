@@ -146,7 +146,7 @@ class Container:
         """Get Correlation Service for calculating rolling beta and correlation."""
         self._check_initialized()
         if "correlation_service" not in self._instances:
-            from src.domain.correlation import CorrelationService
+            from src.domain.screener.correlation import CorrelationService
 
             self._instances["correlation_service"] = CorrelationService(
                 logger=self.logger,
@@ -160,7 +160,7 @@ class Container:
         """Get Z-Score Service for calculating spread and z-score."""
         self._check_initialized()
         if "z_score_service" not in self._instances:
-            from src.domain.z_score import ZScoreService
+            from src.domain.screener.z_score import ZScoreService
 
             self._instances["z_score_service"] = ZScoreService(
                 logger=self.logger,

@@ -16,7 +16,7 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 
-from src.domain.correlation.service import CorrelationResult
+from src.domain.screener.correlation.service import CorrelationResult
 from src.domain.utils import calculate_lookback_window
 
 
