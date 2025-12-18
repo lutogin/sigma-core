@@ -14,7 +14,6 @@ import asyncio
 from src.domain.utils import get_timeframe_minutes
 
 
-
 class AsyncDataLoaderService:
     """
     Async service for loading and ranking trading pairs.
@@ -114,9 +113,7 @@ class AsyncDataLoaderService:
 
                         if not missing_df.empty:
                             # Save to cache
-                            self._ohlcv_repo.save_data(
-                                symbol, timeframe, missing_df
-                            )
+                            self._ohlcv_repo.save_data(symbol, timeframe, missing_df)
 
                             # Merge with result
                             if df_result.empty:
@@ -155,9 +152,7 @@ class AsyncDataLoaderService:
                 try:
                     self._ohlcv_repo.save_data(symbol, timeframe, df_result)
                 except Exception as e:
-                    self._logger.warning(
-                        f"Failed to save {symbol} to cache: {e}"
-                    )
+                    self._logger.warning(f"Failed to save {symbol} to cache: {e}")
 
         return df_result
 
@@ -210,7 +205,7 @@ class AsyncDataLoaderService:
         symbols: List[str],
         start_time: datetime,
         end_time: datetime,
-        batch_size: int = 5,
+        batch_size: int = 10,
         timeframe: str = "15m",
     ) -> Dict[str, pd.DataFrame]:
         """
@@ -247,7 +242,7 @@ class AsyncDataLoaderService:
                     interval=timeframe,
                     start_date=start_time,
                     end_date=end_time,
-                    symbols=symbols  # Filter at DB level
+                    symbols=symbols,  # Filter at DB level
                 )
                 self._logger.info(f"Loaded {len(result)} symbols from cache")
             except Exception as e:
@@ -313,7 +308,7 @@ class AsyncDataLoaderService:
             fetched_data: Dict[str, pd.DataFrame] = {}
 
             for i in range(0, len(symbols_to_fetch), batch_size):
-                batch = symbols_to_fetch[i:i + batch_size]
+                batch = symbols_to_fetch[i : i + batch_size]
                 self._logger.info(
                     f"Fetching batch {i // batch_size + 1}/"
                     f"{(len(symbols_to_fetch) - 1) // batch_size + 1} "
@@ -357,12 +352,15 @@ class AsyncDataLoaderService:
                         self._logger.warning(
                             f"Error fetching {symbol}: {repr(fetch_result)}"
                         )
-                    elif isinstance(fetch_result, pd.DataFrame) and not fetch_result.empty:
+                    elif (
+                        isinstance(fetch_result, pd.DataFrame)
+                        and not fetch_result.empty
+                    ):
                         fetched_data[symbol] = fetch_result
                         # Merge with existing cached data if present
                         if symbol in result and not result[symbol].empty:
                             merged = pd.concat([result[symbol], fetch_result])
-                            merged = merged[~merged.index.duplicated(keep='last')]
+                            merged = merged[~merged.index.duplicated(keep="last")]
                             merged = merged.sort_index()
                             result[symbol] = merged
                         else:
@@ -370,15 +368,13 @@ class AsyncDataLoaderService:
 
                 # Rate limiting: wait between batches to avoid API ban
                 if i + batch_size < len(symbols_to_fetch):
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(1.0)
 
             # Step 4: Bulk insert fetched data to cache
             if self._ohlcv_repo and fetched_data:
                 try:
                     self._ohlcv_repo.save_data_bulk(timeframe, fetched_data)
-                    self._logger.info(
-                        f"Cached {len(fetched_data)} symbols to database"
-                    )
+                    self._logger.info(f"Cached {len(fetched_data)} symbols to database")
                 except Exception as e:
                     self._logger.warning(f"Error bulk saving to cache: {e}")
 
