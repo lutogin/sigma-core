@@ -132,9 +132,13 @@ class Container:
                 exchange_client=self.exchange_client,
                 correlation_service=self.correlation_service,
                 z_score_service=self.z_score_service,
+                volatility_filter_service=self.volatility_filter_service,
+                hurst_filter_service=self.hurst_filter_service,
                 data_loader=data_loader,
                 lookback_window_days=self._settings.LOOKBACK_WINDOW_DAYS,
                 correlation_threshold=self._settings.MIN_CORRELATION,
+                min_beta=self._settings.MIN_BETA,
+                max_beta=self._settings.MAX_BETA,
                 primary_pair=self._settings.PRIMARY_PAIR,
                 consistent_pairs=self._settings.CONSISTENT_PAIRS,
                 timeframe=self._settings.TIMEFRAME,
@@ -168,6 +172,32 @@ class Container:
                 timeframe=self._settings.TIMEFRAME,
             )
         return self._instances["z_score_service"]
+
+    @property
+    def volatility_filter_service(self):
+        """Get Volatility Filter Service for market safety checks."""
+        self._check_initialized()
+        if "volatility_filter_service" not in self._instances:
+            from src.domain.screener.volatility_filter import VolatilityFilterService
+
+            self._instances["volatility_filter_service"] = VolatilityFilterService(
+                logger=self.logger,
+                primary_pair=self._settings.PRIMARY_PAIR,
+                timeframe=self._settings.TIMEFRAME,
+            )
+        return self._instances["volatility_filter_service"]
+
+    @property
+    def hurst_filter_service(self):
+        """Get Hurst Filter Service for mean-reversion detection."""
+        self._check_initialized()
+        if "hurst_filter_service" not in self._instances:
+            from src.domain.screener.hurst_filter import HurstFilterService
+
+            self._instances["hurst_filter_service"] = HurstFilterService(
+                logger=self.logger,
+            )
+        return self._instances["hurst_filter_service"]
 
     # =========================================================================
     # Exchange

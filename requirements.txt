@@ -8,6 +8,7 @@ python-binance
 # Data Processing
 pandas
 numpy
+hurst
 
 # Visualization
 matplotlib

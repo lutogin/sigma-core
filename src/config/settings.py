@@ -43,27 +43,39 @@ class Settings:
     TIMEFRAME: str = "15m"
     PRIMARY_PAIR: str = "ETH/USDT:USDT"
     CONSISTENT_PAIRS: list[str] = [
-        "BNB/USDT:USDT",
         "XRP/USDT:USDT",
-        "SOL/USDT:USDT",
-        "TRX/USDT:USDT",
         "ADA/USDT:USDT",
-        "LINK/USDT:USDT",
         "HYPE/USDT:USDT",
-        "XMR/USDT:USDT",
-        "XLM/USDT:USDT",
-        "ZEC/USDT:USDT",
-        "LTC/USDT:USDT",
-        "SUI/USDT:USDT",
-        "AVAX/USDT:USDT",
+        "LINK/USDT:USDT",
+        "OP/USDT:USDT",
+        "UNI/USDT:USDT",
+        "MNT/USDT:USDT",
+        "DOGE/USDT:USDT",
+        "DOT/USDT:USDT",
+        "AAVE/USDT:USDT",
+        "ENA/USDT:USDT",
+        "LDO/USDT:USDT",
+        "OPT/USDT:USDT",
+        "ARB/USDT:USDT",
     ]
+
+    MAX_BETA: float = 2.0
+    MIN_BETA: float = 0.5
 
     # Scan settings
     LOOKBACK_WINDOW_DAYS: int = 3  # 3 days (244 candles for 15m timeframe)
+    # Correlation settings
     MIN_CORRELATION: float = 0.8  # Если корреляция упала ниже, пару не торгуем!
+    # Z-Score settings
     Z_ENTRY_THRESHOLD: float = 2.1  # Вход
     Z_TP_THRESHOLD: float = 0.0  # Выход
     Z_SL_THRESHOLD: float = 4.5  # Стоп-лосс
+    # Beta settings
+    MAX_BETA: float = 2.0
+    MIN_BETA: float = 0.5
+    # Hurst settings
+    HURST_THRESHOLD: float = 0.45  # Максимальный Hurst для спрэдов
+    HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
 
     # Exchange Settings
     EXCHANGE_NAME: str = "binance"
@@ -100,16 +112,21 @@ class Settings:
 
         self.TIMEFRAME = os.getenv("TIMEFRAME", "15m")
         self.PRIMARY_PAIR = os.getenv("PRIMARY_PAIR", "ETH/USDT:USDT")
-        self.CONSISTENT_PAIRS = os.getenv(
-            "CONSISTENT_PAIRS",
-            "BNB/USDT:USDT,XRP/USDT:USDT,SOL/USDT:USDT,TRX/USDT:USDT,ADA/USDT:USDT,LINK/USDT:USDT,HYPE/USDT:USDT,XMR/USDT:USDT,XLM/USDT:USDT,ZEC/USDT:USDT,LTC/USDT:USDT,SUI/USDT:USDT,AVAX/USDT:USDT",
-        ).split(",")
+        # Remove duplicates while preserving order
+        pairs = os.getenv("CONSISTENT_PAIRS", "").split(", ")
+        self.CONSISTENT_PAIRS = list(dict.fromkeys(p for p in pairs if p))
 
         self.LOOKBACK_WINDOW_DAYS = int(os.getenv("LOOKBACK_WINDOW_DAYS", "3"))
         self.MIN_CORRELATION = float(os.getenv("MIN_CORRELATION", "0.8"))
         self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.1"))
         self.Z_TP_THRESHOLD = float(os.getenv("Z_TP_THRESHOLD", "0.0"))
         self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "4.5"))
+
+        self.MIN_BETA = float(os.getenv("MIN_BETA", "0.5"))
+        self.MAX_BETA = float(os.getenv("MAX_BETA", "2"))
+
+        self.HURST_THRESHOLD = float(os.getenv("HURST_THRESHOLD", "0.45"))
+        self.HURST_LOOKBACK_CANDLES = int(os.getenv("HURST_LOOKBACK_CANDLES", "300"))
 
         # Exchange
         self.EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "binance")
