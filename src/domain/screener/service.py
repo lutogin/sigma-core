@@ -109,13 +109,18 @@ class ScreenerService:
         # 5. Filter by correlation quality
         filtered_results = self._filter_by_correlation(z_score_results)
 
-        # 6. Filter by Hurst exponent (mean-reversion quality)
-        filtered_results = self._filter_by_hurst(
+        # 6. Filter by Hurst exponent (ONLY for entry candidates with valid Z-score signal)
+        # Entry candidates: |Z| >= entry_threshold AND |Z| <= sl_threshold
+        filtered_results, hurst_results = self._filter_by_hurst(
             filtered_results, raw_data, correlation_results
         )
 
-        # 7. Log results
-        self._z_score_service.log_results(filtered_results, sort_by="z_score")
+        # 7. Log results (with Hurst values for candidates)
+        self._z_score_service.log_results(
+            filtered_results,
+            sort_by="z_score",
+            hurst_values=hurst_results,
+        )
 
         self._logger.info(
             f"Scan complete. Processed {len(filtered_results)} symbols "
@@ -164,12 +169,12 @@ class ScreenerService:
         z_score_results: Dict[str, ZScoreResult],
         raw_data: Dict[str, pd.DataFrame],
         correlation_results: Dict,
-    ) -> Dict[str, ZScoreResult]:
+    ) -> tuple[Dict[str, ZScoreResult], Dict[str, float]]:
         """
         Filter z-score results by Hurst exponent (mean-reversion quality).
 
-        Only keeps spreads with H < threshold (mean-reverting).
-        Spreads with H > 0.5 are trending and unsuitable for stat-arb.
+        ONLY checks Hurst for entry candidates:
+        - |Z| >= entry_threshold AND |Z| <= sl_threshold
 
         Args:
             z_score_results: Dictionary mapping symbol -> ZScoreResult.
@@ -177,10 +182,18 @@ class ScreenerService:
             correlation_results: Dictionary with beta values per symbol.
 
         Returns:
-            Filtered dictionary with only mean-reverting spreads.
+            Tuple of:
+            - Filtered dictionary with only mean-reverting spreads
+            - Hurst values dict for all checked symbols (for logging)
         """
+        hurst_values: Dict[str, float] = {}  # symbol -> hurst (for logging)
+
         if not self._hurst_filter_service:
-            return z_score_results
+            return z_score_results, hurst_values
+
+        # Get Z-score thresholds from z_score_service
+        z_entry = self._z_score_service.z_entry_threshold
+        z_sl = self._z_score_service.z_sl_threshold
 
         filtered = {}
         skipped = []
@@ -188,9 +201,23 @@ class ScreenerService:
         primary_df = raw_data.get(self._primary_pair)
         if primary_df is None or primary_df.empty:
             self._logger.warning("No primary pair data for Hurst calculation")
-            return z_score_results
+            return z_score_results, hurst_values
 
         for symbol, result in z_score_results.items():
+            z = result.current_z_score
+
+            # Check if this is an entry candidate
+            # Entry candidate: |Z| >= entry_threshold AND |Z| <= sl_threshold
+            is_entry_candidate = (
+                not np.isnan(z) and abs(z) >= z_entry and abs(z) <= z_sl
+            )
+
+            if not is_entry_candidate:
+                # Not an entry candidate - keep in results without Hurst check
+                filtered[symbol] = result
+                continue
+
+            # This is an entry candidate - check Hurst
             coin_df = raw_data.get(symbol)
             if coin_df is None or coin_df.empty:
                 skipped.append(f"{symbol} (no data)")
@@ -202,7 +229,7 @@ class ScreenerService:
                 skipped.append(f"{symbol} (no correlation)")
                 continue
 
-            beta = corr_result.beta
+            beta = corr_result.latest_beta
 
             # Calculate Hurst for spread (use log prices)
             hurst = self._hurst_filter_service.calculate_for_spread(
@@ -211,23 +238,29 @@ class ScreenerService:
                 beta=beta,
             )
 
+            hurst_values[symbol] = hurst  # Store for logging
+
             if hurst is None:
                 skipped.append(f"{symbol} (hurst calculation failed)")
                 continue
 
             if self._hurst_filter_service.is_mean_reverting(hurst):
                 filtered[symbol] = result
-                self._logger.debug(f"{symbol}: Hurst={hurst:.4f} ✓")
+                self._logger.info(
+                    f"✅ {symbol}: Z={z:.2f}, Hurst={hurst:.4f} < {self._hurst_filter_service.threshold} (mean-reverting)"
+                )
             else:
-                skipped.append(f"{symbol} (H={hurst:.4f})")
+                skipped.append(f"{symbol} (Z={z:.2f}, H={hurst:.4f})")
+                self._logger.warning(
+                    f"⚠️ {symbol}: Z={z:.2f}, Hurst={hurst:.4f} >= {self._hurst_filter_service.threshold} (trending, skip)"
+                )
 
         if skipped:
             self._logger.warning(
-                f"Skipped {len(skipped)} symbols with high Hurst exponent "
-                f"(trending spreads): {', '.join(skipped)}"
+                f"Skipped {len(skipped)} entry candidates with high Hurst: {', '.join(skipped)}"
             )
 
-        return filtered
+        return filtered, hurst_values
 
     async def _connect_and_fetch_symbols(self) -> None:
         if not self._exchange.is_connected:

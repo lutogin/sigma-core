@@ -71,6 +71,16 @@ class ZScoreService:
         self._z_tp_threshold = z_tp_threshold
         self._z_sl_threshold = z_sl_threshold
 
+    @property
+    def z_entry_threshold(self) -> float:
+        """Get Z-score entry threshold."""
+        return self._z_entry_threshold
+
+    @property
+    def z_sl_threshold(self) -> float:
+        """Get Z-score stop-loss threshold."""
+        return self._z_sl_threshold
+
     def calculate(
         self,
         primary_symbol: str,
@@ -225,6 +235,7 @@ class ZScoreService:
         results: Dict[str, "ZScoreResult"],
         sort_by: str = "z_score",
         top_n: int | None = None,
+        hurst_values: Dict[str, float] | None = None,
     ) -> str:
         """
         Format z-score results as a pretty table for logging.
@@ -233,12 +244,15 @@ class ZScoreService:
             results: Dictionary mapping symbol -> ZScoreResult.
             sort_by: Sort key - "z_score", "beta", "correlation", or "symbol".
             top_n: Limit output to top N results (by absolute z-score). None for all.
+            hurst_values: Optional dict of symbol -> Hurst exponent (only for entry candidates).
 
         Returns:
             Formatted string with table of results.
         """
         if not results:
             return "No z-score results to display."
+
+        hurst_values = hurst_values or {}
 
         # Build list of tuples for sorting
         data = []
@@ -250,6 +264,7 @@ class ZScoreService:
                     "beta": res.current_beta,
                     "correlation": res.current_correlation,
                     "spread": res.current_spread,
+                    "hurst": hurst_values.get(symbol),  # None if not calculated
                 }
             )
 
@@ -278,7 +293,7 @@ class ZScoreService:
 
         # Build table
         lines = []
-        header = f"{'Symbol':<20} {'Z-Score':>10} {'β (hedge)':>12} {'Corr':>8} {'Signal':>12}"
+        header = f"{'Symbol':<20} {'Z-Score':>10} {'β (hedge)':>12} {'Corr':>8} {'Hurst':>8} {'Signal':>12}"
         separator = "-" * len(header)
 
         lines.append("")
@@ -290,13 +305,14 @@ class ZScoreService:
             z = row["z_score"]
             beta = row["beta"]
             corr = row["correlation"]
+            hurst = row["hurst"]
 
             # Determine signal based on z-score
             if np.isnan(z):
                 signal = "N/A"
             elif z >= self._z_entry_threshold and z <= self._z_sl_threshold:
                 signal = "🔴 SHORT"
-            elif z <= -self._z_entry_threshold and z <= -self._z_sl_threshold:
+            elif z <= -self._z_entry_threshold and z >= -self._z_sl_threshold:
                 signal = "🟢 LONG"
             elif abs(z) >= 1.5:
                 signal = "⚠️ WATCH"
@@ -306,9 +322,11 @@ class ZScoreService:
             z_str = f"{z:>10.4f}" if not np.isnan(z) else f"{'N/A':>10}"
             beta_str = f"{beta:>12.4f}" if not np.isnan(beta) else f"{'N/A':>12}"
             corr_str = f"{corr:>8.4f}" if not np.isnan(corr) else f"{'N/A':>8}"
+            # Hurst: show value only for entry candidates, "-" otherwise
+            hurst_str = f"{hurst:>8.4f}" if hurst is not None else f"{'—':>8}"
 
             lines.append(
-                f"{row['symbol']:<20} {z_str} {beta_str} {corr_str} {signal:>12}"
+                f"{row['symbol']:<20} {z_str} {beta_str} {corr_str} {hurst_str} {signal:>12}"
             )
 
         lines.append(separator)
@@ -322,6 +340,7 @@ class ZScoreService:
         results: Dict[str, "ZScoreResult"],
         sort_by: str = "z_score",
         top_n: int | None = None,
+        hurst_values: Dict[str, float] | None = None,
     ) -> None:
         """
         Log z-score results as a formatted table.
@@ -330,6 +349,9 @@ class ZScoreService:
             results: Dictionary mapping symbol -> ZScoreResult.
             sort_by: Sort key - "z_score", "beta", "correlation", or "symbol".
             top_n: Limit output to top N results. None for all.
+            hurst_values: Optional dict of symbol -> Hurst exponent.
         """
-        formatted = self.format_results(results, sort_by=sort_by, top_n=top_n)
+        formatted = self.format_results(
+            results, sort_by=sort_by, top_n=top_n, hurst_values=hurst_values
+        )
         self._logger.info(f"Z-Score Results:{formatted}")

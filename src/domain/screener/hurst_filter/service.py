@@ -90,7 +90,11 @@ class HurstFilterService:
 
         try:
             if HURST_AVAILABLE:
-                H, _, _ = compute_Hc(series.values, kind="price", simplified=simplified)
+                # Use 'random_walk' because spread is already in log space
+                # 'price' mode would do log(series) which fails for negative values
+                H, _, _ = compute_Hc(
+                    series.values, kind="random_walk", simplified=simplified
+                )
             else:
                 H = self._calculate_hurst_rs(series.values)
 
@@ -141,11 +145,12 @@ class HurstFilterService:
         Fallback R/S (Rescaled Range) calculation for Hurst exponent.
 
         Uses the classic R/S analysis method.
+        Note: Input is already a spread (log prices), so we use diff() for returns.
         """
         n = len(series)
 
-        # Calculate returns
-        returns = np.diff(np.log(series))
+        # Calculate returns as simple differences (spread is already in log space)
+        returns = np.diff(series)
         returns = returns[~np.isnan(returns)]
 
         if len(returns) < 20:

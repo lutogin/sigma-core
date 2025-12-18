@@ -22,6 +22,7 @@ import pandas as pd
 
 from src.domain.data_loader.async_service import AsyncDataLoaderService
 from src.domain.screener.correlation import CorrelationService
+from src.domain.screener.hurst_filter import HurstFilterService
 from src.domain.screener.volatility_filter import VolatilityFilterService
 from src.domain.screener.z_score import ZScoreService, ZScoreResult
 from src.infra.container import Container
@@ -62,7 +63,7 @@ class BacktestConfig:
 
     # Maximum position duration before forced exit (in bars)
     # 96 bars = 24 hours for 15m timeframe
-    max_position_bars: int = 96  # 24 hours
+    max_position_bars: int = 128  # 24 hours
 
 
 @dataclass
@@ -187,6 +188,7 @@ class StatArbBacktest:
         correlation_service: CorrelationService,
         z_score_service: ZScoreService,
         volatility_filter_service: VolatilityFilterService,
+        hurst_filter_service: HurstFilterService,
     ):
         self.config = config
         self.settings = settings
@@ -194,6 +196,7 @@ class StatArbBacktest:
         self.correlation_service = correlation_service
         self.z_score_service = z_score_service
         self.volatility_filter_service = volatility_filter_service
+        self.hurst_filter_service = hurst_filter_service
 
         self.primary_pair = settings.PRIMARY_PAIR
         self.consistent_pairs = settings.CONSISTENT_PAIRS
@@ -385,7 +388,11 @@ class StatArbBacktest:
 
         # Step 3: Check entries for new positions
         await self._check_entries(
-            current_time, current_bar_idx, window_data, filtered_results
+            current_time,
+            current_bar_idx,
+            window_data,
+            filtered_results,
+            correlation_results,
         )
 
     def _filter_by_correlation(
@@ -398,6 +405,72 @@ class StatArbBacktest:
             for symbol, result in z_score_results.items()
             if result.current_correlation >= self.config.min_correlation
         }
+
+    def _check_hurst_for_symbol(
+        self,
+        symbol: str,
+        window_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict,
+    ) -> bool:
+        """
+        Check if a single symbol's spread is mean-reverting.
+
+        This is the final filter before entry - only called when:
+        1. Symbol has valid Z-score signal
+        2. No position limit exceeded
+        3. No cooldown active
+
+        Args:
+            symbol: Symbol to check
+            window_data: OHLCV data
+            correlation_results: Correlation results with beta values
+
+        Returns:
+            True if spread is mean-reverting (H < threshold), False otherwise
+        """
+        if not self.hurst_filter_service:
+            return True  # No filter = allow all
+
+        primary_df = window_data.get(self.primary_pair)
+        coin_df = window_data.get(symbol)
+
+        if primary_df is None or coin_df is None:
+            return False
+
+        if primary_df.empty or coin_df.empty:
+            return False
+
+        # Get beta from correlation results
+        corr_result = correlation_results.get(symbol)
+        if corr_result is None:
+            return False
+
+        beta = corr_result.latest_beta
+
+        # Calculate Hurst for spread (use log prices)
+        hurst = self.hurst_filter_service.calculate_for_spread(
+            coin_log_prices=coin_df["close"].apply(np.log),
+            primary_log_prices=primary_df["close"].apply(np.log),
+            beta=beta,
+        )
+
+        if hurst is None:
+            return False
+
+        is_mean_reverting = self.hurst_filter_service.is_mean_reverting(hurst)
+
+        if not is_mean_reverting:
+            print(
+                f"  ⚠️  {symbol} Hurst={hurst:.3f} > {self.hurst_filter_service.threshold} "
+                f"(trending spread, skip entry)"
+            )
+        else:
+            print(
+                f"  ✅ {symbol} Hurst={hurst:.3f} < {self.hurst_filter_service.threshold} "
+                f"(mean-reverting, allow entry)"
+            )
+
+        return is_mean_reverting
 
     async def _check_exits(
         self,
@@ -453,6 +526,7 @@ class StatArbBacktest:
         current_bar_idx: int,
         window_data: Dict[str, pd.DataFrame],
         filtered_results: Dict[str, ZScoreResult],
+        correlation_results: Dict,
     ) -> None:
         """Check for new entry signals."""
         # Only one spread position at a time (one coin vs ETH)
@@ -483,16 +557,27 @@ class StatArbBacktest:
             if np.isnan(z):
                 continue
 
-            # Check if signal is valid
-            if abs(z) >= self.config.z_entry_threshold:
+            # Check if signal is valid entry candidate
+            # Entry: |Z| >= entry_threshold AND |Z| <= sl_threshold
+            if (
+                abs(z) >= self.config.z_entry_threshold
+                and abs(z) <= self.config.z_sl_threshold
+            ):
                 if abs(z) > best_z_abs:
                     best_z_abs = abs(z)
                     side = "short" if z >= self.config.z_entry_threshold else "long"
                     best_signal = (symbol, side, z_result)
 
-        # Open position for the best signal only
+        # Open position for the best signal only (after Hurst check)
         if best_signal:
             symbol, side, z_result = best_signal
+
+            # Final filter: Check Hurst exponent (mean-reversion quality)
+            if not self._check_hurst_for_symbol(
+                symbol, window_data, correlation_results
+            ):
+                return  # Spread is trending, skip entry
+
             await self._open_position(
                 symbol=symbol,
                 side=side,
@@ -1194,6 +1279,11 @@ Examples:
             timeframe=settings.TIMEFRAME,
         )
 
+        # Create Hurst filter service
+        hurst_filter_service = HurstFilterService(
+            logger=logger,
+        )
+
         # Create and run backtester
         backtester = StatArbBacktest(
             config=config,
@@ -1202,6 +1292,7 @@ Examples:
             correlation_service=correlation_service,
             z_score_service=z_score_service,
             volatility_filter_service=volatility_filter_service,
+            hurst_filter_service=hurst_filter_service,
         )
 
         result = await backtester.run(start_date, end_date)
