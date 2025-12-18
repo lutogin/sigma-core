@@ -28,12 +28,14 @@ from binance.exceptions import BinanceAPIException
 @dataclass
 class ExchangeConfig:
     """Exchange configuration parameters."""
+
     api_key: str = ""
     api_secret: str = ""
     testnet: bool = False
     default_leverage: int = 1
     margin_type: str = "cross"
     quote_currency: str = "USDT"
+
 
 class OrderSide(str, Enum):
     """Order side."""
@@ -350,9 +352,7 @@ class BinanceClient:
             raise
 
     async def get_tradable_symbols(
-        self,
-        exclude_leveraged: bool = True,
-        min_volume_usdt: float = 0
+        self, exclude_leveraged: bool = True, min_volume_usdt: float = 0
     ) -> List[str]:
         """
         Get list of tradable futures symbols.
@@ -1059,6 +1059,185 @@ class BinanceClient:
             self.logger.error(f"Failed to open position for {symbol}: {e}")
             raise
 
+    async def open_position_limit(
+        self,
+        symbol: str,
+        side: TradeSide,
+        amount: float,
+        leverage: Optional[int] = None,
+        max_retries: int = 5,
+        retry_interval: float = 0.5,
+        fallback_to_market: bool = True,
+        max_slippage_percent: float = 0.1,
+    ) -> Order:
+        """
+        Open position with limit order, ensuring execution (like market but cheaper).
+
+        Uses aggressive limit pricing to get maker fees while guaranteeing fill.
+        For stat-arb where every basis point matters.
+
+        Strategy:
+        1. Place limit order at best bid/ask (aggressive, should fill immediately)
+        2. If not filled, chase the price with updated limit orders
+        3. After max_retries, optionally fallback to market order
+
+        :param symbol: Trading symbol
+        :param side: Order side (buy/sell)
+        :param amount: Amount to trade
+        :param leverage: Leverage (optional, uses default)
+        :param max_retries: Maximum retry attempts for price chasing
+        :param retry_interval: Seconds between retries
+        :param price_chase: If True, update price on each retry
+        :param fallback_to_market: If True, use market order after retries exhausted
+        :param max_slippage_percent: Max allowed price movement before fallback (0.1 = 0.1%)
+        :return: Filled Order
+        """
+        client = await self._get_client()
+        binance_symbol = self._symbol_to_binance(symbol)
+        side_upper = side.upper() if isinstance(side, str) else side.value
+
+        try:
+            # Setup leverage and margin
+            lev = leverage or self.default_leverage
+            await self.set_leverage(symbol, lev)
+            await self.set_margin_type(symbol, self.default_margin_type)
+
+            precise_amount = await self.amount_to_precision(
+                symbol, Decimal(str(amount))
+            )
+
+            # Get initial market data for price reference
+            market_data = await self.get_market_data(symbol)
+            initial_price = market_data.ask if side_upper == "BUY" else market_data.bid
+
+            self.logger.info(
+                f"Opening {side_upper} position for {symbol}: {precise_amount} "
+                f"(limit, initial_price={initial_price:.6f})"
+            )
+
+            current_order_id: Optional[str] = None
+
+            for attempt in range(max_retries + 1):
+                # Get current best price
+                market_data = await self.get_market_data(symbol)
+
+                if side_upper == "BUY":
+                    # For BUY: use ask price to ensure immediate fill
+                    # Adding tiny premium to cross the spread
+                    limit_price = market_data.ask
+                else:
+                    # For SELL: use bid price to ensure immediate fill
+                    limit_price = market_data.bid
+
+                # Check slippage
+                price_change_pct = (
+                    abs(limit_price - initial_price) / initial_price * 100
+                )
+                if price_change_pct > max_slippage_percent:
+                    self.logger.warning(
+                        f"Price moved {price_change_pct:.3f}% (max {max_slippage_percent}%), "
+                        f"{'falling back to market' if fallback_to_market else 'aborting'}"
+                    )
+                    if fallback_to_market:
+                        return await self.open_position(symbol, side, amount, leverage)
+                    raise ValueError(f"Price slippage exceeded {max_slippage_percent}%")
+
+                precise_price = await self.price_to_precision(
+                    symbol, Decimal(str(limit_price))
+                )
+
+                # Cancel previous order if exists
+                if current_order_id:
+                    try:
+                        await self.cancel_order(symbol, current_order_id)
+                        self.logger.debug(f"Cancelled stale order {current_order_id}")
+                    except Exception:
+                        pass  # Order might already be filled or cancelled
+
+                # Place limit order with IOC (Immediate-Or-Cancel) for fast execution
+                # Or use regular LIMIT for potential maker rebate
+                try:
+                    response = await client.futures_create_order(
+                        symbol=binance_symbol,
+                        side=side_upper,
+                        type="LIMIT",
+                        quantity=float(precise_amount),
+                        price=float(precise_price),
+                        positionSide="BOTH",
+                        timeInForce="GTC",  # Good-Till-Cancel
+                    )
+
+                    order = self._map_order_response(symbol, response)
+                    current_order_id = order.id
+
+                    self.logger.debug(
+                        f"Placed limit order {order.id} at {precise_price} "
+                        f"(attempt {attempt + 1}/{max_retries + 1})"
+                    )
+
+                    # Wait and check if filled
+                    await asyncio.sleep(retry_interval)
+
+                    # Check order status
+                    updated_order = await self.get_order(symbol, order.id)
+
+                    if updated_order.status == "closed":
+                        self.logger.info(
+                            f"Limit order filled for {symbol}: "
+                            f"{precise_amount} @ {updated_order.price}"
+                        )
+                        return updated_order
+
+                    if updated_order.filled > 0:
+                        # Partially filled - calculate remaining
+                        remaining = float(precise_amount) - updated_order.filled
+                        if remaining <= 0:
+                            return updated_order
+
+                        self.logger.info(
+                            f"Partial fill: {updated_order.filled}/{precise_amount}, "
+                            f"continuing with {remaining}"
+                        )
+                        precise_amount = await self.amount_to_precision(
+                            symbol, Decimal(str(remaining))
+                        )
+
+                except BinanceAPIException as e:
+                    self.logger.warning(f"Order attempt failed: {e}")
+                    if e.code == -2021:  # Order would immediately match and take
+                        # This is actually fine for our purpose
+                        pass
+                    else:
+                        raise
+
+            # Exhausted retries - cancel any pending order and fallback
+            if current_order_id:
+                try:
+                    await self.cancel_order(symbol, current_order_id)
+                except Exception:
+                    pass
+
+            if fallback_to_market:
+                self.logger.warning(
+                    f"Limit order not filled after {max_retries + 1} attempts, "
+                    f"falling back to market order"
+                )
+                return await self.open_position(symbol, side, amount, leverage)
+
+            raise TimeoutError(
+                f"Limit order for {symbol} not filled after {max_retries + 1} attempts"
+            )
+
+        except Exception as e:
+            # Cancel any pending order on error
+            if current_order_id:
+                try:
+                    await self.cancel_order(symbol, current_order_id)
+                except Exception:
+                    pass
+            self.logger.error(f"Failed to open limit position for {symbol}: {e}")
+            raise
+
     async def close_position(
         self, symbol: str, side: TradeSide, amount: float
     ) -> Order:
@@ -1086,6 +1265,156 @@ class BinanceClient:
 
         except Exception as e:
             self.logger.error(f"Failed to close position for {symbol}: {e}")
+            raise
+
+    async def close_position_limit(
+        self,
+        symbol: str,
+        side: TradeSide,
+        amount: float,
+        max_retries: int = 5,
+        retry_interval: float = 0.5,
+        fallback_to_market: bool = True,
+        max_slippage_percent: float = 0.1,
+    ) -> Order:
+        """
+        Close position with limit order, ensuring execution (like market but cheaper).
+
+        Uses aggressive limit pricing to get maker fees while guaranteeing fill.
+        For stat-arb where every basis point matters.
+
+        :param symbol: Trading symbol
+        :param side: Order side (buy/sell) - the side that CLOSES the position
+        :param amount: Amount to close
+        :param max_retries: Maximum retry attempts for price chasing
+        :param retry_interval: Seconds between retries
+        :param price_chase: If True, update price on each retry
+        :param fallback_to_market: If True, use market order after retries exhausted
+        :param max_slippage_percent: Max allowed price movement before fallback
+        :return: Filled Order
+        """
+        client = await self._get_client()
+        binance_symbol = self._symbol_to_binance(symbol)
+        side_upper = side.upper() if isinstance(side, str) else side.value
+
+        try:
+            precise_amount = await self.amount_to_precision(
+                symbol, Decimal(str(amount))
+            )
+
+            # Get initial market data for price reference
+            market_data = await self.get_market_data(symbol)
+            initial_price = market_data.ask if side_upper == "BUY" else market_data.bid
+
+            self.logger.info(
+                f"Closing position for {symbol}: {side_upper} {precise_amount} "
+                f"(limit, initial_price={initial_price:.6f})"
+            )
+
+            current_order_id: Optional[str] = None
+
+            for attempt in range(max_retries + 1):
+                # Get current best price
+                market_data = await self.get_market_data(symbol)
+
+                if side_upper == "BUY":
+                    limit_price = market_data.ask
+                else:
+                    limit_price = market_data.bid
+
+                # Check slippage
+                price_change_pct = (
+                    abs(limit_price - initial_price) / initial_price * 100
+                )
+                if price_change_pct > max_slippage_percent:
+                    self.logger.warning(
+                        f"Price moved {price_change_pct:.3f}% (max {max_slippage_percent}%), "
+                        f"{'falling back to market' if fallback_to_market else 'aborting'}"
+                    )
+                    if fallback_to_market:
+                        return await self.close_position(symbol, side, amount)
+                    raise ValueError(f"Price slippage exceeded {max_slippage_percent}%")
+
+                precise_price = await self.price_to_precision(
+                    symbol, Decimal(str(limit_price))
+                )
+
+                # Cancel previous order if exists
+                if current_order_id:
+                    try:
+                        await self.cancel_order(symbol, current_order_id)
+                    except Exception:
+                        pass
+
+                try:
+                    response = await client.futures_create_order(
+                        symbol=binance_symbol,
+                        side=side_upper,
+                        type="LIMIT",
+                        quantity=float(precise_amount),
+                        price=float(precise_price),
+                        positionSide="BOTH",
+                        timeInForce="GTC",
+                        reduceOnly=True,
+                    )
+
+                    order = self._map_order_response(symbol, response)
+                    current_order_id = order.id
+
+                    self.logger.debug(
+                        f"Placed close limit order {order.id} at {precise_price} "
+                        f"(attempt {attempt + 1}/{max_retries + 1})"
+                    )
+
+                    await asyncio.sleep(retry_interval)
+
+                    updated_order = await self.get_order(symbol, order.id)
+
+                    if updated_order.status == "closed":
+                        self.logger.info(
+                            f"Close limit order filled for {symbol}: "
+                            f"{precise_amount} @ {updated_order.price}"
+                        )
+                        return updated_order
+
+                    if updated_order.filled > 0:
+                        remaining = float(precise_amount) - updated_order.filled
+                        if remaining <= 0:
+                            return updated_order
+                        precise_amount = await self.amount_to_precision(
+                            symbol, Decimal(str(remaining))
+                        )
+
+                except BinanceAPIException as e:
+                    self.logger.warning(f"Close order attempt failed: {e}")
+                    if e.code != -2021:
+                        raise
+
+            # Exhausted retries
+            if current_order_id:
+                try:
+                    await self.cancel_order(symbol, current_order_id)
+                except Exception:
+                    pass
+
+            if fallback_to_market:
+                self.logger.warning(
+                    f"Close limit order not filled after {max_retries + 1} attempts, "
+                    f"falling back to market order"
+                )
+                return await self.close_position(symbol, side, amount)
+
+            raise TimeoutError(
+                f"Close limit order for {symbol} not filled after {max_retries + 1} attempts"
+            )
+
+        except Exception as e:
+            if current_order_id:
+                try:
+                    await self.cancel_order(symbol, current_order_id)
+                except Exception:
+                    pass
+            self.logger.error(f"Failed to close limit position for {symbol}: {e}")
             raise
 
     async def flash_close_position(self, symbol: str) -> Order:

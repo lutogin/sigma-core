@@ -111,9 +111,7 @@ class OrchestratorService:
             if result.current_correlation >= self._correlation_threshold:
                 filtered[symbol] = result
             else:
-                skipped.append(
-                    f"{symbol} (corr={result.current_correlation:.4f})"
-                )
+                skipped.append(f"{symbol} (corr={result.current_correlation:.4f})")
 
         if skipped:
             self._logger.warning(
@@ -152,7 +150,7 @@ class OrchestratorService:
             symbols=[self._primary_pair] + self._consistent_pairs,
             start_time=start_time,
             end_time=end_time,
-            batch_size=5,
+            batch_size=10,
             timeframe=self._timeframe,
         )
 
