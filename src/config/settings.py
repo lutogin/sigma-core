@@ -42,11 +42,25 @@ class Settings:
     # CORE Settings
     TIMEFRAME: str = "15m"
     PRIMARY_PAIR: str = "ETH/USDT:USDT"
-    CONSISTENT_PAIRS: list[str] = ["BNB/USDT:USDT","XRP/USDT:USDT","SOL/USDT:USDT","TRX/USDT:USDT","ADA/USDT:USDT","LINK/USDT:USDT","HYPE/USDT:USDT","XMR/USDT:USDT","XLM/USDT:USDT","ZEC/USDT:USDT","LTC/USDT:USDT","SUI/USDT:USDT","AVAX/USDT:USDT"]
+    CONSISTENT_PAIRS: list[str] = [
+        "BNB/USDT:USDT",
+        "XRP/USDT:USDT",
+        "SOL/USDT:USDT",
+        "TRX/USDT:USDT",
+        "ADA/USDT:USDT",
+        "LINK/USDT:USDT",
+        "HYPE/USDT:USDT",
+        "XMR/USDT:USDT",
+        "XLM/USDT:USDT",
+        "ZEC/USDT:USDT",
+        "LTC/USDT:USDT",
+        "SUI/USDT:USDT",
+        "AVAX/USDT:USDT",
+    ]
 
     # Scan settings
-    LOOKBACK_WINDOW_DAYS: int = 3     # 3 days (244 candles for 15m timeframe)
-    MIN_CORRELATION: float = 0.8      # Если корреляция упала ниже, пару не торгуем!
+    LOOKBACK_WINDOW_DAYS: int = 3  # 3 days (244 candles for 15m timeframe)
+    MIN_CORRELATION: float = 0.8  # Если корреляция упала ниже, пару не торгуем!
 
     # Exchange Settings
     EXCHANGE_NAME: str = "binance"
@@ -63,9 +77,9 @@ class Settings:
     LOG_DIRECTORY: str = "logs"
 
     # Loki Settings (Grafana Cloud)
-    LOKI_HOST: str = ""       # e.g., https://logs-prod-012.grafana.net
-    LOKI_USER: str = ""       # Grafana Cloud user ID
-    LOKI_TOKEN: str = ""      # Grafana Cloud API token
+    LOKI_HOST: str = ""  # e.g., https://logs-prod-012.grafana.net
+    LOKI_USER: str = ""  # Grafana Cloud user ID
+    LOKI_TOKEN: str = ""  # Grafana Cloud API token
     LOKI_APP_NAME: str = "alpha-bot"
 
     # MongoDB Settings
@@ -83,7 +97,10 @@ class Settings:
 
         self.TIMEFRAME = os.getenv("TIMEFRAME", "15m")
         self.PRIMARY_PAIR = os.getenv("PRIMARY_PAIR", "ETH/USDT:USDT")
-        self.CONSISTENT_PAIRS = os.getenv("CONSISTENT_PAIRS", "BNB/USDT:USDT,XRP/USDT:USDT,SOL/USDT:USDT,TRX/USDT:USDT,ADA/USDT:USDT,LINK/USDT:USDT,HYPE/USDT:USDT,XMR/USDT:USDT,XLM/USDT:USDT,ZEC/USDT:USDT,LTC/USDT:USDT,SUI/USDT:USDT,AVAX/USDT:USDT").split(",")
+        self.CONSISTENT_PAIRS = os.getenv(
+            "CONSISTENT_PAIRS",
+            "BNB/USDT:USDT,XRP/USDT:USDT,SOL/USDT:USDT,TRX/USDT:USDT,ADA/USDT:USDT,LINK/USDT:USDT,HYPE/USDT:USDT,XMR/USDT:USDT,XLM/USDT:USDT,ZEC/USDT:USDT,LTC/USDT:USDT,SUI/USDT:USDT,AVAX/USDT:USDT",
+        ).split(",")
 
         self.LOOKBACK_WINDOW_DAYS = int(os.getenv("LOOKBACK_WINDOW_DAYS", "3"))
         self.MIN_CORRELATION = float(os.getenv("MIN_CORRELATION", "0.8"))
@@ -93,16 +110,16 @@ class Settings:
         self.EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
         self.EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
         self.EXCHANGE_TESTNET = os.getenv("EXCHANGE_TESTNET", "false").lower() == "true"
-        self.EXCHANGE_DEFAULT_LEVERAGE = int(os.getenv("EXCHANGE_DEFAULT_LEVERAGE", "1"))
+        self.EXCHANGE_DEFAULT_LEVERAGE = int(
+            os.getenv("EXCHANGE_DEFAULT_LEVERAGE", "1")
+        )
         self.EXCHANGE_MARGIN_TYPE = os.getenv("EXCHANGE_MARGIN_TYPE", "cross")
         self.EXCHANGE_QUOTE_CURRENCY = os.getenv("EXCHANGE_QUOTE_CURRENCY", "USDT")
 
         # Logging
         self.LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
         self.LOG_TO_FILE = os.getenv("LOG_TO_FILE", "true").lower() == "true"
-        self.LOG_DIRECTORY = _resolve_path(
-            os.getenv("LOG_DIRECTORY", "logs")
-        )
+        self.LOG_DIRECTORY = _resolve_path(os.getenv("LOG_DIRECTORY", "logs"))
 
         # Loki (Grafana Cloud)
         self.LOKI_HOST = os.getenv("LOKI_HOST", "")
@@ -115,7 +132,9 @@ class Settings:
         self.MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "alpha-simple-bot")
 
         # PostgreSQL/TimescaleDB
-        self.TIMESCALE_DB_URL = os.getenv("TIMESCALE_DB_URL", "postgresql://localhost:5432/alpha_bot")
+        self.TIMESCALE_DB_URL = os.getenv(
+            "TIMESCALE_DB_URL", "postgresql://localhost:5432/alpha_bot"
+        )
 
     def to_dict(self) -> dict:
         """Convert settings to dictionary."""
@@ -149,4 +168,3 @@ def load_settings(env_file: Optional[Union[str, Path]] = None) -> Settings:
     # Note: logging happens later after logger is configured
 
     return Settings()
-

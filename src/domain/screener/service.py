@@ -11,7 +11,7 @@ import pandas as pd
 from src.domain.data_loader.async_service import AsyncDataLoaderService
 
 
-class OrchestratorService:
+class ScreenerService:
     """
     Orchestrates the statistical arbitrage pipeline.
     """

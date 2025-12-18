@@ -53,10 +53,11 @@ class Container:
     @property
     def logger(self):
         """Get configured logger."""
-        if 'logger' not in self._instances:
+        if "logger" not in self._instances:
             from src.infra.logger import logger
-            self._instances['logger'] = logger
-        return self._instances['logger']
+
+            self._instances["logger"] = logger
+        return self._instances["logger"]
 
     # =========================================================================
     # Infrastructure
@@ -66,48 +67,47 @@ class Container:
     def mongo_db(self):
         """Get MongoDB database connection."""
         self._check_initialized()
-        if 'mongo_db' not in self._instances:
+        if "mongo_db" not in self._instances:
             from src.infra.mongo import MongoDatabase
-            self._instances['mongo_db'] = MongoDatabase(
+
+            self._instances["mongo_db"] = MongoDatabase(
                 uri=self._settings.MONGODB_URI,
                 database_name=self._settings.MONGODB_DATABASE,
-                logger=self.logger
+                logger=self.logger,
             )
-        return self._instances['mongo_db']
+        return self._instances["mongo_db"]
 
     @property
     def timescale_db(self):
         """Get TimescaleDB connection."""
         self._check_initialized()
-        if 'timescale_db' not in self._instances:
+        if "timescale_db" not in self._instances:
             from src.infra.timescale import TimescaleDB
-            db = TimescaleDB(
-                db_url=self._settings.TIMESCALE_DB_URL,
-                logger=self.logger
-            )
+
+            db = TimescaleDB(db_url=self._settings.TIMESCALE_DB_URL, logger=self.logger)
             db.connect()
-            self._instances['timescale_db'] = db
-        return self._instances['timescale_db']
+            self._instances["timescale_db"] = db
+        return self._instances["timescale_db"]
 
     @property
     def ohlcv_repository(self):
         """Get OHLCV repository (TimescaleDB storage for price data)."""
         self._check_initialized()
-        if 'ohlcv_repository' not in self._instances:
+        if "ohlcv_repository" not in self._instances:
             from src.domain.data_loader import OHLCVRepository
-            self._instances['ohlcv_repository'] = OHLCVRepository(
-                db=self.timescale_db,
-                logger=self.logger
-            )
-        return self._instances['ohlcv_repository']
 
+            self._instances["ohlcv_repository"] = OHLCVRepository(
+                db=self.timescale_db, logger=self.logger
+            )
+        return self._instances["ohlcv_repository"]
 
     @property
-    def orchestrator_service(self):
+    def screener_service(self):
         """Get Orchestrator Service."""
         self._check_initialized()
-        if 'orchestrator_service' not in self._instances:
-            from src.domain.orchestrator.service import OrchestratorService
+        if "screener_service" not in self._instances:
+            from src.domain.screener import ScreenerService
+
             # Ensure data loader is available
             # Warning: AsyncDataLoaderService expects dependencies too.
             # Let's verify we have a way to get it.
@@ -120,13 +120,14 @@ class Container:
             # Let's add it.
 
             from src.domain.data_loader.async_service import AsyncDataLoaderService
+
             data_loader = AsyncDataLoaderService(
                 logger=self.logger,
                 exchange_client=self.exchange_client,
                 ohlcv_repository=self.ohlcv_repository,
             )
 
-            self._instances['orchestrator_service'] = OrchestratorService(
+            self._instances["screener_service"] = ScreenerService(
                 logger=self.logger,
                 exchange_client=self.exchange_client,
                 correlation_service=self.correlation_service,
@@ -138,33 +139,35 @@ class Container:
                 consistent_pairs=self._settings.CONSISTENT_PAIRS,
                 timeframe=self._settings.TIMEFRAME,
             )
-        return self._instances['orchestrator_service']
+        return self._instances["screener_service"]
 
     @property
     def correlation_service(self):
         """Get Correlation Service for calculating rolling beta and correlation."""
         self._check_initialized()
-        if 'correlation_service' not in self._instances:
+        if "correlation_service" not in self._instances:
             from src.domain.correlation import CorrelationService
-            self._instances['correlation_service'] = CorrelationService(
+
+            self._instances["correlation_service"] = CorrelationService(
                 logger=self.logger,
                 lookback_window_days=self._settings.LOOKBACK_WINDOW_DAYS,
                 timeframe=self._settings.TIMEFRAME,
             )
-        return self._instances['correlation_service']
+        return self._instances["correlation_service"]
 
     @property
     def z_score_service(self):
         """Get Z-Score Service for calculating spread and z-score."""
         self._check_initialized()
-        if 'z_score_service' not in self._instances:
+        if "z_score_service" not in self._instances:
             from src.domain.z_score import ZScoreService
-            self._instances['z_score_service'] = ZScoreService(
+
+            self._instances["z_score_service"] = ZScoreService(
                 logger=self.logger,
                 lookback_window_days=self._settings.LOOKBACK_WINDOW_DAYS,
                 timeframe=self._settings.TIMEFRAME,
             )
-        return self._instances['z_score_service']
+        return self._instances["z_score_service"]
 
     # =========================================================================
     # Exchange
@@ -174,8 +177,9 @@ class Container:
     def exchange_client(self):
         """Get exchange client (Binance Futures)."""
         self._check_initialized()
-        if 'exchange_client' not in self._instances:
+        if "exchange_client" not in self._instances:
             from src.integrations.exchange import BinanceClient, ExchangeConfig
+
             config = ExchangeConfig(
                 api_key=self._settings.EXCHANGE_API_KEY,
                 api_secret=self._settings.EXCHANGE_API_SECRET,
@@ -184,11 +188,10 @@ class Container:
                 margin_type=self._settings.EXCHANGE_MARGIN_TYPE,
                 quote_currency=self._settings.EXCHANGE_QUOTE_CURRENCY,
             )
-            self._instances['exchange_client'] = BinanceClient(
-                config=config,
-                logger=self.logger
+            self._instances["exchange_client"] = BinanceClient(
+                config=config, logger=self.logger
             )
-        return self._instances['exchange_client']
+        return self._instances["exchange_client"]
 
     # =========================================================================
     # Lifecycle
@@ -196,16 +199,16 @@ class Container:
 
     async def shutdown_async(self) -> None:
         """Cleanup resources (async version)."""
-        if 'mongo_db' in self._instances:
-            self._instances['mongo_db'].disconnect()
-        if 'timescale_db' in self._instances:
-            self._instances['timescale_db'].close()
+        if "mongo_db" in self._instances:
+            self._instances["mongo_db"].disconnect()
+        if "timescale_db" in self._instances:
+            self._instances["timescale_db"].close()
         self._instances.clear()
 
     def shutdown(self) -> None:
         """Cleanup resources (sync version)."""
-        if 'mongo_db' in self._instances:
-            self._instances['mongo_db'].disconnect()
-        if 'timescale_db' in self._instances:
-            self._instances['timescale_db'].close()
+        if "mongo_db" in self._instances:
+            self._instances["mongo_db"].disconnect()
+        if "timescale_db" in self._instances:
+            self._instances["timescale_db"].close()
         self._instances.clear()

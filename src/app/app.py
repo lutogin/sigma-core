@@ -101,7 +101,7 @@ class Application:
 
         async def run_pipeline():
             """Run the async pipeline with proper cleanup."""
-            orchestrator = self._container.orchestrator_service
+            orchestrator = self._container.screener_service
             try:
                 await orchestrator.scan()
             finally:
