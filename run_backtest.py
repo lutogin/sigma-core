@@ -60,6 +60,10 @@ class BacktestConfig:
     # 2 bars = 30 minutes for 15m timeframe
     cooldown_bars: int = 16  # 4 hours
 
+    # Maximum position duration before forced exit (in bars)
+    # 96 bars = 24 hours for 15m timeframe
+    max_position_bars: int = 96  # 24 hours
+
 
 @dataclass
 class Position:
@@ -77,6 +81,7 @@ class Position:
     entry_beta: float
     size_usdt: float  # Notional size of the spread
     entry_time: datetime
+    entry_bar_idx: int  # Bar index at entry (for timeout tracking)
 
     # Leg 1: COIN
     coin_entry_price: float
@@ -293,7 +298,7 @@ class StatArbBacktest:
             }
 
             # Run strategy logic
-            await self._process_candle(current_time, window_data)
+            await self._process_candle(current_time, i, window_data)
 
             # Record equity (balance + unrealized PnL)
             equity = self._calculate_equity(window_data)
@@ -337,6 +342,7 @@ class StatArbBacktest:
     async def _process_candle(
         self,
         current_time: datetime,
+        current_bar_idx: int,
         window_data: Dict[str, pd.DataFrame],
     ) -> None:
         """Process a single candle: check exits, then entries."""
@@ -361,7 +367,11 @@ class StatArbBacktest:
 
         # Step 1: Check exits for open positions
         await self._check_exits(
-            current_time, window_data, filtered_results, z_score_results
+            current_time,
+            current_bar_idx,
+            window_data,
+            filtered_results,
+            z_score_results,
         )
 
         # Step 2: Check market volatility (skip entries if market is unsafe)
@@ -374,7 +384,9 @@ class StatArbBacktest:
                 return
 
         # Step 3: Check entries for new positions
-        await self._check_entries(current_time, window_data, filtered_results)
+        await self._check_entries(
+            current_time, current_bar_idx, window_data, filtered_results
+        )
 
     def _filter_by_correlation(
         self,
@@ -390,6 +402,7 @@ class StatArbBacktest:
     async def _check_exits(
         self,
         current_time: datetime,
+        current_bar_idx: int,
         window_data: Dict[str, pd.DataFrame],
         filtered_results: Dict[str, ZScoreResult],
         all_results: Dict[str, ZScoreResult],
@@ -401,7 +414,11 @@ class StatArbBacktest:
             exit_reason = None
             z_result = all_results.get(symbol)
 
-            if z_result is None:
+            # Check position timeout first
+            bars_held = current_bar_idx - position.entry_bar_idx
+            if bars_held >= self.config.max_position_bars:
+                exit_reason = "TIMEOUT"
+            elif z_result is None:
                 # No z-score data - shouldn't happen, but close if it does
                 exit_reason = "NO_DATA"
             elif symbol not in filtered_results:
@@ -433,6 +450,7 @@ class StatArbBacktest:
     async def _check_entries(
         self,
         current_time: datetime,
+        current_bar_idx: int,
         window_data: Dict[str, pd.DataFrame],
         filtered_results: Dict[str, ZScoreResult],
     ) -> None:
@@ -480,6 +498,7 @@ class StatArbBacktest:
                 side=side,
                 z_result=z_result,
                 current_time=current_time,
+                current_bar_idx=current_bar_idx,
                 window_data=window_data,
             )
 
@@ -489,6 +508,7 @@ class StatArbBacktest:
         side: str,
         z_result: ZScoreResult,
         current_time: datetime,
+        current_bar_idx: int,
         window_data: Dict[str, pd.DataFrame],
     ) -> None:
         """
@@ -525,6 +545,7 @@ class StatArbBacktest:
             entry_beta=z_result.current_beta,
             size_usdt=position_size,
             entry_time=current_time,
+            entry_bar_idx=current_bar_idx,
             coin_entry_price=coin_price,
             coin_size=coin_size,
             primary_entry_price=primary_price,
