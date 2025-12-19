@@ -6,10 +6,11 @@ Uses SchedulerService for cron/interval based task execution.
 """
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from src.domain.orchestrator import OrchestratorService
+    from src.domain.trading import TradingService
     from src.infra.scheduler import SchedulerService
 
 
@@ -19,6 +20,7 @@ class PlannerService:
 
     Responsible for:
     - Scheduling OrchestratorService.run on 15-minute intervals
+    - Checking position timeouts before each scan
     - Managing the bot's continuous operation lifecycle
     - Coordinating scheduled tasks
     """
@@ -31,6 +33,7 @@ class PlannerService:
         logger,
         scheduler_service: "SchedulerService",
         orchestrator_service: "OrchestratorService",
+        trading_service: Optional["TradingService"] = None,
     ):
         """
         Initialize Planner Service.
@@ -39,10 +42,12 @@ class PlannerService:
             logger: Application logger (DI).
             scheduler_service: Scheduler for task management.
             orchestrator_service: Orchestrator to run scans.
+            trading_service: Trading service for timeout checks (optional).
         """
         self._logger = logger
         self._scheduler = scheduler_service
         self._orchestrator = orchestrator_service
+        self._trading_service = trading_service
         self._shutdown_event: asyncio.Event | None = None
 
     async def run(self) -> None:
@@ -99,8 +104,18 @@ class PlannerService:
         )
 
     async def _run_scan_job(self) -> None:
-        """Execute the orchestrator scan."""
+        """Execute the orchestrator scan with pre-checks."""
         try:
+            # 1. Check for position timeouts before scanning
+            if self._trading_service:
+                timeouts_closed = await self._trading_service.check_and_close_timeouts()
+                if timeouts_closed > 0:
+                    self._logger.info(
+                        f"⏰ Closed {timeouts_closed} timed-out position(s)"
+                    )
+
+            # 2. Run the orchestrator scan
             await self._orchestrator.run()
+
         except Exception as e:
             self._logger.error(f"Scan job failed: {e}", exc_info=True)

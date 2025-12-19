@@ -84,6 +84,10 @@ class Settings:
     ALLOW_TRADING: bool = False  # Enable/disable real trading
     MAX_OPEN_SPREADS: int = 5  # Maximum number of open spread positions
 
+    # Position state settings
+    COOLDOWN_BARS: int = 16  # Cooldown after SL/CORRELATION_DROP (16 bars = 4h for 15m)
+    MAX_POSITION_BARS: int = 244  # Max position duration before timeout (~61h for 15m)
+
     # Exchange Settings
     EXCHANGE_NAME: str = "binance"
     EXCHANGE_API_KEY: str = ""
@@ -141,6 +145,10 @@ class Settings:
         # Trading
         self.ALLOW_TRADING = os.getenv("ALLOW_TRADING", "false").lower() == "true"
         self.MAX_OPEN_SPREADS = int(os.getenv("MAX_OPEN_SPREADS", "5"))
+
+        # Position state
+        self.COOLDOWN_BARS = int(os.getenv("COOLDOWN_BARS", "16"))
+        self.MAX_POSITION_BARS = int(os.getenv("MAX_POSITION_BARS", "244"))
 
         # Exchange
         self.EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "binance")

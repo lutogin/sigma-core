@@ -108,6 +108,36 @@ class Container:
         return self._instances["ohlcv_repository"]
 
     @property
+    def position_state_repository(self):
+        """Get Position State repository (MongoDB storage for positions and cooldowns)."""
+        self._check_initialized()
+        if "position_state_repository" not in self._instances:
+            from src.domain.position_state import PositionStateRepository
+
+            self._instances["position_state_repository"] = PositionStateRepository(
+                mongo_db=self.mongo_db,
+                logger=self.logger,
+            )
+        return self._instances["position_state_repository"]
+
+    @property
+    def position_state_service(self):
+        """Get Position State service for managing positions and cooldowns."""
+        self._check_initialized()
+        if "position_state_service" not in self._instances:
+            from src.domain.position_state import PositionStateService
+
+            self._instances["position_state_service"] = PositionStateService(
+                repository=self.position_state_repository,
+                event_emitter=self.event_emitter,
+                logger=self.logger,
+                timeframe=self._settings.TIMEFRAME,
+                cooldown_bars=self._settings.COOLDOWN_BARS,
+                max_position_bars=self._settings.MAX_POSITION_BARS,
+            )
+        return self._instances["position_state_service"]
+
+    @property
     def event_emitter(self):
         """Get EventEmitter for pub/sub events."""
         if "event_emitter" not in self._instances:
@@ -183,11 +213,13 @@ class Container:
             self._instances["trading_service"] = TradingService(
                 event_emitter=self.event_emitter,
                 exchange_client=self.exchange_client,
+                position_state_service=self.position_state_service,
                 logger=self.logger,
                 allow_trading=self._settings.ALLOW_TRADING,
                 position_size_usdt=self._settings.POSITION_SIZE_USDT,
                 leverage=self._settings.EXCHANGE_DEFAULT_LEVERAGE,
                 max_open_spreads=self._settings.MAX_OPEN_SPREADS,
+                primary_symbol=self._settings.PRIMARY_PAIR,
             )
         return self._instances["trading_service"]
 
@@ -202,6 +234,7 @@ class Container:
                 logger=self.logger,
                 scheduler_service=self.scheduler_service,
                 orchestrator_service=self.orchestrator_service,
+                trading_service=self.trading_service,
             )
         return self._instances["planner_service"]
 
