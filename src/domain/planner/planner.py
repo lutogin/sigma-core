@@ -25,14 +25,12 @@ class PlannerService:
     - Coordinating scheduled tasks
     """
 
-    # Scan every 15 minutes + 1 second (to ensure candle is closed)
-    SCAN_INTERVAL_SECONDS = 15 * 60 + 1  # 901 seconds
-
     def __init__(
         self,
         logger,
         scheduler_service: "SchedulerService",
         orchestrator_service: "OrchestratorService",
+        scan_cron_expression: str,
         trading_service: Optional["TradingService"] = None,
     ):
         """
@@ -42,11 +40,13 @@ class PlannerService:
             logger: Application logger (DI).
             scheduler_service: Scheduler for task management.
             orchestrator_service: Orchestrator to run scans.
+            scan_cron_expression: Cron expression for scan schedule.
             trading_service: Trading service for timeout checks (optional).
         """
         self._logger = logger
         self._scheduler = scheduler_service
         self._orchestrator = orchestrator_service
+        self._scan_cron_expression = scan_cron_expression
         self._trading_service = trading_service
         self._shutdown_event: asyncio.Event | None = None
 
@@ -73,8 +73,7 @@ class PlannerService:
         await self._run_scan_job()
 
         self._logger.info(
-            f"⏰ Next scan scheduled in {self.SCAN_INTERVAL_SECONDS}s "
-            f"({self.SCAN_INTERVAL_SECONDS // 60}m {self.SCAN_INTERVAL_SECONDS % 60}s)"
+            f"⏰ Next scans scheduled at minute 00, 15, 30, 45 of each hour (cron: {self._scan_cron_expression})"
         )
 
         # Keep running until shutdown
@@ -92,15 +91,15 @@ class PlannerService:
 
     def _schedule_tasks(self) -> None:
         """Schedule all periodic tasks."""
-        # Schedule scan job every 15m01s
-        self._scheduler.schedule_interval_job(
+        # Schedule scan job using cron (every 15 minutes at minute 00, 15, 30, 45)
+        self._scheduler.schedule_cron_job(
             name="orchestrator_scan",
             func=self._run_scan_job,
-            seconds=self.SCAN_INTERVAL_SECONDS,
+            cron_expression=self._scan_cron_expression,
             replace_existing=True,
         )
         self._logger.info(
-            f"📅 Scheduled 'orchestrator_scan' every {self.SCAN_INTERVAL_SECONDS}s"
+            f"📅 Scheduled 'orchestrator_scan' with cron: {self._scan_cron_expression}"
         )
 
     async def _run_scan_job(self) -> None:

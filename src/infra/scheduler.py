@@ -10,6 +10,7 @@ import asyncio
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.job import Job
 from apscheduler.events import EVENT_JOB_ERROR, JobExecutionEvent
 
@@ -177,6 +178,74 @@ class SchedulerService:
 
         except Exception as e:
             self._logger.error(f"Failed to schedule job '{name}': {e}")
+            return None
+
+    def schedule_cron_job(
+        self,
+        name: str,
+        func: Callable,
+        cron_expression: str,
+        args: Optional[List] = None,
+        kwargs: Optional[dict] = None,
+        start_date: Optional[datetime] = None,
+        replace_existing: bool = True,
+    ) -> Optional[Job]:
+        """
+        Schedule a job using cron expression.
+
+        Args:
+            name: Unique job name.
+            func: Function to execute (async supported).
+            cron_expression: Cron expression (e.g., '*/15 * * * *' for every 15 minutes).
+            args: Positional arguments.
+            kwargs: Keyword arguments.
+            start_date: When to start (None = now).
+            replace_existing: Replace if exists.
+
+        Returns:
+            Job instance or None on failure.
+        """
+        if self.has_job(name) and not replace_existing:
+            self._logger.warning(f"Job '{name}' already exists")
+            return None
+
+        try:
+            # Parse cron expression (minute hour day month day_of_week)
+            parts = cron_expression.split()
+            if len(parts) != 5:
+                raise ValueError(
+                    f"Invalid cron expression '{cron_expression}'. Expected 5 parts: minute hour day month day_of_week"
+                )
+
+            minute, hour, day, month, day_of_week = parts
+
+            trigger = CronTrigger(
+                minute=minute,
+                hour=hour,
+                day=day,
+                month=month,
+                day_of_week=day_of_week,
+                start_date=start_date,
+                timezone=self._timezone,
+            )
+
+            job = self._scheduler.add_job(
+                func,
+                trigger=trigger,
+                id=name,
+                name=name,
+                args=args or [],
+                kwargs=kwargs or {},
+                replace_existing=replace_existing,
+            )
+
+            self._logger.debug(
+                f"Scheduled cron job '{name}' with expression '{cron_expression}'"
+            )
+            return job
+
+        except Exception as e:
+            self._logger.error(f"Failed to schedule cron job '{name}': {e}")
             return None
 
     # =========================================================================

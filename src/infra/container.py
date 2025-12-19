@@ -263,6 +263,7 @@ class Container:
                 scheduler_service=self.scheduler_service,
                 orchestrator_service=self.orchestrator_service,
                 trading_service=self.trading_service,
+                scan_cron_expression=self._settings.SCAN_CRON_EXPRESSION,
             )
         return self._instances["planner_service"]
 

@@ -88,6 +88,9 @@ class Settings:
     COOLDOWN_BARS: int = 16  # Cooldown after SL/CORRELATION_DROP (16 bars = 4h for 15m)
     MAX_POSITION_BARS: int = 244  # Max position duration before timeout (~61h for 15m)
 
+    # Planner/Scan settings
+    SCAN_CRON_EXPRESSION: str = "*/15 * * * *"  # Every 15 minutes
+
     # Exchange Settings
     EXCHANGE_NAME: str = "binance"
     EXCHANGE_API_KEY: str = ""
