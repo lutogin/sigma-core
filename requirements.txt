@@ -4,6 +4,7 @@ pandas-stubs
 
 # Exchange & Data
 python-binance
+websockets<14.0
 
 # Data Processing
 pandas
@@ -31,3 +32,7 @@ pylint
 
 # Telegram
 aiogram>=3.0.0
+
+# Testing
+pytest
+pytest-asyncio

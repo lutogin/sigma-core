@@ -55,7 +55,7 @@ def binance_client(test_logger):
     - EXCHANGE_DEFAULT_LEVERAGE
     - EXCHANGE_MARGIN_TYPE
     """
-    from src.integrations.exchange import BinanceClient
+    from src.integrations.exchange import BinanceClient, ExchangeConfig
 
     # Load from environment variables
     api_key = os.getenv("EXCHANGE_API_KEY", "")
@@ -73,15 +73,16 @@ def binance_client(test_logger):
     test_logger.info(f"  Leverage: {default_leverage}x")
     test_logger.info(f"  Margin Type: {margin_type}")
 
-    client = BinanceClient(
+    config = ExchangeConfig(
         api_key=api_key,
         api_secret=api_secret,
         testnet=testnet,
         default_leverage=default_leverage,
-        default_margin_type=margin_type,
+        margin_type=margin_type,
         quote_currency="USDT",
-        logger=test_logger,
     )
+
+    client = BinanceClient(config, logger=test_logger)
     return client
 
 
@@ -92,17 +93,18 @@ def binance_client_public(test_logger):
 
     Use this fixture for tests that don't require authentication.
     """
-    from src.integrations.exchange import BinanceClient
+    from src.integrations.exchange import BinanceClient, ExchangeConfig
 
-    client = BinanceClient(
+    config = ExchangeConfig(
         api_key="",
         api_secret="",
         testnet=False,
         default_leverage=1,
-        default_margin_type="cross",
+        margin_type="cross",
         quote_currency="USDT",
-        logger=test_logger,
     )
+
+    client = BinanceClient(config, logger=test_logger)
     return client
 
 

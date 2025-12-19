@@ -492,5 +492,104 @@ class TestTradingOperations:
                     print("   ✅ Position fully closed (no position found)")
 
 
+class TestTradingOperationsByLimitOrders:
+    """Test trading operations (open position, TP/SL, close)."""
+
+    @pytest.mark.asyncio
+    # @pytest.mark.skip(reason="Opens and closes real positions - use with caution")
+    async def test_open_position_limit_set_tp_sl_and_close(
+        self, binance_client: BinanceClient
+    ):
+        """
+        Test opening a position, setting TP/SL, and closing it.
+
+        WARNING: This test opens and closes real positions on Binance.
+        Use with caution and only on testnet or with small amounts.
+        """
+        SYMBOL = "XRP/USDT:USDT"
+        AMOUNT = 3.0
+        SIDE: TradeSide = "BUY"  # "buy" for long, "sell" for short
+        SHOULD_OPEN_POSITION = True
+        SHOULD_CLOSE_POSITION = True
+
+        async with binance_client:
+            if SHOULD_OPEN_POSITION:
+                # Open position
+                open_order = await binance_client.open_position_limit(
+                    symbol=SYMBOL, side=SIDE, amount=AMOUNT
+                )
+
+                assert open_order is not None
+                assert open_order.side.upper() == SIDE.upper()
+                print(f"\n✅ Position opened: {open_order.id}")
+
+            # Wait for position to be fully processed
+            await asyncio.sleep(3)
+
+            # Get position
+            position = await binance_client.get_position(SYMBOL)
+
+            assert position is not None
+            assert position.symbol == SYMBOL
+            assert position.contracts > 0
+            assert position.entry_price > 0
+            # assert position.liquidation_price > 0
+
+            # Log position details
+            print("\n📊 Position details:")
+            print(f"   Symbol: {position.symbol}")
+            print(f"   Side: {position.side}")
+            print(f"   Contracts: {position.contracts}")
+            print(f"   Size: {position.size}")
+            print(f"   Entry Price: {position.entry_price}")
+            print(f"   Mark Price: {position.mark_price}")
+            print(f"   Liquidation Price: {position.liquidation_price}")
+            print(f"   Unrealized PnL: {position.unrealized_pnl}")
+            print(f"   Leverage: {position.leverage}x")
+            print(f"   Margin Type: {position.margin_type}")
+
+            # Calculate TP and SL prices
+            # For LONG (buy): TP above entry, SL above liquidation
+            # For SHORT (sell): TP below entry, SL below liquidation
+            if SIDE.lower() == "buy":
+                tp_price = position.entry_price * 1.15  # 15% TP
+                sl_price = position.entry_price * 0.85  # 15% SL
+            else:
+                tp_price = position.entry_price * 0.85  # 15% TP
+                sl_price = position.entry_price * 1.15  # 15% below liquidation
+
+            print("\n🎯 Setting TP/SL:")
+            print(f"   Take Profit: {tp_price:.6f}")
+            print(f"   Stop Loss: {sl_price:.6f}")
+
+            # Set Take Profit
+            tp_order = await binance_client.set_take_profit(
+                symbol=SYMBOL, side=SIDE, take_profit_price=tp_price
+            )
+            assert tp_order is not None
+            print(f"   ✅ TP order created: {tp_order.id}")
+
+            # Set Stop Loss
+            sl_order = await binance_client.set_stop_loss(
+                symbol=SYMBOL, side=SIDE, stop_price=sl_price
+            )
+            assert sl_order is not None
+            print(f"   ✅ SL order created: {sl_order.id}")
+
+            # Close position if requested
+            if SHOULD_CLOSE_POSITION:
+                close_order = await binance_client.flash_close_position(SYMBOL)
+                assert close_order is not None
+                print(f"\n✅ Position closed successfully: {close_order.id}")
+
+                # Verify position is closed
+                await asyncio.sleep(1.0)
+                closed_position = await binance_client.get_position(SYMBOL)
+                if closed_position:
+                    assert closed_position.contracts == 0, "Position should be closed"
+                else:
+                    print("   ✅ Position fully closed (no position found)")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
