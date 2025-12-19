@@ -63,7 +63,7 @@ class BacktestConfig:
 
     # Maximum position duration before forced exit (in bars)
     # 96 bars = 24 hours for 15m timeframe
-    max_position_bars: int = 128  # 24 hours
+    max_position_bars: int = 144  # 36 hours
 
 
 @dataclass
@@ -459,16 +459,16 @@ class StatArbBacktest:
 
         is_mean_reverting = self.hurst_filter_service.is_mean_reverting(hurst)
 
-        if not is_mean_reverting:
+        if is_mean_reverting:
             print(
-                f"  ⚠️  {symbol} Hurst={hurst:.3f} > {self.hurst_filter_service.threshold} "
-                f"(trending spread, skip entry)"
-            )
-        else:
-            print(
-                f"  ✅ {symbol} Hurst={hurst:.3f} < {self.hurst_filter_service.threshold} "
+                f"▶️ {symbol} Hurst={hurst:.3f} < {self.hurst_filter_service.threshold} "
                 f"(mean-reverting, allow entry)"
             )
+        # else:
+        #     print(
+        #         f"  ⚠️  {symbol} Hurst={hurst:.3f} > {self.hurst_filter_service.threshold} "
+        #         f"(trending spread, skip entry)"
+        #     )
 
         return is_mean_reverting
 
@@ -735,8 +735,10 @@ class StatArbBacktest:
                 f"(until {unlock_time.strftime('%H:%M')})"
             )
 
+        emoji = "✅" if pnl >= 0 else "❌"
+
         print(
-            f"CLOSE {position.side.upper()} SPREAD {symbol} | "
+            f"{emoji} CLOSE {position.side.upper()} SPREAD {symbol} | "
             f"PnL: ${pnl:.2f} ({trade.pnl_pct:+.2f}%) | "
             f"Coin: {coin_pct_change*100:+.2f}% | "
             f"Primary: {primary_pct_change*100:+.2f}% | "
