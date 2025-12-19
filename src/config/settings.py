@@ -86,7 +86,7 @@ class Settings:
 
     # Position state settings
     COOLDOWN_BARS: int = 16  # Cooldown after SL/CORRELATION_DROP (16 bars = 4h for 15m)
-    MAX_POSITION_BARS: int = 244  # Max position duration before timeout (~61h for 15m)
+    MAX_POSITION_BARS: int = 144  # Max position duration before timeout (~32h for 15m)
 
     # Planner/Scan settings
     SCAN_CRON_EXPRESSION: str = "*/15 * * * *"  # Every 15 minutes
@@ -121,6 +121,9 @@ class Settings:
 
     # PostgreSQL/TimescaleDB Settings
     TIMESCALE_DB_URL: str = "postgresql://localhost:5432/alpha_bot"
+
+    # Redis
+    REDIS_URL: str = "redis://localhost:6379"
 
     def __init__(self):
         """Initialize settings from environment variables."""
@@ -191,6 +194,9 @@ class Settings:
         self.TIMESCALE_DB_URL = os.getenv(
             "TIMESCALE_DB_URL", "postgresql://localhost:5432/alpha_bot"
         )
+
+        # Redis
+        self.REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
     def to_dict(self) -> dict:
         """Convert settings to dictionary."""

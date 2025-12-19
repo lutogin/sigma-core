@@ -44,8 +44,8 @@ class BacktestConfig:
     max_spreads: int = 1  # Maximum concurrent spread positions (1 = one coin vs ETH)
 
     # Strategy thresholds (from settings)
-    z_entry_threshold: float = 2.5  # |Z| >= this to enter
-    z_tp_threshold: float = 0.2  # |Z| <= this to take profit
+    z_entry_threshold: float = 2.1  # |Z| >= this to enter
+    z_tp_threshold: float = 0.25  # |Z| <= this to take profit
     z_sl_threshold: float = 4.0  # |Z| >= this to stop loss
     min_correlation: float = 0.8  # Minimum correlation to trade
 
@@ -63,7 +63,7 @@ class BacktestConfig:
 
     # Maximum position duration before forced exit (in bars)
     # 96 bars = 24 hours for 15m timeframe
-    max_position_bars: int = 244  # 36 hours
+    max_position_bars: int = 144  # 32 hours
 
 
 @dataclass
@@ -1225,6 +1225,8 @@ Examples:
         z_tp_threshold=settings.Z_TP_THRESHOLD,
         z_sl_threshold=settings.Z_SL_THRESHOLD,
         min_correlation=settings.MIN_CORRELATION,
+        cooldown_bars=settings.COOLDOWN_BARS,
+        max_position_bars=settings.MAX_POSITION_BARS,
     )
 
     print("\n" + "=" * 70)
