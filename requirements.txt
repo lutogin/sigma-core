@@ -28,3 +28,6 @@ psycopg2-binary
 
 # Linting
 pylint
+
+# Telegram
+aiogram>=3.0.0

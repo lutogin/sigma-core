@@ -24,6 +24,12 @@ class EventType(str, Enum):
     POSITION_CLOSED = "position_closed"
     POSITION_FAILED = "position_failed"
 
+    # Trade lifecycle events (from TradingService)
+    TRADE_OPENED = "trade_opened"  # Spread trade successfully opened
+    TRADE_CLOSED = "trade_closed"  # Spread trade fully closed
+    TRADE_FAILED = "trade_failed"  # Failed to open spread
+    TRADE_CLOSE_ERROR = "trade_close_error"  # Error closing spread
+
     # Market conditions
     MARKET_UNSAFE = "market_unsafe"  # Volatility filter triggered
     MARKET_SAFE = "market_safe"
@@ -338,6 +344,177 @@ class ErrorEvent(BaseEvent):
                 "error_type": self.error_type,
                 "message": self.message,
                 "details": self.details,
+            }
+        )
+        return base
+
+
+# =============================================================================
+# Trade Lifecycle Events (from TradingService)
+# =============================================================================
+
+
+@dataclass
+class TradeOpenedEvent(BaseEvent):
+    """Event when a spread trade is successfully opened."""
+
+    event_type: EventType = field(default=EventType.TRADE_OPENED, init=False)
+
+    # Symbol info
+    coin_symbol: str = ""
+    primary_symbol: str = ""
+
+    # Trade details
+    spread_side: SpreadSide = SpreadSide.LONG
+    z_score: float = 0.0
+    beta: float = 0.0
+    correlation: float = 0.0
+    hurst: float = 0.0
+
+    # Position sizes
+    coin_size_usdt: float = 0.0
+    primary_size_usdt: float = 0.0
+
+    # Fill prices
+    coin_price: float = 0.0
+    primary_price: float = 0.0
+
+    # Order IDs
+    coin_order_id: str = ""
+    primary_order_id: str = ""
+
+    # Thresholds
+    z_tp_threshold: float = 0.0
+    z_sl_threshold: float = 4.5
+
+    def to_dict(self) -> dict:
+        base = super().to_dict()
+        base.update(
+            {
+                "coin_symbol": self.coin_symbol,
+                "primary_symbol": self.primary_symbol,
+                "spread_side": self.spread_side.value,
+                "z_score": self.z_score,
+                "beta": self.beta,
+                "correlation": self.correlation,
+                "hurst": self.hurst,
+                "coin_size_usdt": self.coin_size_usdt,
+                "primary_size_usdt": self.primary_size_usdt,
+                "coin_price": self.coin_price,
+                "primary_price": self.primary_price,
+                "coin_order_id": self.coin_order_id,
+                "primary_order_id": self.primary_order_id,
+            }
+        )
+        return base
+
+
+@dataclass
+class TradeClosedEvent(BaseEvent):
+    """Event when a spread trade is fully closed."""
+
+    event_type: EventType = field(default=EventType.TRADE_CLOSED, init=False)
+
+    # Symbol info
+    coin_symbol: str = ""
+    primary_symbol: str = ""
+
+    # Exit details
+    exit_reason: ExitReason = ExitReason.MANUAL
+    spread_side: SpreadSide = SpreadSide.LONG
+
+    # Entry metrics (for P&L calculation)
+    entry_z_score: float = 0.0
+    exit_z_score: float = 0.0
+
+    # Prices
+    coin_entry_price: float = 0.0
+    primary_entry_price: float = 0.0
+    coin_exit_price: float = 0.0
+    primary_exit_price: float = 0.0
+
+    # Position sizes
+    coin_size_usdt: float = 0.0
+    primary_size_usdt: float = 0.0
+
+    def to_dict(self) -> dict:
+        base = super().to_dict()
+        base.update(
+            {
+                "coin_symbol": self.coin_symbol,
+                "primary_symbol": self.primary_symbol,
+                "exit_reason": self.exit_reason.value,
+                "spread_side": self.spread_side.value,
+                "entry_z_score": self.entry_z_score,
+                "exit_z_score": self.exit_z_score,
+                "coin_entry_price": self.coin_entry_price,
+                "primary_entry_price": self.primary_entry_price,
+                "coin_exit_price": self.coin_exit_price,
+                "primary_exit_price": self.primary_exit_price,
+                "coin_size_usdt": self.coin_size_usdt,
+                "primary_size_usdt": self.primary_size_usdt,
+            }
+        )
+        return base
+
+
+@dataclass
+class TradeFailedEvent(BaseEvent):
+    """Event when a trade fails to open."""
+
+    event_type: EventType = field(default=EventType.TRADE_FAILED, init=False)
+
+    # Symbol info
+    coin_symbol: str = ""
+    primary_symbol: str = ""
+
+    # Error details
+    error_message: str = ""
+    failed_leg: str = ""  # "coin", "primary", or "both"
+    rollback_performed: bool = False
+
+    def to_dict(self) -> dict:
+        base = super().to_dict()
+        base.update(
+            {
+                "coin_symbol": self.coin_symbol,
+                "primary_symbol": self.primary_symbol,
+                "error_message": self.error_message,
+                "failed_leg": self.failed_leg,
+                "rollback_performed": self.rollback_performed,
+            }
+        )
+        return base
+
+
+@dataclass
+class TradeCloseErrorEvent(BaseEvent):
+    """Event when there's an error closing a trade."""
+
+    event_type: EventType = field(default=EventType.TRADE_CLOSE_ERROR, init=False)
+
+    # Symbol info
+    coin_symbol: str = ""
+    primary_symbol: str = ""
+
+    # Exit context
+    exit_reason: ExitReason = ExitReason.MANUAL
+
+    # Error details
+    error_message: str = ""
+    coin_closed: bool = False
+    primary_closed: bool = False
+
+    def to_dict(self) -> dict:
+        base = super().to_dict()
+        base.update(
+            {
+                "coin_symbol": self.coin_symbol,
+                "primary_symbol": self.primary_symbol,
+                "exit_reason": self.exit_reason.value,
+                "error_message": self.error_message,
+                "coin_closed": self.coin_closed,
+                "primary_closed": self.primary_closed,
             }
         )
         return base

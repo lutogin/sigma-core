@@ -9,7 +9,7 @@ from aiogram.types import Message, CallbackQuery
 from .keyboards import MenuButtons, get_main_menu_keyboard, get_confirmation_keyboard
 
 if TYPE_CHECKING:
-    from .service import TelegramService
+    from .telegram import TelegramService
 
 
 # Create router for handlers

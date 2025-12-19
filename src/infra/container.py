@@ -156,6 +156,33 @@ class Container:
         return self._instances["scheduler_service"]
 
     @property
+    def telegram_service(self):
+        """Get Telegram service for notifications."""
+        self._check_initialized()
+        if "telegram_service" not in self._instances:
+            from src.integrations.telegram import TelegramService
+
+            self._instances["telegram_service"] = TelegramService(
+                bot_token=self._settings.TELEGRAM_BOT_TOKEN,
+                admin_chat_id=self._settings.TELEGRAM_ADMIN_CHAT_ID,
+            )
+        return self._instances["telegram_service"]
+
+    @property
+    def communicator_service(self):
+        """Get Communicator service for trade notifications."""
+        self._check_initialized()
+        if "communicator_service" not in self._instances:
+            from src.infra.communicator import CommunicatorService
+
+            self._instances["communicator_service"] = CommunicatorService(
+                event_emitter=self.event_emitter,
+                telegram_service=self.telegram_service,
+                logger=self.logger,
+            )
+        return self._instances["communicator_service"]
+
+    @property
     def screener_service(self):
         """Get Screener Service."""
         self._check_initialized()

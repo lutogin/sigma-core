@@ -97,6 +97,10 @@ class Settings:
     EXCHANGE_MARGIN_TYPE: str = "cross"  # "cross" or "isolated"
     EXCHANGE_QUOTE_CURRENCY: str = "USDT"
 
+    # Telegram Settings
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_ADMIN_CHAT_ID: str = "0"
+
     # Logging Settings
     LOG_LEVEL: str = "DEBUG"
     LOG_TO_FILE: bool = True
@@ -160,6 +164,10 @@ class Settings:
         )
         self.EXCHANGE_MARGIN_TYPE = os.getenv("EXCHANGE_MARGIN_TYPE", "cross")
         self.EXCHANGE_QUOTE_CURRENCY = os.getenv("EXCHANGE_QUOTE_CURRENCY", "USDT")
+
+        # Telegram
+        self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
 
         # Logging
         self.LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

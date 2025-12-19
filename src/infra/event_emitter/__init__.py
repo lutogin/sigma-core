@@ -26,6 +26,11 @@ from .events import (
     EntrySignalEvent,
     ExitSignalEvent,
     SignalSkippedEvent,
+    # Trade lifecycle events
+    TradeOpenedEvent,
+    TradeClosedEvent,
+    TradeFailedEvent,
+    TradeCloseErrorEvent,
     # System events
     MarketUnsafeEvent,
     ScanCompleteEvent,
@@ -49,6 +54,11 @@ __all__ = [
     "EntrySignalEvent",
     "ExitSignalEvent",
     "SignalSkippedEvent",
+    # Trade lifecycle events
+    "TradeOpenedEvent",
+    "TradeClosedEvent",
+    "TradeFailedEvent",
+    "TradeCloseErrorEvent",
     # System events
     "MarketUnsafeEvent",
     "ScanCompleteEvent",

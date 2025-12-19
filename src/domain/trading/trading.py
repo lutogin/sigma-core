@@ -29,6 +29,10 @@ from src.infra.event_emitter import (
     ExitSignalEvent,
     SpreadSide,
     ExitReason,
+    TradeOpenedEvent,
+    TradeClosedEvent,
+    TradeFailedEvent,
+    TradeCloseErrorEvent,
 )
 from src.integrations.exchange import BinanceClient, Order, OrderSide
 
@@ -382,6 +386,28 @@ class TradingService:
                     f"✅ Spread opened | {coin_symbol} order={coin_order_id} | "
                     f"{primary_symbol} order={primary_order_id}"
                 )
+
+                # Emit TradeOpenedEvent
+                self._emitter.emit(
+                    EventType.TRADE_OPENED,
+                    TradeOpenedEvent(
+                        coin_symbol=coin_symbol,
+                        primary_symbol=primary_symbol,
+                        spread_side=event.spread_side,
+                        z_score=event.z_score,
+                        beta=event.beta,
+                        correlation=event.correlation,
+                        hurst=event.hurst,
+                        coin_size_usdt=coin_size_usdt,
+                        primary_size_usdt=primary_size_usdt,
+                        coin_price=coin_price,
+                        primary_price=primary_price,
+                        coin_order_id=coin_order_id,
+                        primary_order_id=primary_order_id,
+                        z_tp_threshold=event.z_tp_threshold,
+                        z_sl_threshold=event.z_sl_threshold,
+                    ),
+                )
                 return
 
             # COIN succeeded but PRIMARY failed -> rollback COIN
@@ -395,6 +421,18 @@ class TradingService:
 
                 await self._rollback_position(coin_symbol, order_coin)
                 self._log_release_symbols(coin_symbol, primary_symbol)
+
+                # Emit TradeFailedEvent
+                self._emitter.emit(
+                    EventType.TRADE_FAILED,
+                    TradeFailedEvent(
+                        coin_symbol=coin_symbol,
+                        primary_symbol=primary_symbol,
+                        error_message=str(error_primary),
+                        failed_leg="primary",
+                        rollback_performed=True,
+                    ),
+                )
                 return
 
             # PRIMARY succeeded but COIN failed -> rollback PRIMARY
@@ -408,6 +446,18 @@ class TradingService:
 
                 await self._rollback_position(primary_symbol, order_primary)
                 self._log_release_symbols(coin_symbol, primary_symbol)
+
+                # Emit TradeFailedEvent
+                self._emitter.emit(
+                    EventType.TRADE_FAILED,
+                    TradeFailedEvent(
+                        coin_symbol=coin_symbol,
+                        primary_symbol=primary_symbol,
+                        error_message=str(error_coin),
+                        failed_leg="coin",
+                        rollback_performed=True,
+                    ),
+                )
                 return
 
             # Both failed
@@ -426,6 +476,18 @@ class TradingService:
                 f"❌ Both positions failed | COIN: {error_coin} | PRIMARY: {error_primary}"
             )
             self._log_release_symbols(coin_symbol, primary_symbol)
+
+            # Emit TradeFailedEvent
+            self._emitter.emit(
+                EventType.TRADE_FAILED,
+                TradeFailedEvent(
+                    coin_symbol=coin_symbol,
+                    primary_symbol=primary_symbol,
+                    error_message=f"COIN: {error_coin} | PRIMARY: {error_primary}",
+                    failed_leg="both",
+                    rollback_performed=False,
+                ),
+            )
 
         except Exception as e:
             self._logger.exception(f"❌ Unexpected error opening spread: {e}")
@@ -529,6 +591,9 @@ class TradingService:
             f"🔒 Closing spread | {coin_symbol} | reason={exit_reason.value}"
         )
 
+        # Get position data before closing (for event)
+        position = self._position_state.get_position(coin_symbol)
+
         try:
             # Close both legs in parallel
             results = await asyncio.gather(
@@ -557,6 +622,30 @@ class TradingService:
                 self._logger.info(
                     f"✅ Spread closed | {coin_symbol} | reason={exit_reason.value}"
                 )
+
+                # Emit TradeClosedEvent
+                if position:
+                    self._emitter.emit(
+                        EventType.TRADE_CLOSED,
+                        TradeClosedEvent(
+                            coin_symbol=coin_symbol,
+                            primary_symbol=primary_symbol,
+                            exit_reason=exit_reason,
+                            spread_side=(
+                                SpreadSide.LONG
+                                if position.side.value == "long"
+                                else SpreadSide.SHORT
+                            ),
+                            entry_z_score=position.entry_z_score,
+                            exit_z_score=0.0,  # Could be passed from exit signal
+                            coin_entry_price=position.coin_entry_price,
+                            primary_entry_price=position.primary_entry_price,
+                            coin_exit_price=0.0,  # Exchange doesn't return this
+                            primary_exit_price=0.0,
+                            coin_size_usdt=position.coin_size_usdt,
+                            primary_size_usdt=position.primary_size_usdt,
+                        ),
+                    )
                 return True
             else:
                 self._logger.warning(
@@ -564,10 +653,42 @@ class TradingService:
                     f"coin={'ok' if coin_success else 'FAILED'} | "
                     f"primary={'ok' if primary_success else 'FAILED'}"
                 )
+
+                # Emit TradeCloseErrorEvent
+                error_msg = []
+                if not coin_success:
+                    error_msg.append(f"COIN: {coin_result}")
+                if not primary_success:
+                    error_msg.append(f"PRIMARY: {primary_result}")
+
+                self._emitter.emit(
+                    EventType.TRADE_CLOSE_ERROR,
+                    TradeCloseErrorEvent(
+                        coin_symbol=coin_symbol,
+                        primary_symbol=primary_symbol,
+                        exit_reason=exit_reason,
+                        error_message=" | ".join(error_msg),
+                        coin_closed=coin_success,
+                        primary_closed=primary_success,
+                    ),
+                )
                 return False
 
         except Exception as e:
             self._logger.exception(f"❌ Error closing spread {coin_symbol}: {e}")
+
+            # Emit TradeCloseErrorEvent
+            self._emitter.emit(
+                EventType.TRADE_CLOSE_ERROR,
+                TradeCloseErrorEvent(
+                    coin_symbol=coin_symbol,
+                    primary_symbol=primary_symbol,
+                    exit_reason=exit_reason,
+                    error_message=str(e),
+                    coin_closed=False,
+                    primary_closed=False,
+                ),
+            )
             return False
 
     async def close_position_with_reason(
