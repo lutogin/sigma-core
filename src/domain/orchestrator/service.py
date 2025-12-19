@@ -37,7 +37,6 @@ class OrchestratorService:
         screener_service: ScreenerService,
         event_emitter: EventEmitter,
         primary_pair: str,
-        position_size_usdt: float = 100.0,
     ):
         """
         Initialize Orchestrator Service.
@@ -47,13 +46,11 @@ class OrchestratorService:
             screener_service: Service for scanning and filtering pairs.
             event_emitter: Event emitter for trading events.
             primary_pair: Primary trading pair (e.g., "ETH/USDT:USDT").
-            position_size_usdt: Position size in USDT for sizing calculations.
         """
         self._logger = logger
         self._screener_service = screener_service
         self._event_emitter = event_emitter
         self._primary_pair = primary_pair
-        self._position_size_usdt = position_size_usdt
 
     async def run(self) -> None:
         """
@@ -185,10 +182,6 @@ class OrchestratorService:
                 SpreadSide.LONG if result.current_z_score < 0 else SpreadSide.SHORT
             )
 
-            # Calculate position sizes
-            coin_size_usdt = self._position_size_usdt
-            primary_size_usdt = coin_size_usdt * abs(result.current_beta)
-
             event = EntrySignalEvent(
                 coin_symbol=symbol,
                 primary_symbol=self._primary_pair,
@@ -197,8 +190,6 @@ class OrchestratorService:
                 beta=result.current_beta,
                 correlation=result.current_correlation,
                 hurst=hurst_values.get(symbol, 0.0),
-                suggested_coin_size_usdt=coin_size_usdt,
-                suggested_primary_size_usdt=primary_size_usdt,
                 coin_price=coin_price,
                 primary_price=primary_price,
                 z_tp_threshold=z_tp,

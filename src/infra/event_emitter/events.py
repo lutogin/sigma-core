@@ -134,10 +134,6 @@ class EntrySignalEvent(BaseEvent):
     # Hurst exponent (mean-reversion quality)
     hurst: float = 0.0
 
-    # Position sizing (suggested, executor may adjust)
-    suggested_coin_size_usdt: float = 0.0
-    suggested_primary_size_usdt: float = 0.0  # = coin_size * |beta|
-
     # Current prices (for reference)
     coin_price: float = 0.0
     primary_price: float = 0.0
@@ -157,8 +153,6 @@ class EntrySignalEvent(BaseEvent):
                 "beta": self.beta,
                 "correlation": self.correlation,
                 "hurst": self.hurst,
-                "suggested_coin_size_usdt": self.suggested_coin_size_usdt,
-                "suggested_primary_size_usdt": self.suggested_primary_size_usdt,
                 "coin_price": self.coin_price,
                 "primary_price": self.primary_price,
                 "z_tp_threshold": self.z_tp_threshold,
@@ -175,7 +169,7 @@ class EntrySignalEvent(BaseEvent):
         return SpreadLeg(
             symbol=self.coin_symbol,
             side=side,
-            size_usdt=self.suggested_coin_size_usdt,
+            size_usdt=0.0,  # Size calculated by TradingService
             price=self.coin_price,
         )
 
@@ -187,7 +181,7 @@ class EntrySignalEvent(BaseEvent):
         return SpreadLeg(
             symbol=self.primary_symbol,
             side=side,
-            size_usdt=self.suggested_primary_size_usdt,
+            size_usdt=0.0,  # Size calculated by TradingService
             price=self.primary_price,
         )
 

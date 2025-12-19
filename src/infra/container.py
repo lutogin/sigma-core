@@ -157,9 +157,26 @@ class Container:
                 screener_service=self.screener_service,
                 event_emitter=self.event_emitter,
                 primary_pair=self._settings.PRIMARY_PAIR,
-                position_size_usdt=self._settings.POSITION_SIZE_USDT,
             )
         return self._instances["orchestrator_service"]
+
+    @property
+    def trading_service(self):
+        """Get Trading Service for executing trades based on signals."""
+        self._check_initialized()
+        if "trading_service" not in self._instances:
+            from src.domain.trading import TradingService
+
+            self._instances["trading_service"] = TradingService(
+                event_emitter=self.event_emitter,
+                exchange_client=self.exchange_client,
+                logger=self.logger,
+                allow_trading=self._settings.ALLOW_TRADING,
+                position_size_usdt=self._settings.POSITION_SIZE_USDT,
+                leverage=self._settings.EXCHANGE_DEFAULT_LEVERAGE,
+                max_open_spreads=self._settings.MAX_OPEN_SPREADS,
+            )
+        return self._instances["trading_service"]
 
     @property
     def correlation_service(self):

@@ -80,6 +80,10 @@ class Settings:
     # Position sizing
     POSITION_SIZE_USDT: float = 100.0  # USDT размер позиции на COIN ногу
 
+    # Trading settings
+    ALLOW_TRADING: bool = False  # Enable/disable real trading
+    MAX_OPEN_SPREADS: int = 5  # Maximum number of open spread positions
+
     # Exchange Settings
     EXCHANGE_NAME: str = "binance"
     EXCHANGE_API_KEY: str = ""
@@ -133,6 +137,10 @@ class Settings:
 
         # Position sizing
         self.POSITION_SIZE_USDT = float(os.getenv("POSITION_SIZE_USDT", "100.0"))
+
+        # Trading
+        self.ALLOW_TRADING = os.getenv("ALLOW_TRADING", "false").lower() == "true"
+        self.MAX_OPEN_SPREADS = int(os.getenv("MAX_OPEN_SPREADS", "5"))
 
         # Exchange
         self.EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "binance")
