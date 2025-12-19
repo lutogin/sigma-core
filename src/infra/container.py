@@ -112,21 +112,10 @@ class Container:
 
     @property
     def screener_service(self):
-        """Get Orchestrator Service."""
+        """Get Screener Service."""
         self._check_initialized()
         if "screener_service" not in self._instances:
             from src.domain.screener import ScreenerService
-
-            # Ensure data loader is available
-            # Warning: AsyncDataLoaderService expects dependencies too.
-            # Let's verify we have a way to get it.
-            # It seems container doesn't have explicit property for AsyncDataLoaderService yet
-            # based on my viewing of container.py earlier.
-            # I need to check if I need to add it or if it's created inline.
-            # Checking container.py again...
-            # The user listed @[src/domain/data_loader/async_service.py]
-            # but I don't recall seeing it in container properties.
-            # Let's add it.
 
             from src.domain.data_loader.async_service import AsyncDataLoaderService
 
@@ -143,7 +132,6 @@ class Container:
                 z_score_service=self.z_score_service,
                 volatility_filter_service=self.volatility_filter_service,
                 hurst_filter_service=self.hurst_filter_service,
-                event_emitter=self.event_emitter,
                 data_loader=data_loader,
                 lookback_window_days=self._settings.LOOKBACK_WINDOW_DAYS,
                 correlation_threshold=self._settings.MIN_CORRELATION,
@@ -152,9 +140,24 @@ class Container:
                 primary_pair=self._settings.PRIMARY_PAIR,
                 consistent_pairs=self._settings.CONSISTENT_PAIRS,
                 timeframe=self._settings.TIMEFRAME,
-                position_size_usdt=self._settings.POSITION_SIZE_USDT,
             )
         return self._instances["screener_service"]
+
+    @property
+    def orchestrator_service(self):
+        """Get Orchestrator Service for running scan cycles and emitting events."""
+        self._check_initialized()
+        if "orchestrator_service" not in self._instances:
+            from src.domain.orchestrator import OrchestratorService
+
+            self._instances["orchestrator_service"] = OrchestratorService(
+                logger=self.logger,
+                screener_service=self.screener_service,
+                event_emitter=self.event_emitter,
+                primary_pair=self._settings.PRIMARY_PAIR,
+                position_size_usdt=self._settings.POSITION_SIZE_USDT,
+            )
+        return self._instances["orchestrator_service"]
 
     @property
     def correlation_service(self):

@@ -1,29 +1,59 @@
 """
-Orchestrator Service.
+Screener Service.
+
+Pure screening and filtering logic without event emission.
+Responsible for:
+- Loading and aligning OHLCV data
+- Running volatility safety checks
+- Calculating correlations and z-scores
+- Filtering results by correlation, beta, and Hurst
+- Logging and returning structured results
 """
 
-from src.domain.screener.correlation.service import CorrelationService
-from src.domain.screener.hurst_filter import HurstFilterService
-from src.domain.screener.volatility_filter import VolatilityFilterService
-from src.domain.screener.z_score import ZScoreResult, ZScoreService
-from src.infra.event_emitter import (
-    EventEmitter,
-    EntrySignalEvent,
-    SpreadSide,
-    MarketUnsafeEvent,
-    ScanCompleteEvent,
-)
+from dataclasses import dataclass
 from typing import Dict, Optional
 from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 
+from src.domain.screener.correlation.service import (
+    CorrelationService,
+    CorrelationResult,
+)
+from src.domain.screener.hurst_filter import HurstFilterService
+from src.domain.screener.volatility_filter import (
+    VolatilityFilterService,
+    VolatilityCheckResult,
+)
+from src.domain.screener.z_score import ZScoreResult, ZScoreService
 from src.domain.data_loader.async_service import AsyncDataLoaderService
+
+
+@dataclass
+class ScanResult:
+    """Result of a screening scan."""
+
+    filtered_results: Dict[str, ZScoreResult]
+    hurst_values: Dict[str, float]
+    raw_data: Dict[str, pd.DataFrame]
+    correlation_results: Dict[str, CorrelationResult]
+    volatility_result: Optional[VolatilityCheckResult]
+    symbols_scanned: int
+    symbols_after_correlation: int
 
 
 class ScreenerService:
     """
-    Orchestrates the statistical arbitrage pipeline.
+    Pure screening service for statistical arbitrage.
+
+    This service is responsible for:
+    - Loading and aligning OHLCV data
+    - Running volatility safety checks
+    - Calculating correlations, z-scores, and Hurst exponents
+    - Filtering results by quality metrics
+    - Logging results
+
+    Does NOT emit events - that's the Orchestrator's responsibility.
     """
 
     def __init__(
@@ -35,7 +65,6 @@ class ScreenerService:
         z_score_service: ZScoreService,
         volatility_filter_service: VolatilityFilterService,
         hurst_filter_service: HurstFilterService,
-        event_emitter: EventEmitter,
         lookback_window_days: int,
         correlation_threshold: float,
         min_beta: float,
@@ -43,10 +72,9 @@ class ScreenerService:
         primary_pair: str,
         consistent_pairs: list[str],
         timeframe: str,
-        position_size_usdt: float = 100.0,
     ):
         """
-        Initialize Orchestrator.
+        Initialize Screener Service.
         """
         self._logger = logger
         self._exchange = exchange_client
@@ -55,7 +83,6 @@ class ScreenerService:
         self._z_score_service = z_score_service
         self._volatility_filter_service = volatility_filter_service
         self._hurst_filter_service = hurst_filter_service
-        self._event_emitter = event_emitter
         self._lookback_window_days = lookback_window_days
         self._correlation_threshold = correlation_threshold
         self._min_beta = min_beta
@@ -63,9 +90,36 @@ class ScreenerService:
         self._primary_pair = primary_pair
         self._consistent_pairs = consistent_pairs
         self._timeframe = timeframe
-        self._position_size_usdt = position_size_usdt
 
-    async def scan(self) -> Optional[Dict[str, ZScoreResult]]:
+    # =========================================================================
+    # Public Properties (expose Z-score thresholds for Orchestrator)
+    # =========================================================================
+
+    @property
+    def z_entry_threshold(self) -> float:
+        """Get Z-score entry threshold."""
+        return self._z_score_service.z_entry_threshold
+
+    @property
+    def z_tp_threshold(self) -> float:
+        """Get Z-score take-profit threshold."""
+        return self._z_score_service.z_tp_threshold
+
+    @property
+    def z_sl_threshold(self) -> float:
+        """Get Z-score stop-loss threshold."""
+        return self._z_score_service.z_sl_threshold
+
+    @property
+    def primary_pair(self) -> str:
+        """Get primary trading pair."""
+        return self._primary_pair
+
+    # =========================================================================
+    # Main Scan Method
+    # =========================================================================
+
+    async def scan(self) -> Optional[ScanResult]:
         """
         Run the full scan pipeline.
 
@@ -74,10 +128,9 @@ class ScreenerService:
         3. Load Raw OHLCV Data
         4. Calculate Correlation and Z-Score
         5. Filter and return results
-        6. Emit entry signals for valid candidates
 
         Returns:
-            Filtered z-score results, or None if market is unsafe/no data.
+            ScanResult with filtered results and metrics, or None if no data.
         """
         self._logger.info("Starting Scan Pipeline...")
 
@@ -92,19 +145,17 @@ class ScreenerService:
         self._volatility_filter_service.log_status(volatility_result)
 
         if not volatility_result.is_safe:
-            self._logger.warning(f"⛔ TRADING HALTED: {volatility_result.stop_reason}")
-            # Emit market unsafe event
-            await self._event_emitter.emit(
-                MarketUnsafeEvent(
-                    primary_symbol=self._primary_pair,
-                    volatility=volatility_result.current_vol or 0.0,
-                    volatility_threshold=volatility_result.threshold_vol or 0.0,
-                    change_4h=volatility_result.current_4h_change,
-                    change_threshold=volatility_result.threshold_4h_change,
-                    reason=volatility_result.stop_reason or "",
-                )
+            self._logger.warning(f"⛔ Market unsafe: {volatility_result.stop_reason}")
+            # Return result with volatility info so orchestrator can emit event
+            return ScanResult(
+                filtered_results={},
+                hurst_values={},
+                raw_data={},
+                correlation_results={},
+                volatility_result=volatility_result,
+                symbols_scanned=0,
+                symbols_after_correlation=0,
             )
-            return None
 
         # 3. Load Raw OHLCV
         raw_data = await self._load_ohlcv_data()
@@ -113,6 +164,7 @@ class ScreenerService:
             self._logger.warning("No data loaded. Aborting scan.")
             return None
 
+        # 4. Calculate Correlation
         correlation_results = self._correlation_service.calculate(
             primary_symbol=self._primary_pair,
             ohlcv=raw_data,
@@ -122,7 +174,7 @@ class ScreenerService:
             self._logger.warning("No correlation results. Aborting scan.")
             return None
 
-        # 4. Calculate Z-Score for spread signals
+        # 5. Calculate Z-Score for spread signals
         z_score_results = self._z_score_service.calculate(
             primary_symbol=self._primary_pair,
             correlation_results=correlation_results,
@@ -131,124 +183,40 @@ class ScreenerService:
 
         symbols_scanned = len(z_score_results)
 
-        # 5. Filter by correlation quality
+        # 6. Filter by correlation quality
         filtered_results = self._filter_by_correlation(z_score_results)
         symbols_after_corr = len(filtered_results)
 
-        # 6. Filter by Hurst exponent (ONLY for entry candidates with valid Z-score signal)
-        # Entry candidates: |Z| >= entry_threshold AND |Z| <= sl_threshold
-        filtered_results, hurst_results = self._filter_by_hurst(
+        # 7. Filter by Hurst exponent (ONLY for entry candidates with valid Z-score signal)
+        filtered_results, hurst_values = self._filter_by_hurst(
             filtered_results, raw_data, correlation_results
         )
 
-        # 7. Log results (with Hurst values for candidates)
+        # 8. Log results
         self._log_results(
             filtered_results,
             sort_by="z_score",
-            hurst_values=hurst_results,
-        )
-
-        # 8. Find entry candidates and emit signals
-        entry_candidates = self._get_entry_candidates(filtered_results)
-        signals_emitted = await self._emit_entry_signals(
-            entry_candidates, hurst_results, raw_data
-        )
-
-        # 9. Emit scan complete event
-        await self._event_emitter.emit(
-            ScanCompleteEvent(
-                symbols_scanned=symbols_scanned,
-                symbols_after_correlation_filter=symbols_after_corr,
-                entry_candidates=len(entry_candidates),
-                signals_emitted=signals_emitted,
-            )
+            hurst_values=hurst_values,
         )
 
         self._logger.info(
             f"Scan complete. Processed {len(filtered_results)} symbols "
-            f"(filtered from {symbols_scanned}), {signals_emitted} signals emitted."
+            f"(filtered from {symbols_scanned})."
         )
 
-        return filtered_results
+        return ScanResult(
+            filtered_results=filtered_results,
+            hurst_values=hurst_values,
+            raw_data=raw_data,
+            correlation_results=correlation_results,
+            volatility_result=volatility_result,
+            symbols_scanned=symbols_scanned,
+            symbols_after_correlation=symbols_after_corr,
+        )
 
-    def _get_entry_candidates(
-        self, z_score_results: Dict[str, ZScoreResult]
-    ) -> Dict[str, ZScoreResult]:
-        """
-        Get symbols that are valid entry candidates.
-
-        Entry candidate: |Z| >= entry_threshold AND |Z| <= sl_threshold
-        """
-        z_entry = self._z_score_service.z_entry_threshold
-        z_sl = self._z_score_service.z_sl_threshold
-
-        candidates = {}
-        for symbol, result in z_score_results.items():
-            z = result.current_z_score
-            if not np.isnan(z) and abs(z) >= z_entry and abs(z) <= z_sl:
-                candidates[symbol] = result
-
-        return candidates
-
-    async def _emit_entry_signals(
-        self,
-        candidates: Dict[str, ZScoreResult],
-        hurst_values: Dict[str, float],
-        raw_data: Dict[str, pd.DataFrame],
-    ) -> int:
-        """
-        Emit entry signal events for each valid candidate.
-
-        Returns:
-            Number of signals emitted.
-        """
-        signals_emitted = 0
-        primary_df = raw_data.get(self._primary_pair)
-        primary_price = primary_df["close"].iloc[-1] if primary_df is not None else 0.0
-
-        z_tp = self._z_score_service.z_tp_threshold
-        z_sl = self._z_score_service.z_sl_threshold
-
-        for symbol, result in candidates.items():
-            coin_df = raw_data.get(symbol)
-            coin_price = coin_df["close"].iloc[-1] if coin_df is not None else 0.0
-
-            # Determine spread side based on Z-score sign
-            # Negative Z -> LONG spread (buy COIN, sell PRIMARY)
-            # Positive Z -> SHORT spread (sell COIN, buy PRIMARY)
-            spread_side = (
-                SpreadSide.LONG if result.current_z_score < 0 else SpreadSide.SHORT
-            )
-
-            # Calculate position sizes
-            coin_size_usdt = self._position_size_usdt
-            primary_size_usdt = coin_size_usdt * abs(result.current_beta)
-
-            event = EntrySignalEvent(
-                coin_symbol=symbol,
-                primary_symbol=self._primary_pair,
-                spread_side=spread_side,
-                z_score=result.current_z_score,
-                beta=result.current_beta,
-                correlation=result.current_correlation,
-                hurst=hurst_values.get(symbol, 0.0),
-                suggested_coin_size_usdt=coin_size_usdt,
-                suggested_primary_size_usdt=primary_size_usdt,
-                coin_price=coin_price,
-                primary_price=primary_price,
-                z_tp_threshold=z_tp,
-                z_sl_threshold=z_sl,
-            )
-
-            await self._event_emitter.emit(event)
-            signals_emitted += 1
-
-            self._logger.info(
-                f"📡 Emitted ENTRY_SIGNAL: {symbol} "
-                f"({spread_side.value.upper()}) Z={result.current_z_score:.2f}"
-            )
-
-        return signals_emitted
+    # =========================================================================
+    # Private Methods - Filtering
+    # =========================================================================
 
     def _filter_by_correlation(self, z_score_results: Dict[str, ZScoreResult]) -> Dict:
         """
