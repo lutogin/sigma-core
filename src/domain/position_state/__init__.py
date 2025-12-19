@@ -10,7 +10,7 @@ from src.domain.position_state.models import (
     SpreadSide,
 )
 from src.domain.position_state.repository import PositionStateRepository
-from src.domain.position_state.service import PositionStateService
+from src.domain.position_state.position_state import PositionStateService
 
 __all__ = [
     "SpreadPosition",

@@ -162,7 +162,7 @@ class Container:
         if "screener_service" not in self._instances:
             from src.domain.screener import ScreenerService
 
-            from src.domain.data_loader.async_service import AsyncDataLoaderService
+            from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
 
             data_loader = AsyncDataLoaderService(
                 logger=self.logger,

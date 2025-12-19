@@ -6,7 +6,7 @@ Monitors ETH volatility to detect dangerous market conditions:
 - Flash crash/pump detection
 """
 
-from src.domain.screener.volatility_filter.service import (
+from src.domain.screener.volatility_filter.volatility_filter import (
     VolatilityFilterService,
     VolatilityCheckResult,
 )

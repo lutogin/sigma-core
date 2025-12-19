@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, ".")
 
 from loguru import logger
-from src.domain.screener.hurst_filter.service import HurstFilterService
+from src.domain.screener.hurst_filter.hurst_filter import HurstFilterService
 
 
 def generate_mean_reverting_series(n: int = 500, theta: float = 0.5) -> np.ndarray:

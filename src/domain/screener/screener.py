@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 
-from src.domain.screener.correlation.service import (
+from src.domain.screener.correlation.correlation import (
     CorrelationService,
     CorrelationResult,
 )
@@ -26,7 +26,7 @@ from src.domain.screener.volatility_filter import (
     VolatilityCheckResult,
 )
 from src.domain.screener.z_score import ZScoreResult, ZScoreService
-from src.domain.data_loader.async_service import AsyncDataLoaderService
+from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
 
 
 @dataclass
