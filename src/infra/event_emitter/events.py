@@ -14,8 +14,9 @@ from typing import Optional
 class EventType(str, Enum):
     """Event types for stat-arb system."""
 
-    # Screener signals
+    # Trading signals
     ENTRY_SIGNAL = "entry_signal"  # Valid entry signal detected
+    EXIT_SIGNAL = "exit_signal"  # Exit signal detected (TP, SL, etc.)
     NO_SIGNAL = "no_signal"  # Scan complete, no valid signals
 
     # Position management (for future TradeExecutor)
@@ -184,6 +185,59 @@ class EntrySignalEvent(BaseEvent):
             size_usdt=0.0,  # Size calculated by TradingService
             price=self.primary_price,
         )
+
+
+# =============================================================================
+# Exit Signal Event
+# =============================================================================
+
+
+@dataclass
+class ExitSignalEvent(BaseEvent):
+    """
+    Exit signal event - contains all info needed to close a spread position.
+
+    This is emitted by OrchestratorService when an exit condition is detected:
+    - TAKE_PROFIT: |Z| <= tp_threshold (mean reversion complete)
+    - STOP_LOSS: |Z| >= sl_threshold (extreme divergence)
+    - CORRELATION_DROP: pair fell below correlation threshold
+    - TIMEOUT: position held too long
+    - HURST_TRENDING: spread became trending
+
+    The TradingService should subscribe to this event and close the position.
+    """
+
+    event_type: EventType = field(default=EventType.EXIT_SIGNAL, init=False)
+
+    # Symbol info
+    coin_symbol: str = ""  # e.g., "ADA/USDT:USDT"
+    primary_symbol: str = ""  # e.g., "ETH/USDT:USDT"
+
+    # Exit reason
+    exit_reason: ExitReason = ExitReason.MANUAL
+
+    # Current metrics at exit
+    current_z_score: float = 0.0  # Current Z-score
+    current_correlation: float = 0.0  # Current correlation
+
+    # Current prices (for reference/logging)
+    coin_price: float = 0.0
+    primary_price: float = 0.0
+
+    def to_dict(self) -> dict:
+        base = super().to_dict()
+        base.update(
+            {
+                "coin_symbol": self.coin_symbol,
+                "primary_symbol": self.primary_symbol,
+                "exit_reason": self.exit_reason.value,
+                "current_z_score": self.current_z_score,
+                "current_correlation": self.current_correlation,
+                "coin_price": self.coin_price,
+                "primary_price": self.primary_price,
+            }
+        )
+        return base
 
 
 # =============================================================================

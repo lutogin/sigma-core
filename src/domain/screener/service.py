@@ -34,6 +34,7 @@ class ScanResult:
     """Result of a screening scan."""
 
     filtered_results: Dict[str, ZScoreResult]
+    all_z_score_results: Dict[str, ZScoreResult]
     hurst_values: Dict[str, float]
     raw_data: Dict[str, pd.DataFrame]
     correlation_results: Dict[str, CorrelationResult]
@@ -115,6 +116,11 @@ class ScreenerService:
         """Get primary trading pair."""
         return self._primary_pair
 
+    @property
+    def correlation_threshold(self) -> float:
+        """Get correlation threshold for pair filtering."""
+        return self._correlation_threshold
+
     # =========================================================================
     # Main Scan Method
     # =========================================================================
@@ -149,6 +155,7 @@ class ScreenerService:
             # Return result with volatility info so orchestrator can emit event
             return ScanResult(
                 filtered_results={},
+                all_z_score_results={},
                 hurst_values={},
                 raw_data={},
                 correlation_results={},
@@ -206,6 +213,7 @@ class ScreenerService:
 
         return ScanResult(
             filtered_results=filtered_results,
+            all_z_score_results=z_score_results,
             hurst_values=hurst_values,
             raw_data=raw_data,
             correlation_results=correlation_results,

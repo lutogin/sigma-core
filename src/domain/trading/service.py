@@ -26,6 +26,7 @@ from src.infra.event_emitter import (
     EventEmitter,
     EventType,
     EntrySignalEvent,
+    ExitSignalEvent,
     SpreadSide,
     ExitReason,
 )
@@ -91,7 +92,7 @@ class TradingService:
         Start the trading service.
 
         - Initializes position state service
-        - Subscribes to entry signal events
+        - Subscribes to entry and exit signal events
         """
         if self._is_running:
             self._logger.warning("TradingService is already running")
@@ -100,8 +101,9 @@ class TradingService:
         # Initialize position state
         self._position_state.initialize()
 
-        # Subscribe to entry signals
+        # Subscribe to trading signals
         self._emitter.on(EventType.ENTRY_SIGNAL, self._on_entry_signal)
+        self._emitter.on(EventType.EXIT_SIGNAL, self._on_exit_signal)
 
         self._is_running = True
 
@@ -124,6 +126,7 @@ class TradingService:
             return
 
         self._emitter.off(EventType.ENTRY_SIGNAL, self._on_entry_signal)
+        self._emitter.off(EventType.EXIT_SIGNAL, self._on_exit_signal)
         self._is_running = False
         self._logger.info("🛑 TradingService stopped")
 
@@ -225,6 +228,42 @@ class TradingService:
 
         except Exception as e:
             self._logger.exception(f"❌ Error processing entry signal: {e}")
+
+    async def _on_exit_signal(self, event: ExitSignalEvent) -> None:
+        """
+        Handle exit signal from OrchestratorService.
+
+        Closes the spread position for the given symbol.
+        """
+        self._logger.info(
+            f"📨 Exit signal received | "
+            f"coin={event.coin_symbol} | reason={event.exit_reason.value} | "
+            f"z={event.current_z_score:.4f}"
+        )
+
+        # Check if trading is enabled
+        if not self._allow_trading:
+            self._logger.info("⚠️ Trading disabled - skipping exit")
+            return
+
+        try:
+            # Get position from state
+            position = self._position_state.get_position(event.coin_symbol)
+            if not position:
+                self._logger.warning(
+                    f"⚠️ No active position found for {event.coin_symbol}"
+                )
+                return
+
+            # Close the spread
+            await self._close_spread(
+                coin_symbol=event.coin_symbol,
+                primary_symbol=event.primary_symbol,
+                exit_reason=event.exit_reason,
+            )
+
+        except Exception as e:
+            self._logger.exception(f"❌ Error processing exit signal: {e}")
 
     # =========================================================================
     # Trade Execution (ACID)
