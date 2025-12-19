@@ -1,11 +1,13 @@
 """
 Application initialization and lifecycle management.
 
-Scanner Application - synchronous.
-Finds cointegrated pairs, runs walk-forward optimization, saves to DB, exits.
-Sends results to trading service (Omega Trade) via HTTP POST.
+Trading Bot Application - async, long-running.
+Continuously scans for cointegrated pairs and executes trades.
+Uses scheduler for periodic task execution.
 """
 
+import asyncio
+import signal
 import sys
 
 from src.infra.container import Container
@@ -14,21 +16,20 @@ from src.infra.logger import setup_logger
 
 class Application:
     """
-    Main scanner application class.
+    Main trading bot application class.
 
     Responsible for:
     - Initializing DI container
     - Setting up logging
-    - Running cointegration scanner
-    - Saving results to database
-    - Exiting after completion
+    - Running the planner (continuous operation)
+    - Graceful shutdown handling
 
-    This is the SCANNER part of the bot.
-    Trading bot (WebSocket, live trading) will be separate.
+    This bot runs continuously, scanning and trading.
     """
 
     def __init__(self) -> None:
         self._container: Container | None = None
+        self._shutdown_event: asyncio.Event | None = None
 
     @property
     def container(self) -> Container:
@@ -81,44 +82,69 @@ class Application:
 
     def run(self) -> None:
         """
-        Run the scanner pipeline.
+        Run the trading bot.
 
         Workflow:
-        1. Initialize Orchestrator
-        2. Run Scan (Connect, Load, Screen, Output)
-        3. Exit
+        1. Initialize services (TradingService, Planner)
+        2. Start Planner (schedules periodic scans)
+        3. Run until shutdown signal (Ctrl+C)
         """
-        import asyncio
-
         if self._container is None:
             raise RuntimeError("Application not initialized. Call init() first.")
 
         logger = self._container.logger
-
-        logger.info("🚀 Starting Cointegration Scanner...")
+        logger.info("🚀 Starting Trading Bot...")
 
         exit_code = 0
 
-        async def run_pipeline():
-            """Run the async pipeline with proper cleanup."""
-            orchestrator = self._container.orchestrator_service
+        async def run_bot():
+            """Run the async bot with proper signal handling."""
+            self._shutdown_event = asyncio.Event()
+
+            # Setup signal handlers
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(
+                    sig, lambda: asyncio.create_task(self._signal_handler())
+                )
+
+            # Get services
+            planner = self._container.planner_service
+            trading_service = self._container.trading_service
+
             try:
-                await orchestrator.run()
+                # Start trading service (subscribes to events)
+                await trading_service.start()
+
+                # Run planner (blocks until shutdown)
+                await planner.run()
+
+            except asyncio.CancelledError:
+                logger.info("Bot cancelled")
             finally:
                 await self._shutdown_async()
 
         try:
-            asyncio.run(run_pipeline())
+            asyncio.run(run_bot())
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
             exit_code = 130
         except Exception as e:
-            logger.exception(f"Scanner failed: {e}")
+            logger.exception(f"Bot failed: {e}")
             exit_code = 1
 
         logger.info(f"Exiting with code {exit_code}")
         sys.exit(exit_code)
+
+    async def _signal_handler(self) -> None:
+        """Handle shutdown signals."""
+        if self._container:
+            self._container.logger.info("Received shutdown signal...")
+
+        # Stop planner
+        if self._container and self._container.has_instance("planner_service"):
+            await self._container.planner_service.stop()
 
     async def _shutdown_async(self) -> None:
         """Gracefully shutdown the application (async version)."""
@@ -126,33 +152,40 @@ class Application:
             return
 
         logger = self._container.logger
-        logger.info("Shutting down scanner...")
+        logger.info("Shutting down bot...")
 
-        # Disconnect from exchange (async)
+        # Stop trading service
         try:
-            if (
-                hasattr(self._container, "_instances")
-                and "exchange_client" in self._container._instances
-            ):
+            if self._container.has_instance("trading_service"):
+                await self._container.trading_service.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping trading service: {e}")
+
+        # Stop scheduler
+        try:
+            if self._container.has_instance("scheduler_service"):
+                await self._container.scheduler_service.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping scheduler: {e}")
+
+        # Disconnect from exchange
+        try:
+            if self._container.has_instance("exchange_client"):
                 await self._container.exchange_client.disconnect()
         except Exception as e:
             logger.warning(f"Error disconnecting from exchange: {e}")
 
         self._container.shutdown()
-
-        logger.info("Scanner shutdown complete")
+        logger.info("Bot shutdown complete")
 
     def shutdown(self) -> None:
-        """Gracefully shutdown the application (sync version, deprecated)."""
+        """Gracefully shutdown the application (sync version)."""
         if self._container is None:
             return
 
-        logger = self._container.logger
-        logger.info("Shutting down scanner...")
-
+        self._container.logger.info("Shutting down bot...")
         self._container.shutdown()
-
-        logger.info("Scanner shutdown complete")
+        self._container.logger.info("Bot shutdown complete")
 
 
 # Global application instance

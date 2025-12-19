@@ -42,6 +42,10 @@ class Container:
         if not self._initialized:
             raise RuntimeError("Container not initialized. Call init() first.")
 
+    def has_instance(self, name: str) -> bool:
+        """Check if a service instance exists."""
+        return name in self._instances
+
     # =========================================================================
     # Settings & Logger
     # =========================================================================
@@ -113,6 +117,15 @@ class Container:
         return self._instances["event_emitter"]
 
     @property
+    def scheduler_service(self):
+        """Get SchedulerService for task scheduling."""
+        if "scheduler_service" not in self._instances:
+            from src.infra.scheduler import SchedulerService
+
+            self._instances["scheduler_service"] = SchedulerService(logger=self.logger)
+        return self._instances["scheduler_service"]
+
+    @property
     def screener_service(self):
         """Get Screener Service."""
         self._check_initialized()
@@ -177,6 +190,20 @@ class Container:
                 max_open_spreads=self._settings.MAX_OPEN_SPREADS,
             )
         return self._instances["trading_service"]
+
+    @property
+    def planner_service(self):
+        """Get Planner Service for scheduling periodic tasks."""
+        self._check_initialized()
+        if "planner_service" not in self._instances:
+            from src.domain.planner import PlannerService
+
+            self._instances["planner_service"] = PlannerService(
+                logger=self.logger,
+                scheduler_service=self.scheduler_service,
+                orchestrator_service=self.orchestrator_service,
+            )
+        return self._instances["planner_service"]
 
     @property
     def correlation_service(self):
