@@ -63,7 +63,7 @@ class BacktestConfig:
 
     # Maximum position duration before forced exit (in bars)
     # 96 bars = 24 hours for 15m timeframe
-    max_position_bars: int = 144  # 36 hours
+    max_position_bars: int = 244  # 36 hours
 
 
 @dataclass

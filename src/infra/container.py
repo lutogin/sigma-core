@@ -102,6 +102,15 @@ class Container:
         return self._instances["ohlcv_repository"]
 
     @property
+    def event_emitter(self):
+        """Get EventEmitter for pub/sub events."""
+        if "event_emitter" not in self._instances:
+            from src.infra.event_emitter import EventEmitter
+
+            self._instances["event_emitter"] = EventEmitter(logger=self.logger)
+        return self._instances["event_emitter"]
+
+    @property
     def screener_service(self):
         """Get Orchestrator Service."""
         self._check_initialized()
@@ -134,6 +143,7 @@ class Container:
                 z_score_service=self.z_score_service,
                 volatility_filter_service=self.volatility_filter_service,
                 hurst_filter_service=self.hurst_filter_service,
+                event_emitter=self.event_emitter,
                 data_loader=data_loader,
                 lookback_window_days=self._settings.LOOKBACK_WINDOW_DAYS,
                 correlation_threshold=self._settings.MIN_CORRELATION,
@@ -142,6 +152,7 @@ class Container:
                 primary_pair=self._settings.PRIMARY_PAIR,
                 consistent_pairs=self._settings.CONSISTENT_PAIRS,
                 timeframe=self._settings.TIMEFRAME,
+                position_size_usdt=self._settings.POSITION_SIZE_USDT,
             )
         return self._instances["screener_service"]
 

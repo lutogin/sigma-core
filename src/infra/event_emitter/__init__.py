@@ -1,51 +1,53 @@
 """
 Event Emitter Infrastructure Layer.
 
-Centralized event system for the trading bot.
+Centralized event system for the stat-arb trading bot.
 Abstraction layer over pyee for easy replacement.
 
 Events:
-- PositionEntryEvent: Signal to open a position
-- PositionExitEvent: Signal to close a position (profit or stop-loss)
+- EntrySignalEvent: Signal to open a spread position (contains both legs)
+- ScanCompleteEvent: Emitted after each scan cycle
+- MarketUnsafeEvent: Volatility filter triggered
 """
 
 from .events import (
+    # Core
     BaseEvent,
-    TradeEntryEvent,
-    TradeExitEvent,
-    OpportunityEntryEvent,
-    OpportunityExitEvent,
     EventType,
-    PositionSide,
+    # Enums
+    SpreadSide,
+    PositionSide,  # Legacy alias
     ExitReason,
-    # Trade lifecycle events
-    TradeOpenedEvent,
-    TradeClosedEvent,
-    TradeClosedPartiallyEvent,
-    TradeSkippedEvent,
-    TradeFailedEvent,
-    TradeCloseErrorEvent,
-    TradeSkipReason,
+    SignalSkipReason,
+    TradeSkipReason,  # Legacy alias
+    # Spread position events
+    SpreadLeg,
+    EntrySignalEvent,
+    SignalSkippedEvent,
+    # System events
+    MarketUnsafeEvent,
+    ScanCompleteEvent,
+    ErrorEvent,
 )
 from .emitter import EventEmitter
 
 __all__ = [
+    # Core
     "BaseEvent",
-    "TradeEntryEvent",
-    "TradeExitEvent",
-    "OpportunityEntryEvent",
-    "OpportunityExitEvent",
     "EventType",
+    "EventEmitter",
+    # Enums
+    "SpreadSide",
     "PositionSide",
     "ExitReason",
-    "EventEmitter",
-    # Trade lifecycle
-    "TradeOpenedEvent",
-    "TradeClosedEvent",
-    "TradeClosedPartiallyEvent",
-    "TradeSkippedEvent",
-    "TradeFailedEvent",
-    "TradeCloseErrorEvent",
+    "SignalSkipReason",
     "TradeSkipReason",
+    # Spread events
+    "SpreadLeg",
+    "EntrySignalEvent",
+    "SignalSkippedEvent",
+    # System events
+    "MarketUnsafeEvent",
+    "ScanCompleteEvent",
+    "ErrorEvent",
 ]
-

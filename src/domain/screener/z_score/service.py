@@ -77,6 +77,11 @@ class ZScoreService:
         return self._z_entry_threshold
 
     @property
+    def z_tp_threshold(self) -> float:
+        """Get Z-score take-profit threshold."""
+        return self._z_tp_threshold
+
+    @property
     def z_sl_threshold(self) -> float:
         """Get Z-score stop-loss threshold."""
         return self._z_sl_threshold
