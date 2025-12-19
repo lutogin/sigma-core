@@ -189,7 +189,8 @@ def setup_logger(
             )
 
     # Setup Loki only for production environment
-    if env.lower() == "prod" and loki_host and loki_user and loki_token:
+    # if env.lower() == "prod" and loki_host and loki_user and loki_token:
+    if loki_host and loki_user and loki_token:
         setup_loki(
             host=loki_host,
             user=loki_user,

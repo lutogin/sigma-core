@@ -207,7 +207,7 @@ class OrchestratorService:
 
             if z_result is None:
                 # No Z-score data - this shouldn't happen, but handle it
-                self._logger.warning(f"No Z-score data for open position {coin_symbol}")
+                self._logger.error(f"No Z-score data for open position {coin_symbol}")
                 continue
 
             current_z = z_result.current_z_score
