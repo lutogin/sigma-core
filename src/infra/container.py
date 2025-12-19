@@ -7,6 +7,8 @@ All dependencies are created on first access.
 
 from typing import Any
 
+from src.config.settings import Settings
+
 
 class Container:
     """
@@ -19,7 +21,7 @@ class Container:
 
     def __init__(self):
         self._instances: dict[str, Any] = {}
-        self._settings = None
+        self._settings: Settings = None  # type: ignore
         self._initialized = False
 
     def init(self) -> "Container":
@@ -45,7 +47,7 @@ class Container:
     # =========================================================================
 
     @property
-    def settings(self):
+    def settings(self) -> Settings:
         """Get application settings."""
         self._check_initialized()
         return self._settings
