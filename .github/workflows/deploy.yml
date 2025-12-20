@@ -40,7 +40,7 @@ jobs:
             docker image prune -f
   notify:
     name: Notify Deployment Status
-    needs: [build-and-push, deploy]
+    needs: [deploy]
     runs-on: ubuntu-latest
     if: always()
 
@@ -59,7 +59,6 @@ jobs:
             Commit: ${{ github.sha }}
             Author: ${{ github.actor }}
 
-            Build: ${{ needs.build-and-push.result }}
             Deploy: ${{ needs.deploy.result }}
 
             Status: ${{ job.status }}
