@@ -1,0 +1,27 @@
+graph TB
+    subgraph Domain Layer
+        EO[EntryObserverService]
+        WC[WatchCandidate dataclass]
+        ZC[ZScoreCalculator - realtime]
+    end
+
+    subgraph Infrastructure Layer
+        Redis[(Redis Cache)]
+        WS[WebSocket Manager]
+        EE[EventEmitter]
+    end
+
+    subgraph Events
+        PE[PendingEntrySignalEvent]
+        EE2[EntrySignalEvent]
+        WE[WatchCancelledEvent]
+    end
+
+    Orchestrator -->|emit| PE
+    PE --> EO
+    EO --> Redis
+    EO --> WS
+    WS -->|price updates| EO
+    EO -->|разворот| EE2
+    EE2 --> TradingService
+    EO -->|timeout/false alarm| WE

@@ -9,6 +9,7 @@ import asyncio
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
+    from src.domain.entry_observer import EntryObserverService
     from src.domain.orchestrator import OrchestratorService
     from src.domain.trading import TradingService
     from src.infra.scheduler import SchedulerService
@@ -21,6 +22,7 @@ class PlannerService:
     Responsible for:
     - Scheduling OrchestratorService.run on 15-minute intervals
     - Checking position timeouts before each scan
+    - Starting EntryObserverService for trailing entry monitoring
     - Managing the bot's continuous operation lifecycle
     - Coordinating scheduled tasks
     """
@@ -32,6 +34,7 @@ class PlannerService:
         orchestrator_service: "OrchestratorService",
         scan_cron_expression: str,
         trading_service: Optional["TradingService"] = None,
+        entry_observer_service: Optional["EntryObserverService"] = None,
     ):
         """
         Initialize Planner Service.
@@ -42,12 +45,14 @@ class PlannerService:
             orchestrator_service: Orchestrator to run scans.
             scan_cron_expression: Cron expression for scan schedule.
             trading_service: Trading service for timeout checks (optional).
+            entry_observer_service: Entry observer for trailing entry logic (optional).
         """
         self._logger = logger
         self._scheduler = scheduler_service
         self._orchestrator = orchestrator_service
         self._scan_cron_expression = scan_cron_expression
         self._trading_service = trading_service
+        self._entry_observer = entry_observer_service
         self._shutdown_event: asyncio.Event | None = None
 
     async def run(self) -> None:
@@ -55,12 +60,18 @@ class PlannerService:
         Start the planner and keep the bot running.
 
         This method:
-        1. Runs an initial scan immediately
-        2. Schedules periodic scans every 15m01s
-        3. Keeps the bot alive until shutdown signal
+        1. Starts the EntryObserverService for trailing entry monitoring
+        2. Runs an initial scan immediately
+        3. Schedules periodic scans every 15m
+        4. Keeps the bot alive until shutdown signal
         """
         self._logger.info("🗓️  Planner starting...")
         self._shutdown_event = asyncio.Event()
+
+        # Start EntryObserverService (subscribes to PendingEntrySignalEvent)
+        if self._entry_observer:
+            await self._entry_observer.start()
+            self._logger.info("👀 EntryObserverService started (trailing entry mode)")
 
         # Schedule periodic scans
         self._schedule_tasks()
@@ -85,6 +96,12 @@ class PlannerService:
     async def stop(self) -> None:
         """Signal the planner to stop."""
         self._logger.info("Stopping planner...")
+
+        # Stop EntryObserverService first (cancel WebSocket subscriptions)
+        if self._entry_observer:
+            await self._entry_observer.stop()
+            self._logger.info("👀 EntryObserverService stopped")
+
         if self._shutdown_event:
             self._shutdown_event.set()
         await self._scheduler.stop()

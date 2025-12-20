@@ -251,6 +251,28 @@ class Container:
         return self._instances["orchestrator_service"]
 
     @property
+    def entry_observer_service(self):
+        """Get Entry Observer Service for trailing entry logic."""
+        self._check_initialized()
+        if "entry_observer_service" not in self._instances:
+            from src.domain.entry_observer import EntryObserverService
+
+            self._instances["entry_observer_service"] = EntryObserverService(
+                event_emitter=self.event_emitter,
+                exchange_client=self.exchange_client,
+                redis_cache=self.redis_cache,
+                logger=self.logger,
+                primary_symbol=self._settings.PRIMARY_PAIR,
+                z_entry_threshold=self._settings.Z_ENTRY_THRESHOLD,
+                z_sl_threshold=self._settings.Z_SL_THRESHOLD,
+                pullback=self._settings.TRAILING_ENTRY_PULLBACK,
+                watch_timeout_seconds=self._settings.TRAILING_ENTRY_TIMEOUT_MINUTES
+                * 60,
+                max_watches=self._settings.MAX_OPEN_SPREADS,
+            )
+        return self._instances["entry_observer_service"]
+
+    @property
     def trading_service(self):
         """Get Trading Service for executing trades based on signals."""
         self._check_initialized()
@@ -282,6 +304,7 @@ class Container:
                 scheduler_service=self.scheduler_service,
                 orchestrator_service=self.orchestrator_service,
                 trading_service=self.trading_service,
+                entry_observer_service=self.entry_observer_service,
                 scan_cron_expression=self._settings.SCAN_CRON_EXPRESSION,
             )
         return self._instances["planner_service"]
@@ -370,12 +393,23 @@ class Container:
 
     async def shutdown_async(self) -> None:
         """Cleanup resources (async version)."""
+        # Stop entry observer (cancel WebSocket tasks)
+        if "entry_observer_service" in self._instances:
+            await self._instances["entry_observer_service"].stop()
+
+        # Stop trading service
+        if "trading_service" in self._instances:
+            await self._instances["trading_service"].stop()
+
+        # Disconnect databases
         if "mongo_db" in self._instances:
             self._instances["mongo_db"].disconnect()
         if "timescale_db" in self._instances:
             self._instances["timescale_db"].close()
         if "redis_cache" in self._instances:
             await self._instances["redis_cache"].disconnect()
+        if "exchange_client" in self._instances:
+            await self._instances["exchange_client"].disconnect()
         self._instances.clear()
 
     def shutdown(self) -> None:

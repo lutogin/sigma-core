@@ -5,8 +5,10 @@ Centralized event system for the stat-arb trading bot.
 Abstraction layer over pyee for easy replacement.
 
 Events:
-- EntrySignalEvent: Signal to open a spread position
+- PendingEntrySignalEvent: Entry candidate detected, start trailing entry watch
+- EntrySignalEvent: Signal to open a spread position (after reversal confirmation)
 - ExitSignalEvent: Signal to close a spread position (TP, SL, etc.)
+- WatchCancelledEvent: Watch cancelled without entry (timeout, false alarm)
 - ScanCompleteEvent: Emitted after each scan cycle
 - MarketUnsafeEvent: Volatility filter triggered
 """
@@ -21,11 +23,14 @@ from .events import (
     ExitReason,
     SignalSkipReason,
     TradeSkipReason,  # Legacy alias
+    WatchCancelReason,
     # Trading signal events
     SpreadLeg,
+    PendingEntrySignalEvent,
     EntrySignalEvent,
     ExitSignalEvent,
     SignalSkippedEvent,
+    WatchCancelledEvent,
     # Trade lifecycle events
     TradeOpenedEvent,
     TradeClosedEvent,
@@ -49,11 +54,14 @@ __all__ = [
     "ExitReason",
     "SignalSkipReason",
     "TradeSkipReason",
+    "WatchCancelReason",
     # Trading signal events
     "SpreadLeg",
+    "PendingEntrySignalEvent",
     "EntrySignalEvent",
     "ExitSignalEvent",
     "SignalSkippedEvent",
+    "WatchCancelledEvent",
     # Trade lifecycle events
     "TradeOpenedEvent",
     "TradeClosedEvent",

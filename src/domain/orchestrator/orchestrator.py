@@ -6,7 +6,8 @@ Responsible for:
 - Running the screener scan cycle
 - Checking exit conditions for open positions (TP, SL, CORRELATION_DROP, TIMEOUT)
 - Checking entry conditions for new positions
-- Emitting EntrySignalEvent and ExitSignalEvent
+- Emitting PendingEntrySignalEvent for trailing entry (EntryObserver will handle)
+- Emitting ExitSignalEvent for position closes
 """
 
 from typing import Dict, List, Optional
@@ -18,7 +19,7 @@ from src.domain.screener import ScreenerService
 from src.domain.screener.z_score import ZScoreResult
 from src.infra.event_emitter import (
     EventEmitter,
-    EntrySignalEvent,
+    PendingEntrySignalEvent,
     ExitSignalEvent,
     ExitReason,
     SpreadSide,
@@ -276,7 +277,7 @@ class OrchestratorService:
         z_entry: float,
         z_sl: float,
         z_tp: float,
-    ) -> List[EntrySignalEvent]:
+    ) -> List[PendingEntrySignalEvent]:
         """
         Check entry conditions for new positions.
 
@@ -286,8 +287,12 @@ class OrchestratorService:
         - Symbol not already in position
         - Symbol not in cooldown
 
+        Emits PendingEntrySignalEvent for EntryObserver to monitor.
+        The EntryObserver will monitor in real-time and emit EntrySignalEvent
+        when reversal is confirmed (trailing entry logic).
+
         Returns:
-            List of emitted EntrySignalEvent.
+            List of emitted PendingEntrySignalEvent.
         """
         entry_signals = []
 
@@ -325,7 +330,13 @@ class OrchestratorService:
             # Positive Z -> SHORT spread (sell COIN, buy PRIMARY)
             spread_side = SpreadSide.LONG if z < 0 else SpreadSide.SHORT
 
-            event = EntrySignalEvent(
+            # Get spread mean and std for live Z-score calculation
+            # These are the latest values from the rolling window
+            spread_mean = self._get_spread_mean(result)
+            spread_std = self._get_spread_std(result)
+
+            # Create PendingEntrySignalEvent for trailing entry monitoring
+            event = PendingEntrySignalEvent(
                 coin_symbol=symbol,
                 primary_symbol=self._primary_pair,
                 spread_side=spread_side,
@@ -333,8 +344,11 @@ class OrchestratorService:
                 beta=result.current_beta,
                 correlation=result.current_correlation,
                 hurst=hurst_values.get(symbol, 0.0),
+                spread_mean=spread_mean,
+                spread_std=spread_std,
                 coin_price=coin_price,
                 primary_price=primary_price,
+                z_entry_threshold=z_entry,
                 z_tp_threshold=z_tp,
                 z_sl_threshold=z_sl,
             )
@@ -343,11 +357,54 @@ class OrchestratorService:
             entry_signals.append(event)
 
             self._logger.info(
-                f"📡 Emitted ENTRY_SIGNAL: {symbol} "
-                f"({spread_side.value.upper()}) Z={z:.2f}"
+                f"👀 Emitted PENDING_ENTRY_SIGNAL: {symbol} "
+                f"({spread_side.value.upper()}) Z={z:.2f} | "
+                f"EntryObserver will monitor for reversal"
             )
 
         return entry_signals
+
+    def _get_spread_mean(self, result: ZScoreResult) -> float:
+        """
+        Get the latest spread mean from Z-score result.
+
+        The spread_series contains the raw spread values.
+        We need to get the mean from the rolling window to calculate live Z-score.
+        """
+        if result.spread_series is None or result.spread_series.empty:
+            return 0.0
+
+        # Get the lookback window from screener
+        lookback = getattr(self._screener_service, "_lookback_window", 288)
+
+        # Calculate rolling mean and get the latest value
+        rolling_mean = result.spread_series.rolling(window=lookback).mean()
+        valid_values = rolling_mean.dropna()
+
+        if len(valid_values) > 0:
+            return float(valid_values.iloc[-1])
+        return 0.0
+
+    def _get_spread_std(self, result: ZScoreResult) -> float:
+        """
+        Get the latest spread std from Z-score result.
+
+        The spread_series contains the raw spread values.
+        We need to get the std from the rolling window to calculate live Z-score.
+        """
+        if result.spread_series is None or result.spread_series.empty:
+            return 0.0
+
+        # Get the lookback window from screener
+        lookback = getattr(self._screener_service, "_lookback_window", 288)
+
+        # Calculate rolling std and get the latest value
+        rolling_std = result.spread_series.rolling(window=lookback).std()
+        valid_values = rolling_std.dropna()
+
+        if len(valid_values) > 0:
+            return float(valid_values.iloc[-1])
+        return 0.0
 
     # =========================================================================
     # Helpers

@@ -15,9 +15,17 @@ class EventType(str, Enum):
     """Event types for stat-arb system."""
 
     # Trading signals
-    ENTRY_SIGNAL = "entry_signal"  # Valid entry signal detected
+    PENDING_ENTRY_SIGNAL = (
+        "pending_entry_signal"  # Entry candidate detected, start watching
+    )
+    ENTRY_SIGNAL = (
+        "entry_signal"  # Valid entry signal detected (after reversal confirmation)
+    )
     EXIT_SIGNAL = "exit_signal"  # Exit signal detected (TP, SL, etc.)
     NO_SIGNAL = "no_signal"  # Scan complete, no valid signals
+    WATCH_CANCELLED = (
+        "watch_cancelled"  # Watch cancelled without entry (timeout/false alarm)
+    )
 
     # Position management (for future TradeExecutor)
     POSITION_OPENED = "position_opened"
@@ -72,6 +80,16 @@ class SignalSkipReason(str, Enum):
     HURST_TRENDING = "hurst_trending"  # Spread not mean-reverting
     MARKET_UNSAFE = "market_unsafe"  # Volatility filter
     TRADING_DISABLED = "trading_disabled"
+
+
+class WatchCancelReason(str, Enum):
+    """Reason why a watch was cancelled without entry."""
+
+    TIMEOUT = "timeout"  # Watch exceeded max duration (45 min)
+    FALSE_ALARM = "false_alarm"  # Z-score returned to normal without entry
+    SL_HIT = "sl_hit"  # Z-score exceeded stop-loss threshold
+    ALREADY_WATCHING = "already_watching"  # Symbol is already being watched
+    MAX_WATCHES_REACHED = "max_watches_reached"  # Too many concurrent watches
 
 
 # =============================================================================
@@ -191,6 +209,122 @@ class EntrySignalEvent(BaseEvent):
             size_usdt=0.0,  # Size calculated by TradingService
             price=self.primary_price,
         )
+
+
+# =============================================================================
+# Pending Entry Signal Event (for Trailing Entry logic)
+# =============================================================================
+
+
+@dataclass
+class PendingEntrySignalEvent(BaseEvent):
+    """
+    Pending entry signal event - entry candidate for trailing entry observation.
+
+    Emitted by OrchestratorService when Z-score crosses entry threshold.
+    The EntryObserverService subscribes to start live monitoring for reversal.
+
+    Contains all data needed to calculate live Z-score:
+    - Spread mean and std for Z calculation
+    - Beta for spread calculation
+    - Current prices as baseline
+    """
+
+    event_type: EventType = field(default=EventType.PENDING_ENTRY_SIGNAL, init=False)
+
+    # Symbol info
+    coin_symbol: str = ""  # e.g., "ARB/USDT:USDT"
+    primary_symbol: str = ""  # e.g., "ETH/USDT:USDT"
+
+    # Spread direction
+    spread_side: SpreadSide = SpreadSide.LONG  # LONG or SHORT spread
+
+    # Signal metrics at detection time
+    z_score: float = 0.0  # Z-score when threshold was crossed
+    beta: float = 0.0  # Hedge ratio (β) for spread calculation
+    correlation: float = 0.0  # Current correlation
+    hurst: float = 0.0  # Hurst exponent
+
+    # Spread statistics for live Z-score calculation
+    # (last values from rolling window)
+    spread_mean: float = 0.0  # Rolling mean of spread
+    spread_std: float = 0.0  # Rolling std of spread
+
+    # Current prices (for reference)
+    coin_price: float = 0.0
+    primary_price: float = 0.0
+
+    # Thresholds
+    z_entry_threshold: float = 2.1  # Entry threshold
+    z_tp_threshold: float = 0.0  # Take profit when |Z| <= this
+    z_sl_threshold: float = 4.5  # Stop loss when |Z| >= this
+
+    def to_dict(self) -> dict:
+        base = super().to_dict()
+        base.update(
+            {
+                "coin_symbol": self.coin_symbol,
+                "primary_symbol": self.primary_symbol,
+                "spread_side": self.spread_side.value,
+                "z_score": self.z_score,
+                "beta": self.beta,
+                "correlation": self.correlation,
+                "hurst": self.hurst,
+                "spread_mean": self.spread_mean,
+                "spread_std": self.spread_std,
+                "coin_price": self.coin_price,
+                "primary_price": self.primary_price,
+                "z_entry_threshold": self.z_entry_threshold,
+                "z_tp_threshold": self.z_tp_threshold,
+                "z_sl_threshold": self.z_sl_threshold,
+            }
+        )
+        return base
+
+
+# =============================================================================
+# Watch Cancelled Event
+# =============================================================================
+
+
+@dataclass
+class WatchCancelledEvent(BaseEvent):
+    """
+    Event when a watch is cancelled without entry.
+
+    Reasons:
+    - TIMEOUT: Watch exceeded 45 minutes without reversal
+    - FALSE_ALARM: Z-score returned to normal (<entry_threshold) without entry
+    - SL_HIT: Z-score exceeded stop-loss threshold
+    """
+
+    event_type: EventType = field(default=EventType.WATCH_CANCELLED, init=False)
+
+    # Symbol info
+    coin_symbol: str = ""
+    primary_symbol: str = ""
+
+    # Cancellation reason
+    reason: WatchCancelReason = WatchCancelReason.FALSE_ALARM
+
+    # Stats at cancellation
+    max_z_reached: float = 0.0  # Maximum |Z| during watch
+    final_z: float = 0.0  # Z-score at cancellation
+    watch_duration_seconds: float = 0.0  # How long we were watching
+
+    def to_dict(self) -> dict:
+        base = super().to_dict()
+        base.update(
+            {
+                "coin_symbol": self.coin_symbol,
+                "primary_symbol": self.primary_symbol,
+                "reason": self.reason.value,
+                "max_z_reached": self.max_z_reached,
+                "final_z": self.final_z,
+                "watch_duration_seconds": self.watch_duration_seconds,
+            }
+        )
+        return base
 
 
 # =============================================================================

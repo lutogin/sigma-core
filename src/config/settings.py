@@ -77,6 +77,10 @@ class Settings:
     HURST_THRESHOLD: float = 0.45  # Максимальный Hurst для спрэдов
     HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
 
+    # Trailing Entry settings (Smart Entry)
+    TRAILING_ENTRY_PULLBACK: float = 0.3  # Z-score pullback for reversal confirmation
+    TRAILING_ENTRY_TIMEOUT_MINUTES: int = 45  # Max watch duration before cancellation
+
     # Position sizing
     POSITION_SIZE_USDT: float = 100.0  # USDT размер позиции на COIN ногу
 
@@ -148,6 +152,14 @@ class Settings:
 
         self.HURST_THRESHOLD = float(os.getenv("HURST_THRESHOLD", "0.45"))
         self.HURST_LOOKBACK_CANDLES = int(os.getenv("HURST_LOOKBACK_CANDLES", "300"))
+
+        # Trailing Entry (Smart Entry)
+        self.TRAILING_ENTRY_PULLBACK = float(
+            os.getenv("TRAILING_ENTRY_PULLBACK", "0.3")
+        )
+        self.TRAILING_ENTRY_TIMEOUT_MINUTES = int(
+            os.getenv("TRAILING_ENTRY_TIMEOUT_MINUTES", "45")
+        )
 
         # Position sizing
         self.POSITION_SIZE_USDT = float(os.getenv("POSITION_SIZE_USDT", "100.0"))
