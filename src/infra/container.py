@@ -260,7 +260,6 @@ class Container:
             self._instances["entry_observer_service"] = EntryObserverService(
                 event_emitter=self.event_emitter,
                 exchange_client=self.exchange_client,
-                redis_cache=self.redis_cache,
                 logger=self.logger,
                 primary_symbol=self._settings.PRIMARY_PAIR,
                 z_entry_threshold=self._settings.Z_ENTRY_THRESHOLD,

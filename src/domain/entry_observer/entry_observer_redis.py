@@ -35,10 +35,11 @@ from src.infra.event_emitter import (
     WatchCancelReason,
     SpreadSide,
 )
+from src.infra.redis import RedisCache
 from src.integrations.exchange import BinanceClient
 
 
-class EntryObserverService:
+class EntryObserverPlusRedisService:
     """
     Service for trailing entry logic with real-time monitoring.
 
@@ -46,10 +47,17 @@ class EntryObserverService:
     reversal confirmation (pullback from peak Z-score).
     """
 
+    # Redis key prefix for watch candidates
+    REDIS_KEY_PREFIX = "watch_candidate:"
+
+    # TTL for Redis entries (timeout + 5 min buffer)
+    REDIS_TTL_BUFFER = 300  # 5 minutes
+
     def __init__(
         self,
         event_emitter: EventEmitter,
         exchange_client: BinanceClient,
+        redis_cache: RedisCache,
         logger: Any,
         primary_symbol: str = "ETH/USDT:USDT",
         z_entry_threshold: float = 2.1,
@@ -65,6 +73,7 @@ class EntryObserverService:
         Args:
             event_emitter: Event emitter for pub/sub.
             exchange_client: Binance client for WebSocket subscriptions.
+            redis_cache: Redis cache for state persistence.
             logger: Logger instance.
             primary_symbol: Primary trading pair (e.g., "ETH/USDT:USDT").
             z_entry_threshold: Z-score threshold for entry.
@@ -76,6 +85,7 @@ class EntryObserverService:
         """
         self._emitter = event_emitter
         self._exchange = exchange_client
+        self._redis = redis_cache
         self._logger = logger
 
         self._primary_symbol = primary_symbol
@@ -113,6 +123,7 @@ class EntryObserverService:
         Start the Entry Observer service.
 
         - Subscribe to PendingEntrySignalEvent
+        - Restore any active watches from Redis
         """
         if self._is_running:
             self._logger.warning("EntryObserverService is already running")
@@ -120,6 +131,13 @@ class EntryObserverService:
 
         # Subscribe to pending entry signals
         self._emitter.on(EventType.PENDING_ENTRY_SIGNAL, self._on_pending_signal)
+
+        # Ensure Redis is connected
+        if not self._redis.is_connected:
+            await self._redis.connect()
+
+        # Restore watches from Redis
+        await self._restore_watches_from_redis()
 
         self._is_running = True
 
@@ -224,8 +242,9 @@ class EntryObserverService:
                 primary_price=event.primary_price,
             )
 
-            # Store in memory
+            # Store in memory and Redis
             self._watches[coin] = watch
+            await self._save_watch_to_redis(watch)
 
             self._logger.info(
                 f"👀 Started watching {coin} | "
@@ -358,6 +377,7 @@ class EntryObserverService:
         # 4. Check if spread is still widening (update max)
         if abs_z > watch.max_z:
             watch.max_z = abs_z
+            await self._save_watch_to_redis(watch)
             self._logger.debug(
                 f"📈 {coin} new peak Z: {abs_z:.2f} | "
                 f"pullback_target={abs_z - self._pullback:.2f}"
@@ -466,6 +486,57 @@ class EntryObserverService:
 
         # Unsubscribe from WebSocket
         await self._unsubscribe_coin(coin)
+
+        # Remove from Redis
+        await self._redis.delete(f"{self.REDIS_KEY_PREFIX}{coin}")
+
+    # =========================================================================
+    # Redis Persistence
+    # =========================================================================
+
+    async def _save_watch_to_redis(self, watch: WatchCandidate) -> None:
+        """Save watch state to Redis."""
+        try:
+            key = f"{self.REDIS_KEY_PREFIX}{watch.coin_symbol}"
+            ttl = self._timeout + self.REDIS_TTL_BUFFER
+            await self._redis.set(key, watch.to_dict(), ttl=ttl)
+        except Exception as e:
+            self._logger.warning(f"Failed to save watch to Redis: {e}")
+
+    async def _restore_watches_from_redis(self) -> None:
+        """Restore active watches from Redis on startup."""
+        try:
+            pattern = f"{self.REDIS_KEY_PREFIX}*"
+            keys = await self._redis.keys(pattern)
+
+            for key in keys:
+                data = await self._redis.get(key)
+                if data and isinstance(data, dict):
+                    watch = WatchCandidate.from_dict(data)
+
+                    # Check if watch is still valid (not timed out)
+                    if watch.watch_duration_seconds < self._timeout:
+                        self._watches[watch.coin_symbol] = watch
+                        self._logger.info(
+                            f"Restored watch: {watch.coin_symbol} | "
+                            f"max_z={watch.max_z:.2f} | "
+                            f"duration={watch.watch_duration_minutes:.1f}min"
+                        )
+
+                        # Resubscribe to WebSocket
+                        await self._subscribe_coin(watch.coin_symbol)
+                    else:
+                        # Expired - delete from Redis
+                        await self._redis.delete(key)
+
+            # Subscribe to primary if we have watches
+            if self._watches and self._primary_ws_task is None:
+                await self._subscribe_primary()
+
+            self._logger.info(f"Restored {len(self._watches)} watches from Redis")
+
+        except Exception as e:
+            self._logger.warning(f"Failed to restore watches from Redis: {e}")
 
     # =========================================================================
     # Manual Operations
