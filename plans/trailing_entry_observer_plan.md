@@ -125,7 +125,7 @@ class PendingEntrySignalEvent(BaseEvent):
     spread_std: float = 0.0     # Rolling std of spread
 
     # Thresholds
-    z_entry_threshold: float = 2.1
+    z_entry_threshold: float = 2.0
     z_tp_threshold: float = 0.0
     z_sl_threshold: float = 4.5
 
@@ -221,7 +221,7 @@ class EntryObserverService:
         exchange_client: BinanceClient,
         redis_cache: RedisCache,
         logger,
-        z_entry_threshold: float = 2.1,
+        z_entry_threshold: float = 2.0,
         z_sl_threshold: float = 4.5,
         pullback: float = 0.3,
         watch_timeout_seconds: int = 2700,  # 45 min

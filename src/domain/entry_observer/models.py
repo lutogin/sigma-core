@@ -56,7 +56,7 @@ class WatchCandidate:
     hurst: float = 0.0
 
     # Thresholds
-    z_entry_threshold: float = 2.1
+    z_entry_threshold: float = 2.0
     z_tp_threshold: float = 0.0
     z_sl_threshold: float = 4.5
 
@@ -148,7 +148,7 @@ class WatchCandidate:
             initial_z=data.get("initial_z", 0.0),
             correlation=data.get("correlation", 0.0),
             hurst=data.get("hurst", 0.0),
-            z_entry_threshold=data.get("z_entry_threshold", 2.1),
+            z_entry_threshold=data.get("z_entry_threshold", 2.0),
             z_tp_threshold=data.get("z_tp_threshold", 0.0),
             z_sl_threshold=data.get("z_sl_threshold", 4.5),
             coin_price=data.get("coin_price", 0.0),

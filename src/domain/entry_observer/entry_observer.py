@@ -52,7 +52,7 @@ class EntryObserverService:
         exchange_client: BinanceClient,
         logger: Any,
         primary_symbol: str = "ETH/USDT:USDT",
-        z_entry_threshold: float = 2.1,
+        z_entry_threshold: float = 2.0,
         z_sl_threshold: float = 4.5,
         pullback: float = 0.3,
         watch_timeout_seconds: int = 2700,  # 45 minutes

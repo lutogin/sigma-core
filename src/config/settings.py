@@ -67,9 +67,9 @@ class Settings:
     # Correlation settings
     MIN_CORRELATION: float = 0.8  # Если корреляция упала ниже, пару не торгуем!
     # Z-Score settings
-    Z_ENTRY_THRESHOLD: float = 2.1  # Вход
+    Z_ENTRY_THRESHOLD: float = 0  # Воход в мониторинг PendingEntrySignalEvent
     Z_TP_THRESHOLD: float = 0.0  # Выход
-    Z_SL_THRESHOLD: float = 4.5  # Стоп-лосс
+    Z_SL_THRESHOLD: float = 4.5  # Стоп-лосс ExitSignalEvent
     # Beta settings
     MAX_BETA: float = 2.0
     MIN_BETA: float = 0.5
@@ -143,7 +143,7 @@ class Settings:
 
         self.LOOKBACK_WINDOW_DAYS = int(os.getenv("LOOKBACK_WINDOW_DAYS", "3"))
         self.MIN_CORRELATION = float(os.getenv("MIN_CORRELATION", "0.8"))
-        self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.1"))
+        self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.0"))
         self.Z_TP_THRESHOLD = float(os.getenv("Z_TP_THRESHOLD", "0.0"))
         self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "4.5"))
 

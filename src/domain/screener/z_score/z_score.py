@@ -49,7 +49,7 @@ class ZScoreService:
         logger,
         lookback_window_days: int,
         timeframe: str = "15m",
-        z_entry_threshold: float = 2.1,
+        z_entry_threshold: float = 2.0,
         z_tp_threshold: float = 0.0,
         z_sl_threshold: float = 4.5,
     ):

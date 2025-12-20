@@ -44,7 +44,7 @@ class BacktestConfig:
     max_spreads: int = 3  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
-    z_entry_threshold: float = 2.1  # |Z| >= this to enter
+    z_entry_threshold: float = 2.0  # |Z| >= this to enter
     z_tp_threshold: float = 0.25  # |Z| <= this to take profit
     z_sl_threshold: float = 4.0  # |Z| >= this to stop loss
     min_correlation: float = 0.8  # Minimum correlation to trade

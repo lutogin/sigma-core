@@ -10,6 +10,10 @@ from src.infra.event_emitter.events import (
     EventType,
     ExitReason,
     SpreadSide,
+    PendingEntrySignalEvent,
+    EntrySignalEvent,
+    ExitSignalEvent,
+    WatchCancelledEvent,
     TradeOpenedEvent,
     TradeClosedEvent,
     TradeFailedEvent,
@@ -26,6 +30,10 @@ class CommunicatorService:
     Communicator listens to trade events and sends notifications.
 
     Subscribes to:
+    - PENDING_ENTRY_SIGNAL → Entry candidate detected, watching for reversal
+    - ENTRY_SIGNAL → Entry confirmed after reversal
+    - EXIT_SIGNAL → Exit signal detected
+    - WATCH_CANCELLED → Watch cancelled without entry
     - TRADE_OPENED → Spread trade successfully opened
     - TRADE_CLOSED → Spread trade fully closed
     - TRADE_FAILED → Failed to open spread
@@ -66,13 +74,17 @@ class CommunicatorService:
             return
 
         # Subscribe to trade lifecycle events
+        self._event_emitter.on(EventType.PENDING_ENTRY_SIGNAL, self._on_pending_entry_signal)
+        self._event_emitter.on(EventType.ENTRY_SIGNAL, self._on_entry_signal)
+        self._event_emitter.on(EventType.EXIT_SIGNAL, self._on_exit_signal)
+        self._event_emitter.on(EventType.WATCH_CANCELLED, self._on_watch_cancelled)
         self._event_emitter.on(EventType.TRADE_OPENED, self._on_trade_opened)
         self._event_emitter.on(EventType.TRADE_CLOSED, self._on_trade_closed)
         self._event_emitter.on(EventType.TRADE_FAILED, self._on_trade_failed)
         self._event_emitter.on(EventType.TRADE_CLOSE_ERROR, self._on_trade_close_error)
 
         self._started = True
-        self._logger.info("📡 CommunicatorService started - listening to trade events")
+        self._logger.info("📡 CommunicatorService started - listening to all trade events")
 
     def stop(self) -> None:
         """Stop listening to events."""
@@ -80,6 +92,10 @@ class CommunicatorService:
             return
 
         # Unsubscribe from trade lifecycle events
+        self._event_emitter.off(EventType.PENDING_ENTRY_SIGNAL, self._on_pending_entry_signal)
+        self._event_emitter.off(EventType.ENTRY_SIGNAL, self._on_entry_signal)
+        self._event_emitter.off(EventType.EXIT_SIGNAL, self._on_exit_signal)
+        self._event_emitter.off(EventType.WATCH_CANCELLED, self._on_watch_cancelled)
         self._event_emitter.off(EventType.TRADE_OPENED, self._on_trade_opened)
         self._event_emitter.off(EventType.TRADE_CLOSED, self._on_trade_closed)
         self._event_emitter.off(EventType.TRADE_FAILED, self._on_trade_failed)
@@ -96,6 +112,186 @@ class CommunicatorService:
     # =========================================================================
     # Event Handlers
     # =========================================================================
+
+    async def _on_pending_entry_signal(self, event: PendingEntrySignalEvent) -> None:
+        """Handle pending entry signal event - entry candidate detected."""
+        try:
+            side_emoji = "📈" if event.spread_side == SpreadSide.LONG else "📉"
+            side_text = "LONG" if event.spread_side == SpreadSide.LONG else "SHORT"
+
+            # Describe what we're watching for
+            if event.spread_side == SpreadSide.LONG:
+                explanation = "Spread low → watching for reversal up"
+                target_action = "BUY coin, SELL primary"
+            else:
+                explanation = "Spread high → watching for reversal down"
+                target_action = "SELL coin, BUY primary"
+
+            message = f"""👀 *WATCHING FOR ENTRY: {side_text}*
+
+*Pair:* `{event.coin_symbol}` / `{event.primary_symbol}`
+
+🎯 *Strategy:*
+{explanation}
+*If reversal confirmed:* {target_action}
+
+📊 *Signal Data:*
+• Z-Score: `{event.z_score:.4f}` (crossed `{event.z_entry_threshold:.2f}`)
+• Beta: `{event.beta:.4f}`
+• Correlation: `{event.correlation:.4f}`
+• Hurst: `{event.hurst:.4f}`
+
+💰 *Current Prices:*
+• COIN: `{event.coin_price:.4f}`
+• PRIMARY: `{event.primary_price:.4f}`
+
+🎯 *Thresholds:*
+• Entry: |Z| ≥ `{event.z_entry_threshold:.2f}`
+• TP: |Z| ≤ `{event.z_tp_threshold:.2f}`
+• SL: |Z| ≥ `{event.z_sl_threshold:.2f}`
+
+⏱️ *Time:* `{event.timestamp.strftime('%Y-%m-%d %H:%M:%S')} UTC`
+
+_Monitoring for pullback confirmation..._
+"""
+            await self._telegram.send_message_markdown(message)
+            self._logger.debug(
+                f"Sent pending entry notification for {event.coin_symbol}"
+            )
+
+        except Exception as e:
+            self._logger.error(f"Failed to send pending entry notification: {e}")
+
+    async def _on_entry_signal(self, event: EntrySignalEvent) -> None:
+        """Handle entry signal event - entry confirmed after reversal."""
+        try:
+            side_emoji = "📈" if event.spread_side == SpreadSide.LONG else "📉"
+            side_text = "LONG" if event.spread_side == SpreadSide.LONG else "SHORT"
+
+            # Describe the trade direction
+            if event.spread_side == SpreadSide.LONG:
+                action_text = (
+                    f"🟢 *BUY:* `{event.coin_symbol}`\n"
+                    f"🔴 *SELL:* `{event.primary_symbol}`"
+                )
+                explanation = "Reversal confirmed → entering mean reversion trade"
+            else:
+                action_text = (
+                    f"🔴 *SELL:* `{event.coin_symbol}`\n"
+                    f"🟢 *BUY:* `{event.primary_symbol}`"
+                )
+                explanation = "Reversal confirmed → entering mean reversion trade"
+
+            message = f"""{side_emoji} *ENTRY SIGNAL CONFIRMED: {side_text}*
+
+*Pair:* `{event.coin_symbol}` / `{event.primary_symbol}`
+
+✅ *Actions:*
+{action_text}
+_{explanation}_
+
+📊 *Signal Data:*
+• Z-Score: `{event.z_score:.4f}`
+• Beta: `{event.beta:.4f}`
+• Correlation: `{event.correlation:.4f}`
+• Hurst: `{event.hurst:.4f}`
+
+💰 *Current Prices:*
+• COIN: `{event.coin_price:.4f}`
+• PRIMARY: `{event.primary_price:.4f}`
+
+🎯 *Thresholds:*
+• TP: |Z| ≤ `{event.z_tp_threshold:.2f}`
+• SL: |Z| ≥ `{event.z_sl_threshold:.2f}`
+
+⏱️ *Time:* `{event.timestamp.strftime('%Y-%m-%d %H:%M:%S')} UTC`
+
+_Sending to TradingService for execution..._
+"""
+            await self._telegram.send_message_markdown(message)
+            self._logger.debug(
+                f"Sent entry signal notification for {event.coin_symbol}"
+            )
+
+        except Exception as e:
+            self._logger.error(f"Failed to send entry signal notification: {e}")
+
+    async def _on_exit_signal(self, event: ExitSignalEvent) -> None:
+        """Handle exit signal event."""
+        try:
+            # Determine emoji and reason text
+            reason_map = {
+                ExitReason.TAKE_PROFIT: ("✅", "TAKE PROFIT"),
+                ExitReason.STOP_LOSS: ("🛑", "STOP LOSS"),
+                ExitReason.CORRELATION_DROP: ("📉", "CORRELATION DROP"),
+                ExitReason.TIMEOUT: ("⏰", "TIMEOUT"),
+                ExitReason.HURST_TRENDING: ("📈", "HURST TRENDING"),
+                ExitReason.MANUAL: ("🔧", "MANUAL"),
+            }
+            reason_emoji, reason_text = reason_map.get(
+                event.exit_reason, ("❓", event.exit_reason.value.upper())
+            )
+
+            message = f"""{reason_emoji} *EXIT SIGNAL: {reason_text}*
+
+*Pair:* `{event.coin_symbol}` / `{event.primary_symbol}`
+
+📊 *Current Metrics:*
+• Z-Score: `{event.current_z_score:.4f}`
+• Correlation: `{event.current_correlation:.4f}`
+
+💰 *Current Prices:*
+• COIN: `{event.coin_price:.4f}`
+• PRIMARY: `{event.primary_price:.4f}`
+
+⏱️ *Time:* `{event.timestamp.strftime('%Y-%m-%d %H:%M:%S')} UTC`
+
+_Sending to TradingService for position closure..._
+"""
+            await self._telegram.send_message_markdown(message)
+            self._logger.debug(
+                f"Sent exit signal notification for {event.coin_symbol}"
+            )
+
+        except Exception as e:
+            self._logger.error(f"Failed to send exit signal notification: {e}")
+
+    async def _on_watch_cancelled(self, event: WatchCancelledEvent) -> None:
+        """Handle watch cancelled event."""
+        try:
+            # Determine emoji and reason text
+            reason_map = {
+                "timeout": ("⏰", "TIMEOUT"),
+                "false_alarm": ("❌", "FALSE ALARM"),
+                "sl_hit": ("🛑", "SL HIT"),
+                "max_watches_reached": ("🚫", "MAX WATCHES"),
+            }
+            reason_emoji, reason_text = reason_map.get(
+                event.reason.value, ("❓", event.reason.value.upper())
+            )
+
+            duration_min = event.watch_duration_seconds / 60
+
+            message = f"""{reason_emoji} *WATCH CANCELLED: {reason_text}*
+
+*Pair:* `{event.coin_symbol}` / `{event.primary_symbol}`
+
+📊 *Stats:*
+• Max Z reached: `{event.max_z_reached:.4f}`
+• Final Z: `{event.final_z:.4f}`
+• Watch duration: `{duration_min:.1f}` minutes
+
+⏱️ *Time:* `{event.timestamp.strftime('%Y-%m-%d %H:%M:%S')} UTC`
+
+_No entry executed - continuing to monitor other pairs._
+"""
+            await self._telegram.send_message_markdown(message)
+            self._logger.debug(
+                f"Sent watch cancelled notification for {event.coin_symbol}"
+            )
+
+        except Exception as e:
+            self._logger.error(f"Failed to send watch cancelled notification: {e}")
 
     async def _on_trade_opened(self, event: TradeOpenedEvent) -> None:
         """Handle trade opened event."""

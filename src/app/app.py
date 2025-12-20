@@ -111,6 +111,7 @@ class Application:
             # Get services (triggers database connections)
             planner = self._container.planner_service
             trading_service = self._container.trading_service
+            communicator_service = self._container.communicator_service
 
             # Connect to async services that need explicit connection
             # Access redis_cache property to create instance, then connect
@@ -118,6 +119,9 @@ class Application:
             await redis_cache.connect()
 
             try:
+                # Start communicator service (subscribes to events)
+                communicator_service.start()
+
                 # Start trading service (subscribes to events)
                 await trading_service.start()
 
@@ -165,6 +169,13 @@ class Application:
                 await self._container.trading_service.stop()
         except Exception as e:
             logger.warning(f"Error stopping trading service: {e}")
+
+        # Stop communicator service
+        try:
+            if self._container.has_instance("communicator_service"):
+                self._container.communicator_service.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping communicator service: {e}")
 
         # Stop scheduler
         try:
