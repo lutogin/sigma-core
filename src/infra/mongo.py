@@ -53,7 +53,7 @@ class MongoDatabase:
 
             # Ping to verify connection
             self._client.admin.command("ping")
-            self.logger.info(f"Connected to MongoDB: {self.database_name}")
+            self.logger.info(f"💾 Connected to MongoDB: {self.database_name}")
         except Exception as e:
             self.logger.error(f"Failed to connect to MongoDB: {e}")
             raise

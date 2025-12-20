@@ -1,0 +1,75 @@
+
+======================================================================
+              STATISTICAL ARBITRAGE BACKTEST
+======================================================================
+
+  Start Date:          2024-06-01
+  End Date:            2024-06-07
+  Initial Balance:     $10,000.00
+  Position Size:       30.0%
+  Max Spreads:         3 (COIN vs ETH/USDT:USDT)
+  Leverage:            3x
+
+  Z Entry Threshold:   ±2.1
+  Z TP Threshold:      ±0.25
+  Z SL Threshold:      ±4.0
+  Min Correlation:     0.8
+
+  Primary Pair:        ETH/USDT:USDT
+  Trading Pairs:       3
+======================================================================
+
+Starting backtest: 2024-06-01 to 2024-06-07
+Loading data from 2024-05-25 (warmup: 7 days)
+Backtesting 672 candles (7.0 days)
+Progress: 0.0% | Balance: $10000.00 | Open positions: 0 | Trades: 0
+▶️ AAVE/USDT:USDT Hurst=0.438 < 0.45 (mean-reverting, allow entry)
+OPEN LONG SPREAD AAVE/USDT:USDT | Z=-3.98 β=2.573 | Coin: $3000.00 @ 97.9700 | Hedge: $7719.03 @ 3692.1700
+   📂 PORTFOLIO STATE:
+      • AAVE/USDT:USDT (LONG): Coin $3000 | Hedge ETH/USDT:USDT $7719 (SHORT)
+      ∑ Net Hedge Exposure: SHORT $7719.03
+Reason: BACKTEST_END | Duration: 2.2h
+   Empty Portfolio
+
+======================================================================
+                    BACKTEST RESULTS SUMMARY
+======================================================================
+
+📊 PERFORMANCE
+----------------------------------------
+  Initial Balance:     $10,000.00
+  Final Balance:       $10,027.24
+  Total PnL:           $27.24 (+0.27%)
+
+📈 TRADE STATISTICS
+----------------------------------------
+  Total Trades:        1
+  Winning Trades:      1
+  Losing Trades:       0
+  Win Rate:            100.0%
+  Avg Trade PnL:       $27.24
+  Avg Trade Duration:  2.2 hours
+
+⚠️  RISK METRICS
+----------------------------------------
+  Max Drawdown:        $-43.35 (-0.43%)
+  Sharpe Ratio:        2.91
+  Profit Factor:       inf
+
+🏷️  EXITS BY REASON
+----------------------------------------
+  ⚠️ BACKTEST_END             1 (100.0%)
+
+==============================================================================================================
+                              PER-SYMBOL STATISTICS (vs ETH)
+==============================================================================================================
+Symbol             │ Trades │   Win% │        PnL │   Avg PnL │     PF │   TP │   SL │ Other │  Avg Dur
+--------------------------------------------------------------------------------------------------------------
+🟢 AAVE/USDT:USDT  │      1 │ 100.0% │ $   +27.24 │ $  +27.24 │      ∞ │    0 │    0 │     1 │    2.2h
+--------------------------------------------------------------------------------------------------------------
+
+  📊 Symbols traded: 1
+  🟢 Profitable: 1  |  🔴 Losing: 0
+  📈 Overall: 1 trades, 100.0% win rate, $+27.24 PnL
+
+======================================================================

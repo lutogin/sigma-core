@@ -108,9 +108,14 @@ class Application:
                     sig, lambda: asyncio.create_task(self._signal_handler())
                 )
 
-            # Get services
+            # Get services (triggers database connections)
             planner = self._container.planner_service
             trading_service = self._container.trading_service
+
+            # Connect to async services that need explicit connection
+            # Access redis_cache property to create instance, then connect
+            redis_cache = self._container.redis_cache
+            await redis_cache.connect()
 
             try:
                 # Start trading service (subscribes to events)

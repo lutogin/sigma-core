@@ -22,6 +22,8 @@ loguru-loki-handler
 requests
 pyee
 apscheduler
+asyncio-redis
+redis
 
 # Database
 pymongo

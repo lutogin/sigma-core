@@ -41,7 +41,7 @@ class BacktestConfig:
     # Capital
     initial_balance: float = 10_000.0  # Starting capital in USDT
     position_size_pct: float = 0.3  # 3% of capital per spread
-    max_spreads: int = 1  # Maximum concurrent spread positions (1 = one coin vs ETH)
+    max_spreads: int = 3  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
     z_entry_threshold: float = 2.1  # |Z| >= this to enter
@@ -529,13 +529,11 @@ class StatArbBacktest:
         correlation_results: Dict,
     ) -> None:
         """Check for new entry signals."""
-        # Only one spread position at a time (one coin vs ETH)
         if len(self.positions) >= self.config.max_spreads:
-            return  # Already have a spread open
+            return  # Max positions reached
 
-        # Find the best signal (highest |z-score|)
-        best_signal = None
-        best_z_abs = 0
+        # entry_candidates list of (z_abs, symbol, side, z_result)
+        entry_candidates = []
 
         for symbol, z_result in filtered_results.items():
             if symbol in self.positions:
@@ -563,20 +561,22 @@ class StatArbBacktest:
                 abs(z) >= self.config.z_entry_threshold
                 and abs(z) <= self.config.z_sl_threshold
             ):
-                if abs(z) > best_z_abs:
-                    best_z_abs = abs(z)
-                    side = "short" if z >= self.config.z_entry_threshold else "long"
-                    best_signal = (symbol, side, z_result)
+                side = "short" if z >= self.config.z_entry_threshold else "long"
+                entry_candidates.append((abs(z), symbol, side, z_result))
 
-        # Open position for the best signal only (after Hurst check)
-        if best_signal:
-            symbol, side, z_result = best_signal
+        # Sort candidates by Z-score strength (highest first)
+        entry_candidates.sort(key=lambda x: x[0], reverse=True)
+
+        # Open positions for valid candidates up to max_spreads
+        for _, symbol, side, z_result in entry_candidates:
+            if len(self.positions) >= self.config.max_spreads:
+                break
 
             # Final filter: Check Hurst exponent (mean-reversion quality)
             if not self._check_hurst_for_symbol(
                 symbol, window_data, correlation_results
             ):
-                return  # Spread is trending, skip entry
+                continue  # Spread is trending, skip entry
 
             await self._open_position(
                 symbol=symbol,
@@ -645,6 +645,7 @@ class StatArbBacktest:
             f"Coin: ${coin_size:.2f} @ {coin_price:.4f} | "
             f"Hedge: ${primary_size:.2f} @ {primary_price:.4f}"
         )
+        self._print_portfolio_state()
 
     async def _close_position(
         self,
@@ -738,13 +739,10 @@ class StatArbBacktest:
         emoji = "✅" if pnl >= 0 else "❌"
 
         print(
-            f"{emoji} CLOSE {position.side.upper()} SPREAD {symbol} | "
-            f"PnL: ${pnl:.2f} ({trade.pnl_pct:+.2f}%) | "
-            f"Coin: {coin_pct_change*100:+.2f}% | "
-            f"Primary: {primary_pct_change*100:+.2f}% | "
             f"Reason: {exit_reason} | "
             f"Duration: {duration:.1f}h"
         )
+        self._print_portfolio_state()
 
     async def _close_all_positions(
         self,
@@ -793,6 +791,33 @@ class StatArbBacktest:
             equity += unrealized_pnl
 
         return equity
+
+    def _print_portfolio_state(self):
+        """Print current portfolio state (active hedges)."""
+        if not self.positions:
+            print("   Empty Portfolio")
+            return
+
+        print("   📂 PORTFOLIO STATE:")
+        total_primary_exposure = 0.0
+
+        for symbol, pos in self.positions.items():
+            # For LONG spread (Long Coin, Short Hedge), primary exposure is SHORT (-size)
+            # For SHORT spread (Short Coin, Long Hedge), primary exposure is LONG (+size)
+            primary_direction = "SHORT" if pos.side == "long" else "LONG"
+            primary_sign = -1 if pos.side == "long" else 1
+            entry_exposure = pos.primary_size * primary_sign
+
+            total_primary_exposure += entry_exposure
+
+            print(
+                f"      • {symbol:<10} ({pos.side.upper()}): "
+                f"Coin ${pos.coin_size:.0f} | "
+                f"Hedge {self.primary_pair} ${pos.primary_size:.0f} ({primary_direction})"
+            )
+
+        direction = "LONG" if total_primary_exposure > 0 else "SHORT"
+        print(f"      ∑ Net Hedge Exposure: {direction} ${abs(total_primary_exposure):.2f}")
 
     def _calculate_results(self) -> BacktestResult:
         """Calculate final backtest results."""
