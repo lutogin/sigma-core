@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  omega-bot:
+    # Pull pre-built image from Docker Hub
+    image: lutogin/sigma-trading-bot:latest
+    container_name: sigma-trading-bot
+
+    # Always restart unless explicitly stopped
+    restart: unless-stopped
+
+    # Load environment variables from .env file
+    env_file:
+      - .env
+
+    # Set production environment
+    environment:
+      PYTHONUNBUFFERED: 1 # Real-time logging
+      PYTHONDONTWRITEBYTECODE: 1 # Don't create .pyc files
+      TZ: UTC
+
+    # Mount volumes
+    volumes:
+      # Logs directory - for application logs
+      - ./logs:/app/logs
+
+    # Resource limits for DigitalOcean 2vCPU/2GB droplet
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0' # Max 2 vCPU (для ThreadPool + warmup)
+          memory: 1.7G # Max 1.8GB (запас 200MB для системы)
+        reservations:
+          cpus: '1.0' # Min 1 vCPU
+          memory: 800M # Min 800MB RAM
+
+    # Logging configuration - important for production
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '20m' # Maximum log file size before rotation
+        max-file: '3' # Keep 3 rotated log files
+        compress: 'true' # Compress rotated logs
+
+
+    # No healthcheck needed - trading bot without API server
