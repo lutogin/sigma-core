@@ -4,6 +4,7 @@ from src.infra.logger import logger, setup_logger
 from src.infra.mongo import MongoDatabase
 from src.infra.scheduler import SchedulerService, AsyncIOScheduler
 from src.infra.timescale import TimescaleDB
+from src.infra.container import Container
 
 # Note: Other infra components are imported directly to avoid circular imports:
 #   from src.infra.container import Container
@@ -24,5 +25,6 @@ __all__ = [
     "SchedulerService",
     "AsyncIOScheduler",
     "TimescaleDB",
+    "Container",
 ]
 
