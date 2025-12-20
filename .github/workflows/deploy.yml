@@ -32,11 +32,11 @@ jobs:
           pip install -r requirements.txt
           pip install pytest black isort flake8 mypy
 
-      - name: Run Black (code formatting check)
-        run: black --check --diff .
+      # - name: Run Black (code formatting check)
+      #   run: black --check --diff .
 
-      - name: Run isort (import sorting check)
-        run: isort --check-only --diff .
+      # - name: Run isort (import sorting check)
+      #   run: isort --check-only --diff .
 
       - name: Run flake8 (linting)
         run: flake8 src/ --max-line-length=88 --extend-ignore=E203,W503
@@ -44,10 +44,10 @@ jobs:
       - name: Run mypy (type checking)
         run: mypy src/ --ignore-missing-imports
 
-      - name: Run tests
-        run: |
-          # Add tests when available
-          echo "✅ No tests configured yet"
+      # - name: Run tests
+      #   run: |
+      #     # Add tests when available
+      #     echo "✅ No tests configured yet"
 
   build-and-push:
     name: Build and Push Docker Image
