@@ -52,7 +52,7 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            🚀 **FRA OWL Bot Deployment**
+            🚀 **Sigma Deployment**
 
             Repository: ${{ github.repository }}
             Branch: ${{ github.ref_name }}
