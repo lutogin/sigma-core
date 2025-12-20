@@ -1,0 +1,135 @@
+name: CI - Lint and Test
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+  push:
+    branches:
+      - develop
+      - feature/**
+
+jobs:
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install black isort flake8 mypy
+
+      - name: Run Black (code formatting check)
+        run: |
+          echo "Checking code formatting with Black..."
+          black --check --diff .
+
+      - name: Run isort (import sorting check)
+        run: |
+          echo "Checking import sorting with isort..."
+          isort --check-only --diff .
+
+      - name: Run flake8 (linting)
+        run: |
+          echo "Running flake8 linter..."
+          flake8 src/ --max-line-length=88 --extend-ignore=E203,W503 --count --statistics
+
+      - name: Run mypy (type checking)
+        continue-on-error: true
+        run: |
+          echo "Running mypy type checker..."
+          mypy src/ --ignore-missing-imports
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
+
+      - name: Run tests
+        run: |
+          # Add tests when available
+          echo "✅ No tests configured yet"
+          # pytest tests/ --cov=src --cov-report=xml --cov-report=term
+
+      - name: Upload coverage reports
+        if: false # Enable when tests are added
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+
+  docker-build:
+    name: Test Docker Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (test only)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: sigma-trading-bot:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test Docker image
+        run: |
+          echo "✅ Docker build successful"
+
+  summary:
+    name: CI Summary
+    needs: [lint, test, docker-build]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check results
+        run: |
+          echo "Lint: ${{ needs.lint.result }}"
+          echo "Test: ${{ needs.test.result }}"
+          echo "Docker Build: ${{ needs.docker-build.result }}"
+
+          if [ "${{ needs.lint.result }}" != "success" ] || \
+             [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.docker-build.result }}" != "success" ]; then
+            echo "❌ CI checks failed"
+            exit 1
+          fi
+
+          echo "✅ All CI checks passed"
