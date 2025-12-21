@@ -73,6 +73,48 @@ LOG_FORMAT_FILE = (
 )
 
 
+def _loki_sink(message: str, loki_url: str, labels: dict, auth: tuple) -> None:
+    """
+    Custom sink that sends formatted log messages to Loki.
+
+    Args:
+        message: Formatted log message
+        loki_url: Loki push URL
+        labels: Labels for the log stream
+        auth: (username, password) tuple for basic auth
+    """
+    import requests
+    import time
+    import json
+
+    # Extract just the message text (loguru adds formatting)
+    log_line = message.rstrip('\n')
+
+    # Prepare Loki payload
+    payload = {
+        "streams": [
+            {
+                "stream": labels,
+                "values": [
+                    [str(int(time.time() * 1e9)), log_line]  # [timestamp_ns, log_line]
+                ]
+            }
+        ]
+    }
+
+    try:
+        requests.post(
+            loki_url,
+            json=payload,
+            auth=auth,
+            timeout=5,
+            headers={"Content-Type": "application/json"}
+        )
+    except Exception:
+        # Silently fail to avoid log loops
+        pass
+
+
 def setup_loki(
     host: str,
     user: str,
@@ -81,7 +123,7 @@ def setup_loki(
     level: str = "INFO",
 ) -> None:
     """
-    Setup Loki logging using loguru-loki-handler.
+    Setup Loki logging with custom text format.
 
     Args:
         host: Loki host URL (e.g., https://logs-prod-012.grafana.net)
@@ -91,32 +133,16 @@ def setup_loki(
         level: Minimum log level to send
     """
     try:
-        from loguru_loki_handler import loki_handler
+        import requests
     except ImportError:
-        logger.warning("loguru-loki-handler not installed. Loki logging disabled.")
+        logger.warning("requests library not installed. Loki logging disabled.")
         return
 
     try:
         # Build Loki URL
-        # Note: loguru-loki-handler does not support 'auth' param,
-        # so we must embed credentials in the URL.
-
         base_url = host.rstrip("/")
         if "://" not in base_url:
             base_url = f"https://{base_url}"
-
-        if user and token:
-            from urllib.parse import urlparse, quote
-
-            # Embed auth in URL: https://user:token@host...
-            parsed = urlparse(base_url)
-            # Encode user/pass to handle special chars safe for URL
-            safe_user = quote(user, safe='')
-            safe_token = quote(token, safe='')
-
-            # Reconstruct netloc with auth
-            new_netloc = f"{safe_user}:{safe_token}@{parsed.netloc}"
-            base_url = parsed._replace(netloc=new_netloc).geturl()
 
         loki_url = f"{base_url}/loki/api/v1/push"
 
@@ -126,22 +152,19 @@ def setup_loki(
             "env": "prod",
         }
 
-        # Add Loki sink to loguru
+        # Create auth tuple
+        auth = (user, token) if user and token else None
+
+        # Add custom Loki sink with text format
         logger.add(
-            loki_handler(loki_url, labels),
+            lambda msg: _loki_sink(msg, loki_url, labels, auth),
             level=level,
-            format=_format_record_loki,  # Use custom text format instead of JSON
-            serialize=False,  # Send as text, not JSON
+            format=_format_record_loki,  # Use our custom text format
             backtrace=True,
-            diagnose=False,  # Don't include source in prod
+            diagnose=False,
         )
 
-        # Log success (masking token in URL for log)
-        safe_log_url = loki_url
-        if user and token:
-            safe_log_url = loki_url.replace(token, "***")
-
-        logger.info(f"📡 Loki logging enabled → {safe_log_url}")
+        logger.info(f"📡 Loki logging enabled → {base_url}")
 
     except Exception as e:
         logger.warning(f"Failed to setup Loki logging: {e}")
