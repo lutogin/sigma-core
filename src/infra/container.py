@@ -60,8 +60,19 @@ class Container:
     def logger(self):
         """Get configured logger."""
         if "logger" not in self._instances:
-            from src.infra.logger import logger
+            from src.infra.logger import logger, setup_logger
 
+            # Setup logger with settings from container
+            setup_logger(
+                level=self._settings.LOG_LEVEL,
+                log_to_file=self._settings.LOG_TO_FILE,
+                log_dir=self._settings.LOG_DIRECTORY,
+                loki_host=self._settings.LOKI_HOST,
+                loki_user=self._settings.LOKI_USER,
+                loki_token=self._settings.LOKI_TOKEN,
+                app_name=self._settings.LOKI_APP_NAME,
+                env=self._settings.ENV,
+            )
             self._instances["logger"] = logger
         return self._instances["logger"]
 

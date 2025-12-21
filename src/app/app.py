@@ -11,7 +11,6 @@ import signal
 import sys
 
 from src.infra.container import Container
-from src.infra.logger import setup_logger
 
 
 class Application:
@@ -38,45 +37,20 @@ class Application:
             raise RuntimeError("Application not initialized. Call init() first.")
         return self._container
 
-    def init(
-        self,
-        log_level: str | None = None,
-        log_to_file: bool | None = None,
-    ) -> "Application":
+    def init(self) -> "Application":
         """
         Initialize the application.
-
-        Args:
-            log_level: Logging level (overrides .env if provided)
-            log_to_file: Whether to write logs to file (overrides .env if provided)
 
         Returns:
             Self for chaining
         """
-        # Create and configure DI container first (loads .env)
+        # Create and configure DI container (loads .env and sets up logger)
         self._container = Container()
         self._container.init()
 
-        # Get settings and logger from container
-        settings = self._container.settings
+        # Get logger from container (triggers logger setup)
         logger = self._container.logger
-
-        # Use provided values or fall back to settings
-        log_level = log_level or settings.LOG_LEVEL
-        log_to_file = log_to_file if log_to_file is not None else settings.LOG_TO_FILE
-
-        # Setup logging (with Loki for production if configured)
-        setup_logger(
-            level=log_level,
-            log_to_file=log_to_file,
-            log_dir=settings.LOG_DIRECTORY,
-            loki_host=settings.LOKI_HOST,
-            loki_user=settings.LOKI_USER,
-            loki_token=settings.LOKI_TOKEN,
-            app_name=settings.LOKI_APP_NAME,
-        )
         logger.info("Initializing scanner application...")
-
         logger.info("Application initialized successfully")
         return self
 
