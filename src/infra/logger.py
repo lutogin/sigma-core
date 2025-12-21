@@ -45,6 +45,18 @@ def _format_record_file(record: dict) -> str:
     )
 
 
+def _format_record_loki(record: dict) -> str:
+    """Custom format function for Loki logging (same as file, but without colors)."""
+    short_name = _short_name(record)
+    record["extra"]["short_name"] = short_name
+    return (
+        "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
+        "{level: <8} | "
+        "{extra[short_name]}:{function} | "
+        "{message}"
+    )
+
+
 # Legacy formats (for reference)
 LOG_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
@@ -86,7 +98,27 @@ def setup_loki(
 
     try:
         # Build Loki URL
-        loki_url = host.rstrip("/") + "/loki/api/v1/push"
+        # Note: loguru-loki-handler does not support 'auth' param,
+        # so we must embed credentials in the URL.
+
+        base_url = host.rstrip("/")
+        if "://" not in base_url:
+            base_url = f"https://{base_url}"
+
+        if user and token:
+            from urllib.parse import urlparse, quote
+
+            # Embed auth in URL: https://user:token@host...
+            parsed = urlparse(base_url)
+            # Encode user/pass to handle special chars safe for URL
+            safe_user = quote(user, safe='')
+            safe_token = quote(token, safe='')
+
+            # Reconstruct netloc with auth
+            new_netloc = f"{safe_user}:{safe_token}@{parsed.netloc}"
+            base_url = parsed._replace(netloc=new_netloc).geturl()
+
+        loki_url = f"{base_url}/loki/api/v1/push"
 
         # Create labels
         labels = {
@@ -94,19 +126,22 @@ def setup_loki(
             "env": "prod",
         }
 
-        # Create auth tuple for basic auth
-        auth = (user, token) if user and token else None
-
         # Add Loki sink to loguru
         logger.add(
-            loki_handler(loki_url, labels, auth=auth),
+            loki_handler(loki_url, labels),
             level=level,
-            serialize=True,  # Send logs as JSON
+            format=_format_record_loki,  # Use custom text format instead of JSON
+            serialize=False,  # Send as text, not JSON
             backtrace=True,
             diagnose=False,  # Don't include source in prod
         )
 
-        logger.info(f"📡 Loki logging enabled → {host}")
+        # Log success (masking token in URL for log)
+        safe_log_url = loki_url
+        if user and token:
+            safe_log_url = loki_url.replace(token, "***")
+
+        logger.info(f"📡 Loki logging enabled → {safe_log_url}")
 
     except Exception as e:
         logger.warning(f"Failed to setup Loki logging: {e}")
@@ -190,7 +225,6 @@ def setup_logger(
 
     # Setup Loki only for production environment
     if env.lower() == "prod" and loki_host and loki_user and loki_token:
-    # if loki_host and loki_user and loki_token:
         setup_loki(
             host=loki_host,
             user=loki_user,
