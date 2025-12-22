@@ -90,6 +90,8 @@ class PositionStateService:
         primary_entry_price: float,
         z_tp_threshold: float,
         z_sl_threshold: float,
+        coin_contracts: float = 0.0,
+        primary_contracts: float = 0.0,
         leverage: int = 1,
     ) -> SpreadPosition:
         """
@@ -109,6 +111,8 @@ class PositionStateService:
             primary_entry_price: PRIMARY entry price.
             z_tp_threshold: Take profit Z threshold.
             z_sl_threshold: Stop loss Z threshold.
+            coin_contracts: COIN leg size in contracts.
+            primary_contracts: PRIMARY leg size in contracts.
             leverage: Position leverage.
 
         Returns:
@@ -124,6 +128,8 @@ class PositionStateService:
             entry_hurst=entry_hurst,
             coin_size_usdt=coin_size_usdt,
             primary_size_usdt=primary_size_usdt,
+            coin_contracts=coin_contracts,
+            primary_contracts=primary_contracts,
             coin_entry_price=coin_entry_price,
             primary_entry_price=primary_entry_price,
             z_tp_threshold=z_tp_threshold,
@@ -137,7 +143,8 @@ class PositionStateService:
 
         self._logger.info(
             f"📝 Position registered | {coin_symbol} ({side.value}) | "
-            f"Z={entry_z_score:.2f} | β={entry_beta:.3f}"
+            f"Z={entry_z_score:.2f} | β={entry_beta:.3f} | "
+            f"coin_contracts={coin_contracts:.6f} | primary_contracts={primary_contracts:.6f}"
         )
 
         return position
@@ -192,6 +199,11 @@ class PositionStateService:
     def get_active_symbols(self) -> set:
         """Get set of all active symbols (both coin and primary)."""
         return self._repository.get_active_symbols()
+
+    def get_active_coin_symbols(self) -> set:
+        """Get set of active COIN symbols only (excluding PRIMARY)."""
+        positions = self._repository.get_active_positions()
+        return {pos.coin_symbol.lower() for pos in positions}
 
     def has_position(self, coin_symbol: str) -> bool:
         """Check if there's an active position for a coin symbol."""
@@ -331,12 +343,13 @@ class PositionStateService:
             return False, "Position already open for this symbol"
 
         # Check symbol overlap with existing positions
-        active_symbols = self.get_active_symbols()
-        check_symbols = {coin_symbol.lower(), primary_symbol.lower()}
-        overlap = active_symbols & check_symbols
+        # NOTE: We only check COIN overlap, not PRIMARY (ETH)
+        # because PRIMARY is shared across all spreads
+        active_coin_symbols = self.get_active_coin_symbols()
+        coin_symbol_lower = coin_symbol.lower()
 
-        if overlap:
-            return False, f"Symbol overlap: {overlap}"
+        if coin_symbol_lower in active_coin_symbols:
+            return False, f"COIN symbol already in use: {coin_symbol}"
 
         # Check max spreads
         active_count = self.count_active_positions()

@@ -34,7 +34,7 @@ from src.infra.event_emitter import (
     TradeFailedEvent,
     TradeCloseErrorEvent,
 )
-from src.integrations.exchange import BinanceClient, Order, OrderSide
+from src.integrations.exchange import BinanceClient, Order, OrderSide, TradeSide
 
 
 class TradingService:
@@ -58,7 +58,7 @@ class TradingService:
         allow_trading: bool = False,
         position_size_usdt: float = 100.0,
         leverage: int = 1,
-        max_open_spreads: int = 5,
+        max_open_spreads: int = 3,
         primary_symbol: str = "ETH/USDT:USDT",
     ):
         """
@@ -208,7 +208,7 @@ class TradingService:
             )
 
             if not can_open:
-                self._logger.info(f"⚠️ Cannot open position: {reason}")
+                self._logger.warning(f"⚠️ Cannot open position: {reason}")
                 return
 
             # 2. Check balance
@@ -314,9 +314,13 @@ class TradingService:
             primary_symbol, primary_size_usdt
         )
 
+        # Store as floats for position tracking
+        coin_contracts = float(amount_coin)
+        primary_contracts = float(amount_primary)
+
         self._logger.debug(
-            f"Calculated amounts: {coin_symbol}={amount_coin}, "
-            f"{primary_symbol}={amount_primary}"
+            f"Calculated amounts: {coin_symbol}={coin_contracts}, "
+            f"{primary_symbol}={primary_contracts}"
         )
 
         # Open positions atomically
@@ -327,10 +331,10 @@ class TradingService:
             # Execute both positions in parallel
             results = await asyncio.gather(
                 self._open_position_with_retry(
-                    coin_symbol, coin_side, float(amount_coin)
+                    coin_symbol, coin_side, coin_contracts
                 ),
                 self._open_position_with_retry(
-                    primary_symbol, primary_side, float(amount_primary)
+                    primary_symbol, primary_side, primary_contracts
                 ),
                 return_exceptions=True,
             )
@@ -375,6 +379,8 @@ class TradingService:
                     entry_hurst=event.hurst,
                     coin_size_usdt=coin_size_usdt,
                     primary_size_usdt=primary_size_usdt,
+                    coin_contracts=coin_contracts,
+                    primary_contracts=primary_contracts,
                     coin_entry_price=coin_price,
                     primary_entry_price=primary_price,
                     z_tp_threshold=event.z_tp_threshold,
@@ -579,6 +585,9 @@ class TradingService:
         """
         Close a spread position (both legs).
 
+        COIN is closed entirely, PRIMARY is closed only by the amount
+        that was opened for this specific spread (partial close).
+
         Args:
             coin_symbol: Coin symbol to close.
             primary_symbol: Primary symbol to close.
@@ -591,14 +600,33 @@ class TradingService:
             f"🔒 Closing spread | {coin_symbol} | reason={exit_reason.value}"
         )
 
-        # Get position data before closing (for event)
+        # Get position data before closing (for event and partial close amount)
         position = self._position_state.get_position(coin_symbol)
 
+        if not position:
+            self._logger.warning(f"No position found for {coin_symbol}")
+            return False
+
+        # Determine close side for PRIMARY partial close
+        # LONG spread: Buy COIN, Sell PRIMARY -> PRIMARY is short -> close with BUY
+        # SHORT spread: Sell COIN, Buy PRIMARY -> PRIMARY is long -> close with SELL
+        primary_close_side: TradeSide = "buy" if position.side.value == "long" else "sell"
+
         try:
-            # Close both legs in parallel
+            # Close COIN entirely, close PRIMARY partially (only the amount for this spread)
+            self._logger.info(
+                f"Closing COIN {coin_symbol} entirely, "
+                f"PRIMARY {primary_symbol} partially: {position.primary_contracts:.6f} contracts "
+                f"(close_side={primary_close_side})"
+            )
+
             results = await asyncio.gather(
                 self._exchange.flash_close_position(coin_symbol),
-                self._exchange.flash_close_position(primary_symbol),
+                self._exchange.flash_close_position(
+                    primary_symbol,
+                    amount=position.primary_contracts,
+                    close_side=primary_close_side,
+                ),
                 return_exceptions=True,
             )
 
@@ -612,7 +640,8 @@ class TradingService:
                 )
             if not primary_success:
                 self._logger.error(
-                    f"❌ Failed to close PRIMARY position {primary_symbol}: {primary_result}"
+                    f"❌ Failed to close PRIMARY position {primary_symbol} "
+                    f"(partial {position.primary_contracts:.6f}): {primary_result}"
                 )
 
             # Update position state (applies cooldown if SL/CORRELATION_DROP)
@@ -620,7 +649,8 @@ class TradingService:
 
             if coin_success and primary_success:
                 self._logger.info(
-                    f"✅ Spread closed | {coin_symbol} | reason={exit_reason.value}"
+                    f"✅ Spread closed | {coin_symbol} | reason={exit_reason.value} | "
+                    f"PRIMARY partial close: {position.primary_contracts:.6f} contracts"
                 )
 
                 # Emit TradeClosedEvent

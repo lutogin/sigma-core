@@ -244,6 +244,9 @@ class BinanceClient:
             # Load markets
             await self.load_markets()
 
+            # # Enable Hedge Mode (dual side position)
+            # await self.set_position_mode(hedge_mode=True)
+
             self._is_connected = True
             self.logger.info(
                 f"Connected to Binance. Loaded {len(self._markets_cache)} markets"
@@ -925,10 +928,87 @@ class BinanceClient:
 
         return Balance(asset=asset, free=0, used=0, total=0)
 
+    # =========================================================================
+    # Position Mode (Hedge Mode)
+    # =========================================================================
+
+    async def get_position_mode(self) -> bool:
+        """
+        Get current position mode.
+
+        Returns:
+            True if Hedge Mode (dual side position) is enabled,
+            False if One-way Mode.
+        """
+        await self._ensure_connected()
+        client = await self._get_client()
+
+        try:
+            response = await client.futures_get_position_mode()
+            # Response: {"dualSidePosition": true/false}
+            return response.get("dualSidePosition", False)
+
+        except Exception as e:
+            self.logger.error(f"Failed to get position mode: {e}")
+            raise
+
+    async def set_position_mode(self, hedge_mode: bool = True) -> bool:
+        """
+        Set position mode (Hedge Mode or One-way Mode).
+
+        Args:
+            hedge_mode: True for Hedge Mode (dual side position),
+                       False for One-way Mode.
+
+        Returns:
+            True if mode was changed or already set correctly.
+        """
+        await self._ensure_connected()
+        client = await self._get_client()
+
+        try:
+            # Check current mode first
+            current_mode = await self.get_position_mode()
+
+            if current_mode == hedge_mode:
+                mode_name = "Hedge Mode" if hedge_mode else "One-way Mode"
+                self.logger.info(f"Position mode already set to {mode_name}")
+                return True
+
+            # Change mode
+            # dualSidePosition: "true" for Hedge Mode, "false" for One-way Mode
+            response = await client.futures_change_position_mode(
+                dualSidePosition=str(hedge_mode).lower()
+            )
+
+            # Response: {"code": 200, "msg": "success"}
+            if response.get("code") == 200 or response.get("msg") == "success":
+                mode_name = "Hedge Mode" if hedge_mode else "One-way Mode"
+                self.logger.info(f"Position mode changed to {mode_name}")
+                return True
+
+            self.logger.warning(f"Unexpected response from position mode change: {response}")
+            return False
+
+        except Exception as e:
+            error_msg = str(e)
+            # Error -4059: No need to change position side (already set)
+            if "-4059" in error_msg:
+                mode_name = "Hedge Mode" if hedge_mode else "One-way Mode"
+                self.logger.info(f"Position mode already set to {mode_name}")
+                return True
+
+            self.logger.error(f"Failed to set position mode: {e}")
+            raise
+
     async def get_positions(
         self, symbol: Optional[str] = None, skip_zero: bool = True
     ) -> List[Position]:
-        """Get open positions."""
+        """
+        Get open positions.
+
+        In Hedge Mode, returns separate LONG and SHORT positions for each symbol.
+        """
         await self._ensure_connected()
         client = await self._get_client()
 
@@ -948,7 +1028,16 @@ class BinanceClient:
                 if symbol and standard_symbol != symbol:
                     continue
 
-                side = "long" if position_amt > 0 else "short"
+                # In Hedge Mode, positionSide indicates LONG/SHORT
+                # In One-way Mode, positionSide is BOTH
+                position_side = pos.get("positionSide", "BOTH")
+
+                if position_side == "BOTH":
+                    # One-way mode: determine side from position amount
+                    side = "long" if position_amt > 0 else "short"
+                else:
+                    # Hedge mode: use positionSide
+                    side = position_side.lower()
 
                 positions.append(
                     Position(
@@ -973,9 +1062,34 @@ class BinanceClient:
             self.logger.error(f"Failed to get positions: {e}")
             raise
 
-    async def get_position(self, symbol: str) -> Optional[Position]:
-        """Get position for specific symbol."""
+    async def get_position(
+        self, symbol: str, position_side: Optional[str] = None
+    ) -> Optional[Position]:
+        """
+        Get position for specific symbol.
+
+        Args:
+            symbol: Trading symbol.
+            position_side: 'long' or 'short' for Hedge Mode.
+                          If None, returns first non-zero position found.
+        """
         positions = await self.get_positions(symbol=symbol, skip_zero=False)
+
+        if not positions:
+            return None
+
+        if position_side:
+            # Find specific side
+            for pos in positions:
+                if pos.side == position_side.lower() and pos.contracts > 0:
+                    return pos
+            return None
+
+        # Return first non-zero position
+        for pos in positions:
+            if pos.contracts > 0:
+                return pos
+
         return positions[0] if positions else None
 
     # =========================================================================
@@ -1029,8 +1143,22 @@ class BinanceClient:
         side: TradeSide,
         amount: float,
         leverage: Optional[int] = None,
+        position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
     ) -> Order:
-        """Open a position."""
+        """
+        Open a position.
+
+        Args:
+            symbol: Trading symbol.
+            side: Order side ('buy' or 'sell').
+            amount: Amount in contracts.
+            leverage: Leverage to use (optional).
+            position_side: Position side for Hedge Mode.
+                          - 'LONG': Open/add to long position (side must be 'buy')
+                          - 'SHORT': Open/add to short position (side must be 'sell')
+                          - 'BOTH': One-way mode (default for backward compatibility)
+                          If None, auto-determines based on side for Hedge Mode.
+        """
         client = await self._get_client()
         binance_symbol = self._symbol_to_binance(symbol)
 
@@ -1043,14 +1171,23 @@ class BinanceClient:
                 symbol, Decimal(str(amount))
             )
 
-            self.logger.info(f"Opening {side} position for {symbol}: {precise_amount}")
+            # Determine position_side for Hedge Mode
+            if position_side is None:
+                # Auto-determine: BUY opens LONG, SELL opens SHORT
+                side_upper = side.upper() if isinstance(side, str) else side.value
+                position_side = "LONG" if side_upper == "BUY" else "SHORT"
+
+            self.logger.info(
+                f"Opening {side} position for {symbol}: {precise_amount} "
+                f"(positionSide={position_side})"
+            )
 
             response = await client.futures_create_order(
                 symbol=binance_symbol,
                 side=side.upper(),
                 type="MARKET",
                 quantity=float(precise_amount),
-                positionSide="BOTH",
+                positionSide=position_side,
             )
 
             return self._map_order_response(symbol, response)
@@ -1069,6 +1206,7 @@ class BinanceClient:
         retry_interval: float = 0.5,
         fallback_to_market: bool = True,
         max_slippage_percent: float = 0.1,
+        position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
     ) -> Order:
         """
         Open position with limit order, ensuring execution (like market but cheaper).
@@ -1087,9 +1225,9 @@ class BinanceClient:
         :param leverage: Leverage (optional, uses default)
         :param max_retries: Maximum retry attempts for price chasing
         :param retry_interval: Seconds between retries
-        :param price_chase: If True, update price on each retry
         :param fallback_to_market: If True, use market order after retries exhausted
         :param max_slippage_percent: Max allowed price movement before fallback (0.1 = 0.1%)
+        :param position_side: Position side for Hedge Mode ('LONG', 'SHORT', or 'BOTH')
         :return: Filled Order
         """
         client = await self._get_client()
@@ -1106,13 +1244,17 @@ class BinanceClient:
                 symbol, Decimal(str(amount))
             )
 
+            # Determine position_side for Hedge Mode
+            if position_side is None:
+                position_side = "LONG" if side_upper == "BUY" else "SHORT"
+
             # Get initial market data for price reference
             market_data = await self.get_market_data(symbol)
             initial_price = market_data.ask if side_upper == "BUY" else market_data.bid
 
             self.logger.info(
                 f"Opening {side_upper} position for {symbol}: {precise_amount} "
-                f"(limit, initial_price={initial_price:.6f})"
+                f"(limit, initial_price={initial_price:.6f}, positionSide={position_side})"
             )
 
             current_order_id: Optional[str] = None
@@ -1139,7 +1281,9 @@ class BinanceClient:
                         f"{'falling back to market' if fallback_to_market else 'aborting'}"
                     )
                     if fallback_to_market:
-                        return await self.open_position(symbol, side, amount, leverage)
+                        return await self.open_position(
+                            symbol, side, amount, leverage, position_side
+                        )
                     raise ValueError(f"Price slippage exceeded {max_slippage_percent}%")
 
                 precise_price = await self.price_to_precision(
@@ -1163,7 +1307,7 @@ class BinanceClient:
                         type="LIMIT",
                         quantity=float(precise_amount),
                         price=float(precise_price),
-                        positionSide="BOTH",
+                        positionSide=position_side,
                         timeInForce="GTC",  # Good-Till-Cancel
                     )
 
@@ -1222,7 +1366,9 @@ class BinanceClient:
                     f"Limit order not filled after {max_retries + 1} attempts, "
                     f"falling back to market order"
                 )
-                return await self.open_position(symbol, side, amount, leverage)
+                return await self.open_position(
+                    symbol, side, amount, leverage, position_side
+                )
 
             raise TimeoutError(
                 f"Limit order for {symbol} not filled after {max_retries + 1} attempts"
@@ -1239,26 +1385,51 @@ class BinanceClient:
             raise
 
     async def close_position(
-        self, symbol: str, side: TradeSide, amount: float
+        self,
+        symbol: str,
+        side: TradeSide,
+        amount: float,
+        position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
     ) -> Order:
-        """Close a position."""
+        """
+        Close a position.
+
+        Args:
+            symbol: Trading symbol.
+            side: Order side ('buy' to close SHORT, 'sell' to close LONG).
+            amount: Amount in contracts to close.
+            position_side: Position side for Hedge Mode.
+                          - 'LONG': Close long position (side must be 'sell')
+                          - 'SHORT': Close short position (side must be 'buy')
+                          - 'BOTH': One-way mode
+                          If None, auto-determines based on side.
+        """
         client = await self._get_client()
         binance_symbol = self._symbol_to_binance(symbol)
+        side_upper = side.upper() if isinstance(side, str) else side.value
 
         try:
             precise_amount = await self.amount_to_precision(
                 symbol, Decimal(str(amount))
             )
 
-            self.logger.info(f"Closing position for {symbol}: {side} {precise_amount}")
+            # Determine position_side for Hedge Mode
+            # To close LONG, we SELL with positionSide=LONG
+            # To close SHORT, we BUY with positionSide=SHORT
+            if position_side is None:
+                position_side = "LONG" if side_upper == "SELL" else "SHORT"
+
+            self.logger.info(
+                f"Closing position for {symbol}: {side_upper} {precise_amount} "
+                f"(positionSide={position_side})"
+            )
 
             response = await client.futures_create_order(
                 symbol=binance_symbol,
-                side=side.upper(),
+                side=side_upper,
                 type="MARKET",
                 quantity=float(precise_amount),
-                positionSide="BOTH",
-                reduceOnly=True,
+                positionSide=position_side,
             )
 
             return self._map_order_response(symbol, response)
@@ -1276,6 +1447,7 @@ class BinanceClient:
         retry_interval: float = 0.5,
         fallback_to_market: bool = True,
         max_slippage_percent: float = 0.1,
+        position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
     ) -> Order:
         """
         Close position with limit order, ensuring execution (like market but cheaper).
@@ -1288,9 +1460,9 @@ class BinanceClient:
         :param amount: Amount to close
         :param max_retries: Maximum retry attempts for price chasing
         :param retry_interval: Seconds between retries
-        :param price_chase: If True, update price on each retry
         :param fallback_to_market: If True, use market order after retries exhausted
         :param max_slippage_percent: Max allowed price movement before fallback
+        :param position_side: Position side for Hedge Mode ('LONG', 'SHORT', or 'BOTH')
         :return: Filled Order
         """
         client = await self._get_client()
@@ -1302,13 +1474,17 @@ class BinanceClient:
                 symbol, Decimal(str(amount))
             )
 
+            # Determine position_side for Hedge Mode
+            if position_side is None:
+                position_side = "LONG" if side_upper == "SELL" else "SHORT"
+
             # Get initial market data for price reference
             market_data = await self.get_market_data(symbol)
             initial_price = market_data.ask if side_upper == "BUY" else market_data.bid
 
             self.logger.info(
                 f"Closing position for {symbol}: {side_upper} {precise_amount} "
-                f"(limit, initial_price={initial_price:.6f})"
+                f"(limit, initial_price={initial_price:.6f}, positionSide={position_side})"
             )
 
             current_order_id: Optional[str] = None
@@ -1332,7 +1508,9 @@ class BinanceClient:
                         f"{'falling back to market' if fallback_to_market else 'aborting'}"
                     )
                     if fallback_to_market:
-                        return await self.close_position(symbol, side, amount)
+                        return await self.close_position(
+                            symbol, side, amount, position_side
+                        )
                     raise ValueError(f"Price slippage exceeded {max_slippage_percent}%")
 
                 precise_price = await self.price_to_precision(
@@ -1353,9 +1531,8 @@ class BinanceClient:
                         type="LIMIT",
                         quantity=float(precise_amount),
                         price=float(precise_price),
-                        positionSide="BOTH",
+                        positionSide=position_side,
                         timeInForce="GTC",
-                        reduceOnly=True,
                     )
 
                     order = self._map_order_response(symbol, response)
@@ -1402,7 +1579,7 @@ class BinanceClient:
                     f"Close limit order not filled after {max_retries + 1} attempts, "
                     f"falling back to market order"
                 )
-                return await self.close_position(symbol, side, amount)
+                return await self.close_position(symbol, side, amount, position_side)
 
             raise TimeoutError(
                 f"Close limit order for {symbol} not filled after {max_retries + 1} attempts"
@@ -1417,16 +1594,65 @@ class BinanceClient:
             self.logger.error(f"Failed to close limit position for {symbol}: {e}")
             raise
 
-    async def flash_close_position(self, symbol: str) -> Order:
-        """Close entire position immediately."""
+    async def flash_close_position(
+        self,
+        symbol: str,
+        amount: Optional[float] = None,
+        close_side: Optional[TradeSide] = None,
+    ) -> Order:
+        """
+        Close position immediately.
+
+        Args:
+            symbol: Trading symbol.
+            amount: Amount in contracts to close. If None, closes entire position.
+            close_side: Order side for closing ('buy' or 'sell').
+                        - To close a LONG position, use 'sell'
+                        - To close a SHORT position, use 'buy'
+                        If None, auto-detects from current position.
+
+        Returns:
+            Executed close order.
+        """
         position = await self.get_position(symbol)
 
-        if not position or position.contracts == 0:
-            raise ValueError(f"No open position for {symbol}")
+        if amount is None:
+            # Close entire position
+            if not position or position.contracts == 0:
+                raise ValueError(f"No open position for {symbol}")
 
-        close_side: TradeSide = "sell" if position.side == "long" else "buy"
-        order = await self.close_position(symbol, close_side, position.contracts)
-        await self.cancel_all_orders(symbol)
+            determined_side: TradeSide = "sell" if position.side == "long" else "buy"
+            # position_side is opposite: SELL closes LONG, BUY closes SHORT
+            position_side: Literal["LONG", "SHORT"] = (
+                "LONG" if position.side == "long" else "SHORT"
+            )
+            order = await self.close_position(
+                symbol, determined_side, position.contracts, position_side
+            )
+            await self.cancel_all_orders(symbol)
+        else:
+            # Partial close
+            if close_side is None:
+                # Auto-detect from position
+                if not position or position.contracts == 0:
+                    raise ValueError(f"No open position for {symbol}")
+                determined_side = "sell" if position.side == "long" else "buy"
+                position_side = "LONG" if position.side == "long" else "SHORT"
+            else:
+                determined_side = close_side
+                # Determine position_side from close_side
+                # BUY closes SHORT, SELL closes LONG
+                side_upper = (
+                    close_side.upper()
+                    if isinstance(close_side, str)
+                    else close_side.value
+                )
+                position_side = "SHORT" if side_upper == "BUY" else "LONG"
+
+            order = await self.close_position(
+                symbol, determined_side, amount, position_side
+            )
+            # Don't cancel all orders on partial close
 
         return order
 
@@ -1436,18 +1662,27 @@ class BinanceClient:
         side: TradeSide,
         stop_price: float,
         cancel_existing: bool = True,
+        position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
     ) -> Order:
         """
-        Set stop loss for entire position.
+        Set stop loss for position.
 
         :param symbol: Trading symbol
-        :param side: Position side (buy/sell)
+        :param side: Position side ('buy' for long, 'sell' for short) - determines close direction
         :param stop_price: Stop loss price
         :param cancel_existing: Cancel existing SL order first (default: True)
+        :param position_side: Position side for Hedge Mode ('LONG', 'SHORT', or 'BOTH')
         """
         client = await self._get_client()
         binance_symbol = self._symbol_to_binance(symbol)
-        close_side = "SELL" if side.lower() == "buy" else "BUY"
+        side_lower = side.lower() if isinstance(side, str) else side.value.lower()
+        close_side = "SELL" if side_lower == "buy" else "BUY"
+
+        # Determine position_side for Hedge Mode
+        if position_side is None:
+            # buy position (long) -> positionSide=LONG
+            # sell position (short) -> positionSide=SHORT
+            position_side = "LONG" if side_lower == "buy" else "SHORT"
 
         try:
             # Cancel existing SL orders only
@@ -1463,7 +1698,10 @@ class BinanceClient:
                 await self.price_to_precision(symbol, Decimal(str(stop_price)))
             )
 
-            self.logger.info(f"Setting stop loss for {symbol} at {precise_price}")
+            self.logger.info(
+                f"Setting stop loss for {symbol} at {precise_price} "
+                f"(positionSide={position_side})"
+            )
 
             response = await client.futures_create_order(
                 symbol=binance_symbol,
@@ -1471,7 +1709,7 @@ class BinanceClient:
                 type="STOP_MARKET",
                 stopPrice=precise_price,
                 closePosition=True,
-                positionSide="BOTH",
+                positionSide=position_side,
                 workingType="MARK_PRICE",
             )
             return self._map_order_response(symbol, response)
@@ -1486,18 +1724,25 @@ class BinanceClient:
         side: TradeSide,
         take_profit_price: float,
         cancel_existing: bool = True,
+        position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
     ) -> Order:
         """
-        Set take profit for entire position.
+        Set take profit for position.
 
         :param symbol: Trading symbol
-        :param side: Position side (buy/sell)
+        :param side: Position side ('buy' for long, 'sell' for short) - determines close direction
         :param take_profit_price: Take profit price
         :param cancel_existing: Cancel existing TP order first (default: True)
+        :param position_side: Position side for Hedge Mode ('LONG', 'SHORT', or 'BOTH')
         """
         client = await self._get_client()
         binance_symbol = self._symbol_to_binance(symbol)
-        close_side = "SELL" if side.lower() == "buy" else "BUY"
+        side_lower = side.lower() if isinstance(side, str) else side.value.lower()
+        close_side = "SELL" if side_lower == "buy" else "BUY"
+
+        # Determine position_side for Hedge Mode
+        if position_side is None:
+            position_side = "LONG" if side_lower == "buy" else "SHORT"
 
         try:
             # Cancel existing TP orders only
@@ -1516,7 +1761,10 @@ class BinanceClient:
                 await self.price_to_precision(symbol, Decimal(str(take_profit_price)))
             )
 
-            self.logger.info(f"Setting take profit for {symbol} at {precise_price}")
+            self.logger.info(
+                f"Setting take profit for {symbol} at {precise_price} "
+                f"(positionSide={position_side})"
+            )
 
             response = await client.futures_create_order(
                 symbol=binance_symbol,
@@ -1524,7 +1772,7 @@ class BinanceClient:
                 type="TAKE_PROFIT_MARKET",
                 stopPrice=precise_price,
                 closePosition=True,
-                positionSide="BOTH",
+                positionSide=position_side,
                 workingType="MARK_PRICE",
             )
 
@@ -1540,11 +1788,22 @@ class BinanceClient:
         side: TradeSide,
         stop_loss_price: float,
         take_profit_price: float,
+        position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
     ) -> Dict[str, Order]:
-        """Set both stop loss and take profit for position."""
+        """
+        Set both stop loss and take profit for position.
+
+        :param symbol: Trading symbol
+        :param side: Position side ('buy' for long, 'sell' for short)
+        :param stop_loss_price: Stop loss price
+        :param take_profit_price: Take profit price
+        :param position_side: Position side for Hedge Mode ('LONG', 'SHORT', or 'BOTH')
+        """
         # Each method will cancel its own order type
-        sl_task = self.set_stop_loss(symbol, side, stop_loss_price)
-        tp_task = self.set_take_profit(symbol, side, take_profit_price)
+        sl_task = self.set_stop_loss(symbol, side, stop_loss_price, True, position_side)
+        tp_task = self.set_take_profit(
+            symbol, side, take_profit_price, True, position_side
+        )
 
         sl_order, tp_order = await asyncio.gather(sl_task, tp_task)
 

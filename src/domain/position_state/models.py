@@ -49,6 +49,8 @@ class SpreadPosition:
     # Position sizing
     coin_size_usdt: float = 0.0  # COIN leg size in USDT
     primary_size_usdt: float = 0.0  # PRIMARY leg size in USDT
+    coin_contracts: float = 0.0  # COIN leg size in contracts
+    primary_contracts: float = 0.0  # PRIMARY leg size in contracts
     leverage: int = 1
 
     # Entry prices

@@ -43,20 +43,7 @@ class Settings:
     TIMEFRAME: str = "15m"
     PRIMARY_PAIR: str = "ETH/USDT:USDT"
     CONSISTENT_PAIRS: list[str] = [
-        "XRP/USDT:USDT",
-        "ADA/USDT:USDT",
-        "HYPE/USDT:USDT",
-        "LINK/USDT:USDT",
-        "OP/USDT:USDT",
-        "UNI/USDT:USDT",
-        "MNT/USDT:USDT",
-        "DOGE/USDT:USDT",
-        "DOT/USDT:USDT",
-        "AAVE/USDT:USDT",
-        "ENA/USDT:USDT",
-        "LDO/USDT:USDT",
-        "OPT/USDT:USDT",
-        "ARB/USDT:USDT",
+        "LINK/USDT:USDT", "UNI/USDT:USDT", "AAVE/USDT:USDT", "RENDER/USDT:USDT", "TURBO/USDT:USDT", "ENS/USDT:USDT", "FET/USDT:USDT", "MORPHO/USDT:USDT", "SPX/USDT:USDT"
     ]
 
     MAX_BETA: float = 2.0
@@ -117,7 +104,7 @@ class Settings:
     LOKI_HOST: str = ""  # e.g., https://logs-prod-012.grafana.net
     LOKI_USER: str = ""  # Grafana Cloud user ID
     LOKI_TOKEN: str = ""  # Grafana Cloud API token
-    LOKI_APP_NAME: str = "alpha-bot"
+    LOKI_APP_NAME: str = "sigma-bot"
 
     # MongoDB Settings
     MONGODB_URI: str = "mongodb://localhost:27017"
@@ -166,7 +153,7 @@ class Settings:
 
         # Trading
         self.ALLOW_TRADING = os.getenv("ALLOW_TRADING", "false").lower() == "true"
-        self.MAX_OPEN_SPREADS = int(os.getenv("MAX_OPEN_SPREADS", "5"))
+        self.MAX_OPEN_SPREADS = int(os.getenv("MAX_OPEN_SPREADS", "3"))
 
         # Position state
         self.COOLDOWN_BARS = int(os.getenv("COOLDOWN_BARS", "16"))

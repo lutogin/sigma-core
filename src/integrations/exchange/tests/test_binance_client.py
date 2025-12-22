@@ -87,6 +87,16 @@ class TestLoadMarkets:
             print(f"\n✅ Loaded {len(markets)} markets")
 
     @pytest.mark.asyncio
+    async def test_set_position_mode(self, binance_client: BinanceClient):
+        """Test that markets can be loaded."""
+        async with binance_client:
+            resp = await binance_client.set_position_mode(hedge_mode=True)
+
+            assert resp is not None
+
+            print(f"\nMode: {resp}")
+
+    @pytest.mark.asyncio
     async def test_symbol_info_structure(
         self, binance_client: BinanceClient, test_symbol: str
     ):
