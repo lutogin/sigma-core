@@ -2,9 +2,9 @@
 
 from typing import TYPE_CHECKING, Callable, Awaitable, Any
 
-from aiogram import Router, F
+from aiogram import Router, F, BaseMiddleware
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, TelegramObject
 
 from .keyboards import MenuButtons, get_main_menu_keyboard, get_confirmation_keyboard
 
@@ -14,6 +14,39 @@ if TYPE_CHECKING:
 
 # Create router for handlers
 router = Router(name="telegram_handlers")
+
+
+class AdminGuardMiddleware(BaseMiddleware):
+    """
+    Middleware to filter messages only from admin chat.
+
+    Blocks all messages from non-admin users.
+    """
+
+    def __init__(self, admin_chat_id: str):
+        self.admin_chat_id = str(admin_chat_id)
+        super().__init__()
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict,
+    ) -> Any:
+        # Get chat_id from event
+        chat_id = None
+
+        if isinstance(event, Message):
+            chat_id = event.chat.id
+        elif isinstance(event, CallbackQuery):
+            chat_id = event.message.chat.id if event.message else None
+
+        # Block non-admin users
+        if chat_id is not None and str(chat_id) != self.admin_chat_id:
+            # Silently ignore messages from non-admin users
+            return None
+
+        return await handler(event, data)
 
 
 class TelegramHandlers:
@@ -413,6 +446,10 @@ def setup_handlers(handlers: TelegramHandlers) -> Router:
     Returns:
         Configured Router.
     """
+    # Add admin guard middleware to filter non-admin messages
+    router.message.middleware(AdminGuardMiddleware(handlers.admin_chat_id))
+    router.callback_query.middleware(AdminGuardMiddleware(handlers.admin_chat_id))
+
     # Command handlers
     router.message.register(
         handlers.handle_start,
