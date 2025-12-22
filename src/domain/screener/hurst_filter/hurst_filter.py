@@ -138,7 +138,7 @@ class HurstFilterService:
         Returns:
             True if spread is mean-reverting (H < threshold)
         """
-        return hurst < self._hurst_threshold
+        return round(hurst, 2) < self._hurst_threshold
 
     def _calculate_hurst_rs(self, series: np.ndarray) -> float:
         """
