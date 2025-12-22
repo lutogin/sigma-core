@@ -57,7 +57,7 @@ class EntryObserverService:
         pullback: float = 0.3,
         watch_timeout_seconds: int = 2700,  # 45 minutes
         debounce_seconds: float = 1.0,
-        max_watches: int = 5,
+        max_watches: int = 10,
     ):
         """
         Initialize Entry Observer Service.
