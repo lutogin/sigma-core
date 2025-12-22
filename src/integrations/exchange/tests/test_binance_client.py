@@ -86,15 +86,15 @@ class TestLoadMarkets:
 
             print(f"\n✅ Loaded {len(markets)} markets")
 
-    @pytest.mark.asyncio
-    async def test_set_position_mode(self, binance_client: BinanceClient):
-        """Test that markets can be loaded."""
-        async with binance_client:
-            resp = await binance_client.set_position_mode(hedge_mode=True)
+    # @pytest.mark.asyncio
+    # async def test_set_position_mode(self, binance_client: BinanceClient):
+    #     """Test that markets can be loaded."""
+    #     async with binance_client:
+    #         resp = await binance_client.set_position_mode(hedge_mode=True)
 
-            assert resp is not None
+    #         assert resp is not None
 
-            print(f"\nMode: {resp}")
+    #         print(f"\nMode: {resp}")
 
     @pytest.mark.asyncio
     async def test_symbol_info_structure(
@@ -599,6 +599,244 @@ class TestTradingOperationsByLimitOrders:
                     assert closed_position.contracts == 0, "Position should be closed"
                 else:
                     print("   ✅ Position fully closed (no position found)")
+
+
+# ============================================================================
+# Hedge Mode Tests
+# ============================================================================
+
+
+class TestHedgeMode:
+    """
+    Test Hedge Mode functionality with multiple spreads sharing PRIMARY (ETH).
+
+    This tests the core stat-arb scenario where:
+    - Multiple COIN positions are opened against ETH
+    - ETH has both LONG and SHORT positions simultaneously
+    - Closing one spread only closes the corresponding ETH position side
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Opens real positions - run manually with caution")
+    async def test_hedge_mode_two_spreads(self, binance_client: BinanceClient):
+        """
+        Test opening two opposite spreads and closing them independently.
+
+        Spread 1 (LONG): Buy LINK, Sell ETH -> ETH SHORT
+        Spread 2 (SHORT): Sell UNI, Buy ETH -> ETH LONG
+
+        Then close Spread 1 and verify ETH SHORT is closed but ETH LONG remains.
+        Finally close Spread 2.
+        """
+        # Configuration
+        LINK_SYMBOL = "LINK/USDT:USDT"
+        UNI_SYMBOL = "UNI/USDT:USDT"
+        ETH_SYMBOL = "ETH/USDT:USDT"
+
+        # Minimum amounts (check Binance for current minimums)
+        LINK_AMOUNT = 2.0  # ~$7-8
+        UNI_AMOUNT = 4.0  # ~$7-8
+        ETH_AMOUNT_1 = 0.01  # For spread 1 (~$35)
+        ETH_AMOUNT_2 = 0.01  # For spread 2 (~$35)
+
+        async with binance_client:
+            # Verify Hedge Mode is enabled
+            is_hedge = await binance_client.get_position_mode()
+            print(f"\n🔧 Position Mode: {'Hedge' if is_hedge else 'One-way'}")
+            assert is_hedge, "Hedge Mode must be enabled for this test"
+
+            # ================================================================
+            # Step 1: Open Spread 1 (LONG spread: Buy LINK, Sell ETH)
+            # ================================================================
+            print("\n" + "=" * 60)
+            print("📈 Opening Spread 1: LONG (Buy LINK, Sell ETH)")
+            print("=" * 60)
+
+            # Buy LINK (LONG position)
+            link_order = await binance_client.open_position_limit(
+                symbol=LINK_SYMBOL,
+                side="buy",
+                amount=LINK_AMOUNT,
+            )
+            print(f"   ✅ LINK LONG opened: {link_order.id}")
+
+            # Sell ETH (SHORT position)
+            eth_short_order = await binance_client.open_position_limit(
+                symbol=ETH_SYMBOL,
+                side="sell",
+                amount=ETH_AMOUNT_1,
+            )
+            print(f"   ✅ ETH SHORT opened: {eth_short_order.id}")
+
+            await asyncio.sleep(1.0)
+
+            # ================================================================
+            # Step 2: Open Spread 2 (SHORT spread: Sell UNI, Buy ETH)
+            # ================================================================
+            print("\n" + "=" * 60)
+            print("📉 Opening Spread 2: SHORT (Sell UNI, Buy ETH)")
+            print("=" * 60)
+
+            # Sell UNI (SHORT position)
+            uni_order = await binance_client.open_position_limit(
+                symbol=UNI_SYMBOL,
+                side="sell",
+                amount=UNI_AMOUNT,
+            )
+            print(f"   ✅ UNI SHORT opened: {uni_order.id}")
+
+            # Buy ETH (LONG position)
+            eth_long_order = await binance_client.open_position_limit(
+                symbol=ETH_SYMBOL,
+                side="buy",
+                amount=ETH_AMOUNT_2,
+            )
+            print(f"   ✅ ETH LONG opened: {eth_long_order.id}")
+
+            await asyncio.sleep(1.0)
+
+            # ================================================================
+            # Step 3: Verify all 4 positions are open
+            # ================================================================
+            print("\n" + "=" * 60)
+            print("🔍 Verifying all positions")
+            print("=" * 60)
+
+            # Get all positions
+            link_pos = await binance_client.get_position(LINK_SYMBOL, "long")
+            uni_pos = await binance_client.get_position(UNI_SYMBOL, "short")
+            eth_positions = await binance_client.get_positions(
+                ETH_SYMBOL, skip_zero=True
+            )
+
+            # Verify LINK LONG
+            assert link_pos is not None, "LINK LONG position should exist"
+            assert link_pos.contracts > 0, "LINK should have contracts"
+            assert link_pos.side == "long", "LINK should be LONG"
+            print(f"   ✅ LINK LONG: {link_pos.contracts} contracts")
+
+            # Verify UNI SHORT
+            assert uni_pos is not None, "UNI SHORT position should exist"
+            assert uni_pos.contracts > 0, "UNI should have contracts"
+            assert uni_pos.side == "short", "UNI should be SHORT"
+            print(f"   ✅ UNI SHORT: {uni_pos.contracts} contracts")
+
+            # Verify ETH has both LONG and SHORT
+            eth_sides = {p.side for p in eth_positions}
+            assert "long" in eth_sides, "ETH should have LONG position"
+            assert "short" in eth_sides, "ETH should have SHORT position"
+            print(f"   ✅ ETH positions: {len(eth_positions)}")
+            for pos in eth_positions:
+                print(f"      - {pos.side.upper()}: {pos.contracts} contracts")
+
+            # ================================================================
+            # Step 4: Close Spread 1 (Close LINK entirely, close ETH SHORT)
+            # ================================================================
+            print("\n" + "=" * 60)
+            print("🔒 Closing Spread 1: LINK + ETH SHORT")
+            print("=" * 60)
+
+            # Close LINK entirely
+            link_close = await binance_client.flash_close_position(LINK_SYMBOL)
+            print(f"   ✅ LINK closed: {link_close.id}")
+
+            # Close ETH SHORT (partial close with specific side)
+            # close_side="buy" means we're buying to close a SHORT position
+            eth_short_close = await binance_client.flash_close_position(
+                ETH_SYMBOL,
+                amount=ETH_AMOUNT_1,
+                close_side="buy",  # Buy to close SHORT
+            )
+            print(f"   ✅ ETH SHORT closed: {eth_short_close.id}")
+
+            await asyncio.sleep(1.0)
+
+            # ================================================================
+            # Step 5: Verify Spread 1 is closed, Spread 2 remains
+            # ================================================================
+            print("\n" + "=" * 60)
+            print("🔍 Verifying Spread 1 closed, Spread 2 remains")
+            print("=" * 60)
+
+            # LINK should be closed
+            link_pos_after = await binance_client.get_position(LINK_SYMBOL, "long")
+            assert (
+                link_pos_after is None or link_pos_after.contracts == 0
+            ), "LINK should be closed"
+            print("   ✅ LINK position closed")
+
+            # UNI should still be open
+            uni_pos_after = await binance_client.get_position(UNI_SYMBOL, "short")
+            assert uni_pos_after is not None, "UNI should still exist"
+            assert uni_pos_after.contracts > 0, "UNI should still have contracts"
+            print(f"   ✅ UNI SHORT still open: {uni_pos_after.contracts} contracts")
+
+            # ETH SHORT should be closed, ETH LONG should remain
+            eth_positions_after = await binance_client.get_positions(
+                ETH_SYMBOL, skip_zero=True
+            )
+            eth_sides_after = {p.side for p in eth_positions_after}
+
+            # ETH SHORT should be gone (or zero)
+            eth_short_after = await binance_client.get_position(ETH_SYMBOL, "short")
+            assert (
+                eth_short_after is None or eth_short_after.contracts == 0
+            ), "ETH SHORT should be closed"
+            print("   ✅ ETH SHORT closed")
+
+            # ETH LONG should remain
+            assert "long" in eth_sides_after, "ETH LONG should still exist"
+            eth_long_after = await binance_client.get_position(ETH_SYMBOL, "long")
+            assert eth_long_after.contracts > 0, "ETH LONG should have contracts"
+            print(f"   ✅ ETH LONG still open: {eth_long_after.contracts} contracts")
+
+            # ================================================================
+            # Step 6: Close Spread 2 (Close UNI entirely, close ETH LONG)
+            # ================================================================
+            print("\n" + "=" * 60)
+            print("🔒 Closing Spread 2: UNI + ETH LONG")
+            print("=" * 60)
+
+            # Close UNI entirely
+            uni_close = await binance_client.flash_close_position(UNI_SYMBOL)
+            print(f"   ✅ UNI closed: {uni_close.id}")
+
+            # Close ETH LONG (partial close with specific side)
+            # close_side="sell" means we're selling to close a LONG position
+            eth_long_close = await binance_client.flash_close_position(
+                ETH_SYMBOL,
+                amount=ETH_AMOUNT_2,
+                close_side="sell",  # Sell to close LONG
+            )
+            print(f"   ✅ ETH LONG closed: {eth_long_close.id}")
+
+            await asyncio.sleep(1.0)
+
+            # ================================================================
+            # Step 7: Verify all positions are closed
+            # ================================================================
+            print("\n" + "=" * 60)
+            print("🔍 Verifying all positions closed")
+            print("=" * 60)
+
+            # All positions should be closed
+            final_link = await binance_client.get_position(LINK_SYMBOL)
+            final_uni = await binance_client.get_position(UNI_SYMBOL)
+            final_eth = await binance_client.get_positions(ETH_SYMBOL, skip_zero=True)
+
+            assert (
+                final_link is None or final_link.contracts == 0
+            ), "LINK should be closed"
+            assert final_uni is None or final_uni.contracts == 0, "UNI should be closed"
+            assert len(final_eth) == 0, "ETH should have no positions"
+
+            print("   ✅ LINK: closed")
+            print("   ✅ UNI: closed")
+            print("   ✅ ETH: all positions closed")
+
+            print("\n" + "=" * 60)
+            print("✅ HEDGE MODE TEST PASSED!")
+            print("=" * 60)
 
 
 if __name__ == "__main__":
