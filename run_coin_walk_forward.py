@@ -140,11 +140,11 @@ class CoinWalkForwardRunner:
         monthly_results = []
 
         current_start = self.start_date
-        total_pnl = 0
+        total_pnl: float = 0
         total_trades = 0
         total_wins = 0
-        max_dd = 0
-        max_dd_pct = 0
+        max_dd: float = 0
+        max_dd_pct: float = 0
 
         while current_start < self.end_date:
             # Calculate month bounds
