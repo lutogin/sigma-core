@@ -379,11 +379,15 @@ class AsyncDataLoaderService:
                     self._logger.warning(f"Error bulk saving to cache: {e}")
 
         # Filter to only requested symbols
-        final_result = {
-            symbol: result[symbol]
-            for symbol in symbols
-            if symbol in result and not result[symbol].empty
-        }
+        final_result = {}
+        for symbol in symbols:
+            if symbol in result:
+                if not result[symbol].empty:
+                    final_result[symbol] = result[symbol]
+                else:
+                    self._logger.warning(f"{symbol}: DataFrame is empty after loading")
+            else:
+                self._logger.warning(f"{symbol}: Not found in result after loading")
 
         self._logger.info(
             f"Bulk load complete: {len(final_result)}/{len(symbols)} symbols loaded"

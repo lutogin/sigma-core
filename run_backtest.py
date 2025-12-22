@@ -44,7 +44,7 @@ class BacktestConfig:
     max_spreads: int = 3  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
-    z_entry_threshold: float = 2.0  # |Z| >= this to enter
+    z_entry_threshold: float = 2.1  # |Z| >= this to enter
     z_tp_threshold: float = 0.25  # |Z| <= this to take profit
     z_sl_threshold: float = 4.0  # |Z| >= this to stop loss
     min_correlation: float = 0.8  # Minimum correlation to trade
@@ -64,6 +64,9 @@ class BacktestConfig:
     # Maximum position duration before forced exit (in bars)
     # 96 bars = 24 hours for 15m timeframe
     max_position_bars: int = 144  # 32 hours
+
+    # Trading pairs (from settings or CLI)
+    consistent_pairs: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -199,7 +202,7 @@ class StatArbBacktest:
         self.hurst_filter_service = hurst_filter_service
 
         self.primary_pair = settings.PRIMARY_PAIR
-        self.consistent_pairs = settings.CONSISTENT_PAIRS
+        self.consistent_pairs = config.consistent_pairs  # Use pairs from config
         self.timeframe = settings.TIMEFRAME
         self.lookback_window_days = settings.LOOKBACK_WINDOW_DAYS
 
@@ -336,8 +339,22 @@ class StatArbBacktest:
             if symbol == self.primary_pair:
                 aligned[symbol] = df
             else:
+                # Reindex to common index and forward fill missing values
                 aligned_df = df.reindex(common_index, method="ffill")
-                aligned_df = aligned_df.dropna()
+
+                # Check for NaN values after reindex
+                nan_count = aligned_df['close'].isna().sum()
+                if nan_count > 0:
+                    # Forward fill to handle any remaining NaNs
+                    aligned_df = aligned_df.ffill()
+                    # If still NaN at the start (no data before), backfill from first valid value
+                    aligned_df = aligned_df.bfill()
+
+                    remaining_nan = aligned_df['close'].isna().sum()
+                    if remaining_nan > 0:
+                        print(f"  ❌ {symbol}: Has {remaining_nan} NaN values after fill - SKIPPING")
+                        continue
+
                 aligned[symbol] = aligned_df
 
         return aligned
@@ -1220,6 +1237,12 @@ Examples:
         default=None,
         help="Export trades to CSV file",
     )
+    parser.add_argument(
+        "--pairs",
+        type=str,
+        default=None,
+        help="Comma-separated list of coin symbols (e.g., 'sol,arb,dot'). Default: from settings.CONSISTENT_PAIRS",
+    )
 
     args = parser.parse_args()
 
@@ -1240,19 +1263,19 @@ Examples:
     settings = container.settings
     logger = container.logger
 
+    # Parse pairs from CLI or use settings
+    if args.pairs:
+        # Convert comma-separated symbols to full pair format
+        # e.g., "sol,arb,dot" -> ["SOL/USDT:USDT", "ARB/USDT:USDT", "DOT/USDT:USDT"]
+        symbols = [s.strip().upper() for s in args.pairs.split(",")]
+        consistent_pairs = [f"{symbol}/USDT:USDT" for symbol in symbols]
+        print(f"\n📋 Using pairs from CLI: {', '.join(consistent_pairs)}")
+    else:
+        consistent_pairs = settings.CONSISTENT_PAIRS
+        print(f"\n📋 Using pairs from settings: {len(consistent_pairs)} pairs")
+
     # Create backtest config
-    config = BacktestConfig(
-        initial_balance=args.balance,
-        position_size_pct=args.risk or BacktestConfig.position_size_pct,
-        max_spreads=args.max_spreads,
-        leverage=args.leverage or BacktestConfig.leverage,
-        z_entry_threshold=settings.Z_ENTRY_THRESHOLD,
-        z_tp_threshold=settings.Z_TP_THRESHOLD,
-        z_sl_threshold=settings.Z_SL_THRESHOLD,
-        min_correlation=settings.MIN_CORRELATION,
-        cooldown_bars=settings.COOLDOWN_BARS,
-        max_position_bars=settings.MAX_POSITION_BARS,
-    )
+    config = BacktestConfig(consistent_pairs=consistent_pairs)
 
     print("\n" + "=" * 70)
     print("              STATISTICAL ARBITRAGE BACKTEST")
@@ -1270,7 +1293,9 @@ Examples:
     print(f"  Z SL Threshold:      ±{config.z_sl_threshold}")
     print(f"  Min Correlation:     {config.min_correlation}")
     print(f"\n  Primary Pair:        {settings.PRIMARY_PAIR}")
-    print(f"  Trading Pairs:       {len(settings.CONSISTENT_PAIRS)}")
+    print(f"  Trading Pairs:       {len(config.consistent_pairs)} pairs")
+    for pair in config.consistent_pairs:
+        print(f"    • {pair}")
     print("=" * 70 + "\n")
 
     # Connect to exchange for data loading
