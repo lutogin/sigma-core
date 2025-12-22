@@ -14,11 +14,15 @@ import asyncio
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+# Add the parent directory to sys.path so we can import from src
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.domain.data_loader import AsyncDataLoaderService
 from src.domain.screener.correlation import CorrelationService

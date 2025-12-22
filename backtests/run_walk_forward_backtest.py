@@ -25,6 +25,10 @@ from src.domain.screener.z_score import ZScoreService
 from src.domain.screener.volatility_filter import VolatilityFilterService
 from src.domain.screener.hurst_filter import HurstFilterService
 from src.infra.container import Container
+from pathlib import Path
+
+# Add the parent directory to sys.path so we can import from src
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import from existing backtest script
 from run_backtest import (

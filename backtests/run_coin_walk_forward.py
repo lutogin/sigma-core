@@ -26,6 +26,10 @@ from run_backtest import (
     BacktestResult,
     StatArbBacktest,
 )
+
+# Add the parent directory to sys.path so we can import from src
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
 from src.domain.screener.correlation import CorrelationService
 from src.domain.screener.hurst_filter import HurstFilterService

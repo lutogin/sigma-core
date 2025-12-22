@@ -1,0 +1,53 @@
+version: '3.9'
+
+services:
+  # TimescaleDB - Time-series database for OHLCV data
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: sigma-timescaledb
+    restart: unless-stopped
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: sigma
+      POSTGRES_PASSWORD: sigma_secret
+      POSTGRES_DB: sigma_bot
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U alpha -d sigma_bot']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bot-network
+
+  # MongoDB
+  mongodb:
+    image: mongo:7
+    container_name: sigma-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: sigma
+    volumes:
+      - mongodb-data:/data/db
+    ports:
+      - '27017:27017'
+    networks:
+      - bot-network
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  bot-network:
+    driver: bridge
+
+volumes:
+  timescaledb_data:
+    driver: local
+  mongodb-data:
+    driver: local
