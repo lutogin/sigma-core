@@ -259,16 +259,16 @@ class AsyncDataLoaderService:
         expected_start = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Dynamic freshness threshold based on timeframe
-        # Data is stale if older than 1 candle + small buffer (2 min)
+        # Data is stale if older than 1 candle interval
         now = datetime.now(timezone.utc)
         timeframe_minutes = get_timeframe_minutes(timeframe)
-        freshness_buffer = timedelta(minutes=timeframe_minutes + 2)
+        freshness_buffer = timedelta(minutes=timeframe_minutes)
         freshness_threshold = now - freshness_buffer
 
         self._logger.debug(
             f"Expected range: {expected_start.date()} to {now.isoformat()}, "
             f"freshness threshold: {freshness_threshold.isoformat()} "
-            f"(timeframe={timeframe}, buffer={timeframe_minutes + 2}min)"
+            f"(timeframe={timeframe})"
         )
 
         for symbol in symbols:
