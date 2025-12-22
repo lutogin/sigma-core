@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
+from src.domain.data_loader import AsyncDataLoaderService
 from src.domain.screener.correlation import CorrelationService
 from src.domain.screener.hurst_filter import HurstFilterService
 from src.domain.screener.volatility_filter import VolatilityFilterService

@@ -178,6 +178,66 @@ class CommunicatorService:
                 f"❌ *Error fetching positions*\n\n`{str(e)}`"
             )
 
+    async def send_balance(self) -> None:
+        """
+        Send futures account balance to Telegram.
+
+        Fetches and formats account balance from Binance.
+        """
+        try:
+            # Get USDT balance (main futures trading asset)
+            usdt_balance = await self._binance.get_balance("USDT")
+
+            # Get all balances to show other assets if any
+            all_balances = await self._binance.get_balances()
+
+            # Filter non-zero balances (excluding USDT which we show separately)
+            other_balances = [
+                b for b in all_balances
+                if b.asset != "USDT" and (b.free > 0 or b.used > 0)
+            ]
+
+            # Format the results
+            message = self._format_balance(usdt_balance, other_balances)
+            await self._telegram.send_message_markdown(message)
+            self._logger.debug("Sent balance to Telegram")
+
+        except Exception as e:
+            self._logger.error(f"Failed to send balance: {e}")
+            await self._telegram.send_message_markdown(
+                f"❌ *Error fetching balance*\n\n`{str(e)}`"
+            )
+
+    async def close_all_positions(self) -> None:
+        """
+        Close all open positions and send results to Telegram.
+
+        Uses BinanceClient.close_all_positions() to close all positions
+        and formats the results for Telegram display.
+        """
+        try:
+            # Send initial message
+            await self._telegram.send_message_markdown(
+                "⚠️ *Closing all positions...*\n\n_Please wait..._"
+            )
+
+            # Close all positions
+            result = await self._binance.close_all_positions()
+
+            # Format the results
+            message = self._format_close_all_result(result)
+            await self._telegram.send_message_markdown(message)
+            self._logger.info(
+                f"Close all positions completed: "
+                f"{result['closed_successfully']}/{result['total_positions']} closed"
+            )
+
+        except Exception as e:
+            self._logger.error(f"Failed to close all positions: {e}")
+            await self._telegram.send_message_markdown(
+                f"❌ *Error closing positions*\n\n`{str(e)}`"
+            )
+
     def _format_opportunities(self, state) -> str:
         """
         Format scan results for Telegram display.
@@ -320,6 +380,164 @@ class CommunicatorService:
 
         if len(positions) > 20:
             lines.append(f"_...and {len(positions) - 20} more_")
+
+        return "\n".join(lines)
+
+    def _format_balance(self, usdt_balance, other_balances) -> str:
+        """
+        Format account balance for Telegram display.
+
+        Args:
+            usdt_balance: Balance object for USDT.
+            other_balances: List of Balance objects for other assets.
+
+        Returns:
+            Formatted markdown string.
+        """
+        # Header
+        lines = [
+            "💰 *Futures Account Balance*",
+            "",
+        ]
+
+        # USDT (main trading asset)
+        lines.extend([
+            "🏦 *USDT Balance:*",
+            f"• Available: `{usdt_balance.free:.2f}` USDT",
+            f"• In Orders: `{usdt_balance.used:.2f}` USDT",
+            f"• **Total: `{usdt_balance.total:.2f}` USDT**",
+            "",
+        ])
+
+        # Other assets (if any)
+        if other_balances:
+            lines.extend([
+                "🪙 *Other Assets:*",
+            ])
+
+            for balance in other_balances[:10]:  # Limit to 10 assets
+                if balance.total > 0:
+                    lines.append(
+                        f"• {balance.asset}: `{balance.total:.6f}` "
+                        f"(Free: `{balance.free:.6f}`, Used: `{balance.used:.6f}`)"
+                    )
+
+            if len(other_balances) > 10:
+                lines.append(f"_...and {len(other_balances) - 10} more assets_")
+
+            lines.append("")
+
+        # Account summary
+        total_value_usdt = usdt_balance.total
+        if other_balances:
+            lines.extend([
+                "📊 *Summary:*",
+                f"• Primary Asset (USDT): `{usdt_balance.total:.2f}`",
+                f"• Other Assets: `{len(other_balances)}` types",
+                f"• **Account Value: ~`{total_value_usdt:.2f}` USDT**",
+                "",
+                "_Note: Other assets not converted to USDT value_"
+            ])
+        else:
+            lines.extend([
+                "📊 *Summary:*",
+                f"• **Account Value: `{total_value_usdt:.2f}` USDT**",
+                "",
+                "_All funds in USDT - ready for trading_"
+            ])
+
+        return "\n".join(lines)
+
+    def _format_close_all_result(self, result) -> str:
+        """
+        Format close all positions result for Telegram display.
+
+        Args:
+            result: Dictionary with close all results from BinanceClient.
+
+        Returns:
+            Formatted markdown string.
+        """
+        total = result["total_positions"]
+        success = result["closed_successfully"]
+        failed = result["failed"]
+        results = result["results"]
+
+        # Header with summary
+        if total == 0:
+            return "✅ *No positions to close*\n\n_All positions were already closed._"
+
+        if failed == 0:
+            header_emoji = "✅"
+            header_text = "ALL POSITIONS CLOSED"
+        elif success == 0:
+            header_emoji = "❌"
+            header_text = "FAILED TO CLOSE POSITIONS"
+        else:
+            header_emoji = "⚠️"
+            header_text = "PARTIALLY CLOSED"
+
+        lines = [
+            f"{header_emoji} *{header_text}*",
+            "",
+            f"📊 *Summary:*",
+            f"• Total positions: `{total}`",
+            f"• Successfully closed: `{success}`",
+            f"• Failed: `{failed}`",
+            "",
+        ]
+
+        if results:
+            # Group by status
+            successful = [r for r in results if r["status"] == "success"]
+            failed_results = [r for r in results if r["status"] == "failed"]
+
+            # Show successful closes
+            if successful:
+                lines.extend([
+                    "✅ *Successfully Closed:*",
+                ])
+                for result_item in successful[:10]:  # Limit to 10 for space
+                    symbol_short = result_item["symbol"].replace("/USDT:USDT", "")
+                    side_short = result_item["side"].upper()
+                    contracts = result_item["contracts"]
+                    order_id = result_item["order_id"]
+
+                    lines.append(
+                        f"• {symbol_short} {side_short}: `{contracts:.2f}` (#{order_id})"
+                    )
+
+                if len(successful) > 10:
+                    lines.append(f"_...and {len(successful) - 10} more_")
+                lines.append("")
+
+            # Show failed closes
+            if failed_results:
+                lines.extend([
+                    "❌ *Failed to Close:*",
+                ])
+                for result_item in failed_results[:5]:  # Limit to 5 for space
+                    symbol_short = result_item["symbol"].replace("/USDT:USDT", "")
+                    side_short = result_item["side"].upper()
+                    contracts = result_item["contracts"]
+                    error = result_item["error"]
+
+                    lines.append(f"• {symbol_short} {side_short}: `{contracts:.2f}`")
+                    lines.append(f"  _Error: {error}_")
+
+                if len(failed_results) > 5:
+                    lines.append(f"_...and {len(failed_results) - 5} more errors_")
+                lines.append("")
+
+        # Footer
+        if failed > 0:
+            lines.extend([
+                "⚠️ *Manual intervention may be required for failed positions!*",
+                "",
+                "_Check your exchange account to verify position status._"
+            ])
+        else:
+            lines.append("🎉 _All positions successfully closed!_")
 
         return "\n".join(lines)
 

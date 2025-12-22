@@ -1656,6 +1656,101 @@ class BinanceClient:
 
         return order
 
+    async def close_all_positions(self) -> Dict[str, Any]:
+        """
+        Close all open positions immediately using market orders.
+
+        Returns:
+            Dictionary with results:
+            {
+                "total_positions": int,
+                "closed_successfully": int,
+                "failed": int,
+                "results": List[Dict[str, Any]]
+            }
+        """
+        await self._ensure_connected()
+
+        try:
+            # Get all open positions
+            positions = await self.get_positions(skip_zero=True)
+
+            if not positions:
+                self.logger.info("No open positions to close")
+                return {
+                    "total_positions": 0,
+                    "closed_successfully": 0,
+                    "failed": 0,
+                    "results": []
+                }
+
+            self.logger.info(f"Closing {len(positions)} open positions...")
+
+            results = []
+            closed_count = 0
+            failed_count = 0
+
+            # Close each position
+            for position in positions:
+                try:
+                    self.logger.info(
+                        f"Closing {position.symbol} {position.side.upper()} "
+                        f"({position.contracts} contracts)"
+                    )
+
+                    # Use flash_close_position to close entire position
+                    order = await self.flash_close_position(position.symbol)
+
+                    results.append({
+                        "symbol": position.symbol,
+                        "side": position.side,
+                        "contracts": position.contracts,
+                        "status": "success",
+                        "order_id": order.id,
+                        "error": None
+                    })
+                    closed_count += 1
+
+                    self.logger.info(
+                        f"✅ Closed {position.symbol} successfully (order: {order.id})"
+                    )
+
+                except Exception as e:
+                    error_msg = str(e)
+                    results.append({
+                        "symbol": position.symbol,
+                        "side": position.side,
+                        "contracts": position.contracts,
+                        "status": "failed",
+                        "order_id": None,
+                        "error": error_msg
+                    })
+                    failed_count += 1
+
+                    self.logger.error(
+                        f"❌ Failed to close {position.symbol}: {error_msg}"
+                    )
+
+                # Small delay between closes to avoid rate limits
+                await asyncio.sleep(0.1)
+
+            # Summary
+            self.logger.info(
+                f"Close all positions completed: "
+                f"{closed_count} success, {failed_count} failed"
+            )
+
+            return {
+                "total_positions": len(positions),
+                "closed_successfully": closed_count,
+                "failed": failed_count,
+                "results": results
+            }
+
+        except Exception as e:
+            self.logger.error(f"Failed to close all positions: {e}")
+            raise
+
     async def set_stop_loss(
         self,
         symbol: str,

@@ -114,6 +114,14 @@ class Application:
                         "get_positions",
                         communicator_service.send_positions
                     )
+                    telegram_service.register_callback(
+                        "get_balances",
+                        communicator_service.send_balance
+                    )
+                    telegram_service.register_callback(
+                        "close_all_positions",
+                        communicator_service.close_all_positions
+                    )
 
                 # Run planner (blocks until shutdown)
                 await planner.run()
