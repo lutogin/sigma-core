@@ -208,6 +208,8 @@ class Container:
             self._instances["communicator_service"] = CommunicatorService(
                 event_emitter=self.event_emitter,
                 telegram_service=self.telegram_service,
+                screener_service=self.screener_service,
+                binance_client=self.exchange_client,
                 logger=self.logger,
             )
         return self._instances["communicator_service"]

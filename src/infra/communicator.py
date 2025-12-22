@@ -2,9 +2,11 @@
 Communicator Service.
 
 Listens to trade lifecycle events and sends notifications via Telegram.
+Also provides formatted output for screener results on demand.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, Optional
+import numpy as np
 
 from src.infra.event_emitter.events import (
     EventType,
@@ -23,6 +25,8 @@ from src.infra.event_emitter.events import (
 if TYPE_CHECKING:
     from src.infra.event_emitter import EventEmitter
     from src.integrations.telegram import TelegramService
+    from src.domain.screener import ScreenerService
+    from src.integrations.exchange.binance import BinanceClient
 
 
 class CommunicatorService:
@@ -52,6 +56,8 @@ class CommunicatorService:
         self,
         event_emitter: "EventEmitter",
         telegram_service: "TelegramService",
+        screener_service: "ScreenerService",
+        binance_client: "BinanceClient",
         logger: Any,
     ):
         """
@@ -60,10 +66,14 @@ class CommunicatorService:
         Args:
             event_emitter: EventEmitter instance to subscribe to events.
             telegram_service: TelegramService instance for sending messages.
+            screener_service: ScreenerService instance for accessing scan results.
+            binance_client: BinanceClient instance for accessing positions.
             logger: Logger instance.
         """
         self._event_emitter = event_emitter
         self._telegram = telegram_service
+        self._screener = screener_service
+        self._binance = binance_client
         self._logger = logger
         self._started = False
 
@@ -108,6 +118,210 @@ class CommunicatorService:
     def is_started(self) -> bool:
         """Check if communicator is started."""
         return self._started
+
+    # =========================================================================
+    # Public Methods - On-demand notifications
+    # =========================================================================
+
+    async def send_opportunities(self) -> None:
+        """
+        Send last scan opportunities to Telegram.
+
+        Formats and sends the last scan results from ScreenerService.
+        If no scan data available, sends appropriate message.
+        """
+        try:
+            state = self._screener.last_scan_state
+
+            if state.is_empty():
+                await self._telegram.send_message_markdown(
+                    "❌ *No scan data available*\n\n"
+                    "_Run a scan first to see opportunities._"
+                )
+                return
+
+            # Format the results
+            message = self._format_opportunities(state)
+            await self._telegram.send_message_markdown(message)
+            self._logger.debug("Sent opportunities to Telegram")
+
+        except Exception as e:
+            self._logger.error(f"Failed to send opportunities: {e}")
+            await self._telegram.send_message_markdown(
+                f"❌ *Error fetching opportunities*\n\n`{str(e)}`"
+            )
+
+    async def send_positions(self) -> None:
+        """
+        Send open positions to Telegram.
+
+        Fetches and formats all open positions from Binance.
+        """
+        try:
+            positions = await self._binance.get_positions(skip_zero=True)
+
+            if not positions:
+                await self._telegram.send_message_markdown(
+                    "✅ *No open positions*\n\n"
+                    "_All positions are closed._"
+                )
+                return
+
+            # Format the results
+            message = self._format_positions(positions)
+            await self._telegram.send_message_markdown(message)
+            self._logger.debug("Sent positions to Telegram")
+
+        except Exception as e:
+            self._logger.error(f"Failed to send positions: {e}")
+            await self._telegram.send_message_markdown(
+                f"❌ *Error fetching positions*\n\n`{str(e)}`"
+            )
+
+    def _format_opportunities(self, state) -> str:
+        """
+        Format scan results for Telegram display.
+
+        Args:
+            state: LastScanState with scan results.
+
+        Returns:
+            Formatted markdown string.
+        """
+        result = state.scan_result
+        age_min = state.get_age_seconds() / 60
+        hurst_values = state.hurst_values or {}
+
+        # Get thresholds from screener
+        z_entry = self._screener.z_score_service.z_entry_threshold
+        z_sl = self._screener.z_score_service.z_sl_threshold
+
+        # Check market safety
+        market_status = "🟢 Safe" if (
+            result.volatility_result and result.volatility_result.is_safe
+        ) else "🔴 Unsafe"
+
+        # Header
+        lines = [
+            f"📊 *Scan Results* (age: {age_min:.1f} min)",
+            f"Market: {market_status}",
+            f"Scanned: {result.symbols_scanned} → Filtered: {len(result.filtered_results)}",
+            "",
+        ]
+
+        if not result.filtered_results:
+            lines.append("_No opportunities found_")
+            return "\n".join(lines)
+
+        # Build table data
+        data = []
+        for symbol, res in result.filtered_results.items():
+            z = res.current_z_score
+            hurst = hurst_values.get(symbol)
+
+            # Determine signal
+            if np.isnan(z):
+                signal = "—"
+            elif z >= z_entry and z <= z_sl:
+                signal = "🔴 SHORT"
+            elif z <= -z_entry and z >= -z_sl:
+                signal = "🟢 LONG"
+            elif abs(z) >= 1.5:
+                signal = "⚠️ WATCH"
+            else:
+                signal = "—"
+
+            data.append({
+                "symbol": symbol.replace("/USDT:USDT", ""),
+                "z": z,
+                "corr": res.current_correlation,
+                "beta": res.current_beta,
+                "hurst": hurst,
+                "signal": signal,
+            })
+
+        # Sort by absolute z-score
+        data.sort(key=lambda x: abs(x["z"]) if not np.isnan(x["z"]) else 0, reverse=True)
+
+        # Format as compact table (Telegram has message limits)
+        lines.append("```")
+        lines.append(f"{'Sym':<6} {'Z':>6} {'Cor':>4} {'H':>4}")
+        lines.append("-" * 22)
+
+        for row in data[:15]:  # Limit to 15 rows for space
+            z_str = f"{row['z']:.2f}" if not np.isnan(row['z']) else "N/A"
+            corr_str = f"{row['corr']:.2f}" if not np.isnan(row['corr']) else "N/A"
+            h_str = f"{row['hurst']:.2f}" if row['hurst'] is not None else "—"
+
+            lines.append(
+                f"{row['symbol']:<6} {z_str:>6} {corr_str:>4} {h_str:>4}"
+            )
+            # Add signal on next line with minimal prefix
+            lines.append(f"--- {row['signal']}")
+
+        lines.append("```")
+
+        if len(data) > 15:
+            lines.append(f"_...and {len(data) - 15} more_")
+
+        return "\n".join(lines)
+
+    def _format_positions(self, positions) -> str:
+        """
+        Format positions for Telegram display.
+
+        Args:
+            positions: List of Position objects from BinanceClient.
+
+        Returns:
+            Formatted markdown string.
+        """
+        # Header
+        lines = [
+            f"📈 *Open Positions* ({len(positions)})",
+            "",
+        ]
+
+        # Calculate totals
+        total_unrealized = sum(pos.unrealized_pnl for pos in positions)
+        total_margin = sum(abs(pos.contracts * pos.mark_price / pos.leverage) for pos in positions)
+
+        lines.extend([
+            f"💰 Total PnL: `{total_unrealized:+.2f}` USDT",
+            f"💳 Total Margin: `{total_margin:.2f}` USDT",
+            "",
+        ])
+
+        # Sort by absolute PnL (biggest losses/gains first)
+        positions_sorted = sorted(positions, key=lambda p: abs(p.unrealized_pnl), reverse=True)
+
+        # Format as compact table
+        lines.append("```")
+        lines.append(f"{'Sym':<6} {'Side':<4} {'Size':<8} {'PnL':<8}")
+        lines.append("-" * 28)
+
+        for pos in positions_sorted[:20]:  # Limit to 20 positions
+            symbol_short = pos.symbol.replace("USDT", "")
+            side_short = pos.side.upper()[:4]
+            size_str = f"{pos.contracts:.2f}" if pos.contracts < 1000 else f"{pos.contracts:.0f}"
+            pnl_str = f"{pos.unrealized_pnl:+.2f}"
+
+            lines.append(
+                f"{symbol_short:<6} {side_short:<4} {size_str:<8} {pnl_str:<8}"
+            )
+
+            # Add details on next line
+            entry_price = f"Entry: {pos.entry_price:.4f}"
+            mark_price = f"Mark: {pos.mark_price:.4f}"
+            leverage = f"Lev: {pos.leverage}x"
+            lines.append(f"--- {entry_price} | {mark_price} | {leverage}")
+
+        lines.append("```")
+
+        if len(positions) > 20:
+            lines.append(f"_...and {len(positions) - 20} more_")
+
+        return "\n".join(lines)
 
     # =========================================================================
     # Event Handlers

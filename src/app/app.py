@@ -86,6 +86,7 @@ class Application:
             planner = self._container.planner_service
             trading_service = self._container.trading_service
             communicator_service = self._container.communicator_service
+            telegram_service = self._container.telegram_service
 
             # Connect to async services that need explicit connection
             # Access redis_cache property to create instance, then connect
@@ -98,6 +99,21 @@ class Application:
 
                 # Start trading service (subscribes to events)
                 await trading_service.start()
+
+                # Start Telegram bot polling in background
+                if telegram_service.is_enabled():
+                    await telegram_service.start_polling_background()
+                    logger.info("Telegram bot polling started")
+
+                    # Register callbacks for Telegram buttons
+                    telegram_service.register_callback(
+                        "get_opportunities",
+                        communicator_service.send_opportunities
+                    )
+                    telegram_service.register_callback(
+                        "get_positions",
+                        communicator_service.send_positions
+                    )
 
                 # Run planner (blocks until shutdown)
                 await planner.run()
@@ -150,6 +166,13 @@ class Application:
                 self._container.communicator_service.stop()
         except Exception as e:
             logger.warning(f"Error stopping communicator service: {e}")
+
+        # Stop Telegram polling
+        try:
+            if self._container.has_instance("telegram_service"):
+                await self._container.telegram_service.stop_polling()
+        except Exception as e:
+            logger.warning(f"Error stopping Telegram polling: {e}")
 
         # Stop scheduler
         try:

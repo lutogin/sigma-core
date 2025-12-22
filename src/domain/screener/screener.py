@@ -43,6 +43,29 @@ class ScanResult:
     symbols_after_correlation: int
 
 
+@dataclass
+class LastScanState:
+    """
+    Internal state holding the last scan results (raw data only).
+
+    Formatting is done by CommunicatorService to maintain SOLID principles.
+    """
+
+    scan_result: Optional[ScanResult] = None
+    scan_time: Optional[datetime] = None
+    hurst_values: Optional[Dict[str, float]] = None
+
+    def is_empty(self) -> bool:
+        """Check if state is empty (no scan performed yet)."""
+        return self.scan_result is None
+
+    def get_age_seconds(self) -> float:
+        """Get age of scan in seconds."""
+        if self.scan_time is None:
+            return float('inf')
+        return (datetime.now(timezone.utc) - self.scan_time).total_seconds()
+
+
 class ScreenerService:
     """
     Pure screening service for statistical arbitrage.
@@ -92,6 +115,9 @@ class ScreenerService:
         self._consistent_pairs = consistent_pairs
         self._timeframe = timeframe
 
+        # Internal state for last scan results
+        self._last_scan_state = LastScanState()
+
     # =========================================================================
     # Public Properties (expose Z-score thresholds for Orchestrator)
     # =========================================================================
@@ -120,6 +146,16 @@ class ScreenerService:
     def correlation_threshold(self) -> float:
         """Get correlation threshold for pair filtering."""
         return self._correlation_threshold
+
+    @property
+    def last_scan_state(self) -> LastScanState:
+        """Get last scan state (raw data)."""
+        return self._last_scan_state
+
+    @property
+    def z_score_service(self) -> ZScoreService:
+        """Get Z-score service for threshold access."""
+        return self._z_score_service
 
     # =========================================================================
     # Main Scan Method
@@ -200,18 +236,19 @@ class ScreenerService:
         )
 
         # 8. Log results
-        self._log_results(
+        formatted_table = self._format_results(
             filtered_results,
             sort_by="z_score",
             hurst_values=hurst_values,
         )
+        self._logger.info(f"Z-Score Results:{formatted_table}")
 
         self._logger.info(
             f"Scan complete. Processed {len(filtered_results)} symbols "
             f"(filtered from {symbols_scanned})."
         )
 
-        return ScanResult(
+        scan_result = ScanResult(
             filtered_results=filtered_results,
             all_z_score_results=z_score_results,
             hurst_values=hurst_values,
@@ -221,6 +258,15 @@ class ScreenerService:
             symbols_scanned=symbols_scanned,
             symbols_after_correlation=symbols_after_corr,
         )
+
+        # Store last scan state (raw data only, formatting done by CommunicatorService)
+        self._last_scan_state = LastScanState(
+            scan_result=scan_result,
+            scan_time=datetime.now(timezone.utc),
+            hurst_values=hurst_values,
+        )
+
+        return scan_result
 
     # =========================================================================
     # Private Methods - Filtering
@@ -423,27 +469,6 @@ class ScreenerService:
         )
 
         return aligned_data
-
-    def _log_results(
-        self,
-        results: Dict[str, ZScoreResult],
-        sort_by: str = "z_score",
-        top_n: int | None = None,
-        hurst_values: Dict[str, float] | None = None,
-    ) -> None:
-        """
-        Log z-score results as a formatted table.
-
-        Args:
-            results: Dictionary mapping symbol -> ZScoreResult.
-            sort_by: Sort key - "z_score", "beta", "correlation", or "symbol".
-            top_n: Limit output to top N results. None for all.
-            hurst_values: Optional dict of symbol -> Hurst exponent.
-        """
-        formatted = self._format_results(
-            results, sort_by=sort_by, top_n=top_n, hurst_values=hurst_values
-        )
-        self._logger.info(f"Z-Score Results:{formatted}")
 
     def _format_results(
         self,
