@@ -11,7 +11,7 @@ import pandas as pd
 import sys
 
 # Add project root to path
-sys.path.insert(0, ".")
+sys.path.insert(0, "..")
 
 from loguru import logger
 from src.domain.screener.hurst_filter.hurst_filter import HurstFilterService

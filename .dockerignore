@@ -63,3 +63,4 @@ docker-compose*.yml
 .cursor/
 .idea/
 .vscode/
+backtests/
