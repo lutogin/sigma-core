@@ -250,12 +250,30 @@ class EntryObserverService:
 
         async def on_update(data: Dict[str, Any]) -> None:
             """Callback for coin price updates."""
-            watch = self._watches.get(coin)
-            if watch:
-                # Use bid price as current price (more conservative)
-                watch.coin_price = (data["bid_price"] + data["ask_price"]) / 2
+            try:
+                watch = self._watches.get(coin)
+                if not watch:
+                    return
+
+                # Extract prices, handle None/0 values
+                bid_price = data.get("bid_price")
+                ask_price = data.get("ask_price")
+
+                # Skip if bid or ask is None/0 (partial update from WS)
+                if not bid_price or not ask_price:
+                    return
+
+                # Calculate mid price
+                mid_price = (float(bid_price) + float(ask_price)) / 2
+                if mid_price <= 0:
+                    return
+
+                watch.coin_price = mid_price
                 watch.last_update_at = datetime.now(timezone.utc)
                 await self._process_price_update(coin)
+
+            except Exception as e:
+                self._logger.error(f"Error in coin WS callback for {coin}: {e}")
 
         try:
             task = await self._exchange.subscribe_book_ticker(coin, on_update)
@@ -269,12 +287,30 @@ class EntryObserverService:
 
         async def on_primary_update(data: Dict[str, Any]) -> None:
             """Callback for primary price updates."""
-            # Use mid price
-            self._primary_price = (data["bid_price"] + data["ask_price"]) / 2
+            try:
+                # Extract prices, handle None/0 values
+                bid_price = data.get("bid_price")
+                ask_price = data.get("ask_price")
 
-            # Update primary price in all watches
-            for watch in self._watches.values():
-                watch.primary_price = self._primary_price
+                # Skip if bid or ask is None/0 (partial update from WS)
+                if not bid_price or not ask_price:
+                    return
+
+                # Calculate mid price
+                mid_price = (float(bid_price) + float(ask_price)) / 2
+                if mid_price <= 0:
+                    return
+
+                self._primary_price = mid_price
+
+                # Update primary price in all watches
+                for watch in self._watches.values():
+                    watch.primary_price = self._primary_price
+
+            except Exception as e:
+                self._logger.error(
+                    f"Error in primary WS callback for {self._primary_symbol}: {e}"
+                )
 
         try:
             self._primary_ws_task = await self._exchange.subscribe_book_ticker(
