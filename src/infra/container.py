@@ -259,6 +259,7 @@ class Container:
                 screener_service=self.screener_service,
                 event_emitter=self.event_emitter,
                 position_state_service=self.position_state_service,
+                hurst_filter_service=self.hurst_filter_service,
                 primary_pair=self._settings.PRIMARY_PAIR,
             )
         return self._instances["orchestrator_service"]

@@ -61,7 +61,7 @@ class BacktestConfig:
     # Risk
     leverage: int = 3  # Leverage multiplier
 
-    # Cooldown after SL or CORRELATION_DROP (in bars)
+    # Cooldown after adverse exits (SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
     # 2 bars = 30 minutes for 15m timeframe
     cooldown_bars: int = 16  # 4 hours
 
@@ -396,6 +396,7 @@ class StatArbBacktest:
             window_data,
             filtered_results,
             z_score_results,
+            correlation_results,
         )
 
         # Step 2: Check market volatility (skip entries if market is unsafe)
@@ -493,6 +494,65 @@ class StatArbBacktest:
 
         return is_mean_reverting
 
+    def _check_hurst_exit(
+        self,
+        symbol: str,
+        window_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict,
+    ) -> bool:
+        """
+        Check if an open position's spread became trending (Hurst >= threshold).
+
+        This is checked for open positions to detect when spread regime changes
+        from mean-reverting to trending, which invalidates the stat-arb assumption.
+
+        Args:
+            symbol: Symbol to check
+            window_data: OHLCV data
+            correlation_results: Correlation results with beta values
+
+        Returns:
+            True if spread became trending (should exit), False otherwise
+        """
+        if not self.hurst_filter_service:
+            return False  # No filter = don't exit
+
+        primary_df = window_data.get(self.primary_pair)
+        coin_df = window_data.get(symbol)
+
+        if primary_df is None or coin_df is None:
+            return False
+
+        if primary_df.empty or coin_df.empty:
+            return False
+
+        # Get beta from correlation results
+        corr_result = correlation_results.get(symbol)
+        if corr_result is None:
+            return False
+
+        beta = corr_result.latest_beta
+
+        # Calculate Hurst for spread (use log prices)
+        hurst = self.hurst_filter_service.calculate_for_spread(
+            coin_log_prices=coin_df["close"].apply(np.log),
+            primary_log_prices=primary_df["close"].apply(np.log),
+            beta=beta,
+        )
+
+        if hurst is None:
+            return False
+
+        is_trending = not self.hurst_filter_service.is_mean_reverting(hurst)
+
+        if is_trending:
+            print(
+                f"📈 {symbol} Hurst={hurst:.3f} >= {self.hurst_filter_service.threshold} "
+                f"(spread became trending, exit position)"
+            )
+
+        return is_trending
+
     async def _check_exits(
         self,
         current_time: datetime,
@@ -500,6 +560,7 @@ class StatArbBacktest:
         window_data: Dict[str, pd.DataFrame],
         filtered_results: Dict[str, ZScoreResult],
         all_results: Dict[str, ZScoreResult],
+        correlation_results: Dict,
     ) -> None:
         """Check if any open positions should be closed."""
         positions_to_close = []
@@ -533,6 +594,11 @@ class StatArbBacktest:
                         exit_reason = "TP"
                     elif z >= self.config.z_sl_threshold:
                         exit_reason = "SL"
+
+            # Check Hurst if no other exit reason yet (spread became trending)
+            if exit_reason is None and self.hurst_filter_service is not None:
+                if self._check_hurst_exit(symbol, window_data, correlation_results):
+                    exit_reason = "HURST_TRENDING"
 
             if exit_reason:
                 positions_to_close.append((symbol, exit_reason))
@@ -745,8 +811,10 @@ class StatArbBacktest:
 
         self.trades.append(trade)
 
-        # Add cooldown for SL or CORRELATION_DROP exits
-        if exit_reason in ("SL", "CORRELATION_DROP") and self.config.cooldown_bars > 0:
+        # Add cooldown for adverse exits (SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
+        # These indicate the pair is not behaving as expected - prevent immediate re-entry
+        cooldown_reasons = ("SL", "CORRELATION_DROP", "TIMEOUT", "HURST_TRENDING")
+        if exit_reason in cooldown_reasons and self.config.cooldown_bars > 0:
             cooldown_minutes = self.config.cooldown_bars * get_timeframe_minutes(
                 self.timeframe
             )

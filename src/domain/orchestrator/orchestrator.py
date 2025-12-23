@@ -4,7 +4,7 @@ Orchestrator Service.
 Coordinates the scanning pipeline and emits trading events.
 Responsible for:
 - Running the screener scan cycle
-- Checking exit conditions for open positions (TP, SL, CORRELATION_DROP, TIMEOUT)
+- Checking exit conditions for open positions (TP, SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
 - Checking entry conditions for new positions
 - Emitting PendingEntrySignalEvent for trailing entry (EntryObserver will handle)
 - Emitting ExitSignalEvent for position closes
@@ -16,6 +16,7 @@ import pandas as pd
 
 from src.domain.position_state import PositionStateService
 from src.domain.screener import ScreenerService
+from src.domain.screener.hurst_filter import HurstFilterService
 from src.domain.screener.z_score import ZScoreResult
 from src.infra.event_emitter import (
     EventEmitter,
@@ -40,7 +41,8 @@ class OrchestratorService:
     - TAKE_PROFIT: |Z| <= tp_threshold (mean reversion complete)
     - STOP_LOSS: |Z| >= sl_threshold (extreme divergence)
     - CORRELATION_DROP: correlation < min_correlation
-    - TIMEOUT: position held longer than max_position_bars
+    - HURST_TRENDING: Hurst >= hurst_threshold (spread became trending)
+    - TIMEOUT: position held longer than max_position_bars (handled by TradingService)
 
     Entry conditions (checked after exits):
     - |Z| >= entry_threshold AND |Z| < sl_threshold
@@ -54,6 +56,7 @@ class OrchestratorService:
         screener_service: ScreenerService,
         event_emitter: EventEmitter,
         position_state_service: PositionStateService,
+        hurst_filter_service: HurstFilterService,
         primary_pair: str,
     ):
         """
@@ -64,12 +67,14 @@ class OrchestratorService:
             screener_service: Service for scanning and filtering pairs.
             event_emitter: Event emitter for trading events.
             position_state_service: Service for position state management.
+            hurst_filter_service: Service for Hurst exponent calculation.
             primary_pair: Primary trading pair (e.g., "ETH/USDT:USDT").
         """
         self._logger = logger
         self._screener_service = screener_service
         self._event_emitter = event_emitter
         self._position_state = position_state_service
+        self._hurst_filter = hurst_filter_service
         self._primary_pair = primary_pair
 
     async def run(self) -> None:
@@ -182,12 +187,13 @@ class OrchestratorService:
         1. TAKE_PROFIT: |Z| <= z_tp (mean reversion complete)
         2. STOP_LOSS: |Z| >= z_sl (extreme divergence)
         3. CORRELATION_DROP: symbol not in filtered_results (correlation < threshold)
-        4. TIMEOUT: handled by TradingService/PlannerService
+        4. HURST_TRENDING: Hurst >= hurst_threshold (spread became trending)
+        5. TIMEOUT: handled by TradingService/PlannerService
 
         Returns:
             List of emitted ExitSignalEvent.
         """
-        exit_signals = []
+        exit_signals: List[ExitSignalEvent] = []
         open_positions = self._position_state.get_active_positions()
 
         if not open_positions:
@@ -239,6 +245,24 @@ class OrchestratorService:
                         exit_reason = ExitReason.TAKE_PROFIT
                     elif current_z >= z_sl:
                         exit_reason = ExitReason.STOP_LOSS
+
+            # Check Hurst if no other exit reason yet
+            if exit_reason is None and self._hurst_filter is not None:
+                coin_df = raw_data.get(coin_symbol)
+                if coin_df is not None and primary_df is not None:
+                    # Calculate current Hurst for the spread
+                    hurst = self._hurst_filter.calculate_for_spread(
+                        coin_log_prices=coin_df["close"].apply(np.log),
+                        primary_log_prices=primary_df["close"].apply(np.log),
+                        beta=z_result.current_beta,
+                    )
+
+                    if not self._hurst_filter.is_mean_reverting(hurst):
+                        exit_reason = ExitReason.HURST_TRENDING
+                        self._logger.info(
+                            f"📈 HURST_TRENDING detected | {coin_symbol} | "
+                            f"H={hurst:.3f} >= {self._hurst_filter.threshold}"
+                        )
 
             if exit_reason:
                 # Get current prices

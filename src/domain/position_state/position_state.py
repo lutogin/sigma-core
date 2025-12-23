@@ -172,8 +172,15 @@ class PositionStateService:
         # Deactivate position
         self._repository.deactivate_position(coin_symbol)
 
-        # Apply cooldown for SL or CORRELATION_DROP
-        if exit_reason in (ExitReason.STOP_LOSS, ExitReason.CORRELATION_DROP):
+        # Apply cooldown for adverse exits (SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
+        # These indicate the pair is not behaving as expected - prevent immediate re-entry
+        cooldown_reasons = (
+            ExitReason.STOP_LOSS,
+            ExitReason.CORRELATION_DROP,
+            ExitReason.TIMEOUT,
+            ExitReason.HURST_TRENDING,
+        )
+        if exit_reason in cooldown_reasons:
             self._apply_cooldown(coin_symbol, exit_reason)
 
         self._logger.info(
@@ -214,7 +221,7 @@ class PositionStateService:
     # =========================================================================
 
     def _apply_cooldown(self, symbol: str, exit_reason: ExitReason) -> None:
-        """Apply cooldown to a symbol after SL or CORRELATION_DROP."""
+        """Apply cooldown to a symbol after adverse exit (SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)."""
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(minutes=self._cooldown_minutes)
 
