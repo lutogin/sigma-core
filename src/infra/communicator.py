@@ -305,8 +305,8 @@ class CommunicatorService:
 
         # Format as compact table (Telegram has message limits)
         lines.append("```")
-        lines.append(f"{'Sym':<6} {'Z':>6} {'Cor':>4} {'H':>4}")
-        lines.append("-" * 22)
+        lines.append(f"{'Sym':<6} {'Z':>6} {'Cor':>5} {'H':>5} {'Signal':<10}")
+        lines.append("-" * 35)
 
         for row in data[:15]:  # Limit to 15 rows for space
             z_str = f"{row['z']:.2f}" if not np.isnan(row['z']) else "N/A"
@@ -314,10 +314,8 @@ class CommunicatorService:
             h_str = f"{row['hurst']:.2f}" if row['hurst'] is not None else "—"
 
             lines.append(
-                f"{row['symbol']:<6} {z_str:>6} {corr_str:>4} {h_str:>4}"
+                f"{row['symbol']:<6} {z_str:>6} {corr_str:>5} {h_str:>5} {row['signal']:<10}"
             )
-            # Add signal on next line with minimal prefix
-            lines.append(f"--- {row['signal']}")
 
         lines.append("```")
 

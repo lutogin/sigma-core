@@ -439,7 +439,7 @@ async def main():
     parser.add_argument(
         "--coins-file",
         type=str,
-        default="to_test.json",
+        default="backtests/to_test.json",
         help="JSON file with coin list. Default: to_test.json",
     )
 

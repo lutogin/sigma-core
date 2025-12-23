@@ -1364,7 +1364,7 @@ Examples:
 
         # Plot if not disabled
         if not args.no_plot:
-            plot_results(result, save_path="../backtest_results.png")
+            plot_results(result, save_path="backtest_results.png")
 
     finally:
         await exchange.disconnect()
