@@ -65,8 +65,9 @@ class Settings:
     HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
 
     # Adaptive threshold settings
-    ADAPTIVE_PERCENTILE: int = 97  # Percentile for dynamic Z-score threshold (97 = top 3%)
+    ADAPTIVE_PERCENTILE: int = 96  # Percentile for dynamic Z-score threshold (97 = top 3%)
     DYNAMIC_THRESHOLD_WINDOW_BARS: int = 440
+    THRESHOLD_EMA_ALPHA: float = 0.1  # EMA smoothing factor (0.1 = 10% new, 90% old)
     # Trailing Entry settings (Smart Entry)
     TRAILING_ENTRY_PULLBACK: float = 0.2  # Z-score pullback for reversal confirmation
     TRAILING_ENTRY_TIMEOUT_MINUTES: int = 45  # Max watch duration before cancellation
@@ -144,10 +145,14 @@ class Settings:
         self.HURST_LOOKBACK_CANDLES = int(os.getenv("HURST_LOOKBACK_CANDLES", "300"))
 
         # Adaptive threshold
-        self.ADAPTIVE_PERCENTILE = int(os.getenv("ADAPTIVE_PERCENTILE", "97"))
+        self.ADAPTIVE_PERCENTILE = int(os.getenv("ADAPTIVE_PERCENTILE", "96"))
 
         self.DYNAMIC_THRESHOLD_WINDOW_BARS = int(
             os.getenv("DYNAMIC_THRESHOLD_WINDOW_BARS", "440")
+        )
+
+        self.THRESHOLD_EMA_ALPHA = float(
+            os.getenv("THRESHOLD_EMA_ALPHA", "0.1")
         )
 
         # Trailing Entry (Smart Entry)

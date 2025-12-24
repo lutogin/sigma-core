@@ -55,6 +55,7 @@ class ZScoreService:
         z_sl_threshold: float = 4.5,
         adaptive_percentile: int = 97,
         dynamic_threshold_window: int = 440,
+        threshold_ema_alpha: float = 0.1,
     ):
         """
         Initialize ZScoreService.
@@ -68,6 +69,7 @@ class ZScoreService:
             z_sl_threshold: Z-score threshold for stop loss.
             adaptive_percentile: Percentile for adaptive threshold calculation (default 97).
             dynamic_threshold_window: Number of candles for dynamic threshold calculation (default 440 ~4.5 days @ 15m).
+            threshold_ema_alpha: EMA smoothing factor for threshold (0.1 = 10% new, 90% old).
         """
         self._logger = logger
         self._lookback_window_days = lookback_window_days
@@ -80,6 +82,10 @@ class ZScoreService:
         self._z_sl_threshold = z_sl_threshold
         self._adaptive_percentile = adaptive_percentile
         self._dynamic_threshold_window = dynamic_threshold_window
+        self._threshold_ema_alpha = threshold_ema_alpha
+
+        # Store smoothed thresholds per symbol for EMA calculation
+        self._smoothed_thresholds: Dict[str, float] = {}
 
     @property
     def z_entry_threshold(self) -> float:
@@ -163,7 +169,7 @@ class ZScoreService:
             z_score_series = (spread_series - mean_spread) / std_spread
 
             # Calculate dynamic entry threshold based on historical z-score distribution
-            dynamic_threshold = self._calculate_dynamic_threshold(z_score_series)
+            dynamic_threshold = self._calculate_dynamic_threshold(symbol, z_score_series)
 
             # Get current (latest) values
             current_spread = self._get_latest_value(spread_series)
@@ -249,25 +255,31 @@ class ZScoreService:
         valid = series.dropna()
         return valid.iloc[-1] if len(valid) > 0 else np.nan
 
-    def _calculate_dynamic_threshold(self, z_score_series: pd.Series) -> float:
+    def _calculate_dynamic_threshold(self, symbol: str, z_score_series: pd.Series) -> float:
         """
-        Calculate dynamic entry threshold based on historical Z-score distribution.
+        Calculate dynamic entry threshold with EMA smoothing.
 
-        Algorithm "Adaptive Upper Bound":
-        - Take absolute Z-scores from the dynamic threshold window (440 candles ~4.5 days)
-        - Calculate the 97th percentile (value exceeded only 3% of the time)
-        - Return max(min_threshold, percentile_97)
+        Algorithm:
+        1. Calculate raw threshold from percentile of absolute Z-scores
+        2. Apply floor at minimum threshold (z_entry_threshold)
+        3. Apply EMA smoothing to prevent sudden jumps
+        4. On first call, warm up EMA using historical rolling windows
 
-        This ensures we only enter when Z-score is truly extreme for THIS pair,
-        not just above a static threshold that may be too low for volatile pairs.
+        EMA formula: new_threshold = alpha * raw + (1 - alpha) * previous
+        With alpha=0.1: 10% new value, 90% previous value
+
+        This ensures threshold changes gradually, preventing:
+        - Sudden spikes from blocking entries
+        - Rapid drops from allowing premature entries
 
         Args:
+            symbol: Symbol for threshold state tracking.
             z_score_series: Historical Z-score series.
 
         Returns:
-            Dynamic threshold = max(z_entry_threshold, percentile_97)
+            Smoothed dynamic threshold = EMA(max(z_entry_threshold, percentile))
         """
-        # Use the dynamic threshold window (440 candles by default)
+        # Use the dynamic threshold window (440+ candles by default)
         recent_z = z_score_series.tail(self._dynamic_threshold_window).dropna()
 
         if len(recent_z) < 50:
@@ -275,17 +287,81 @@ class ZScoreService:
                 f"Insufficient data for dynamic threshold calculation, "
                 f"using static threshold: {self._z_entry_threshold}"
             )
-            # Not enough data, use static threshold
             return self._z_entry_threshold
 
-        # Calculate percentile of absolute Z-scores
+        # Check if we need to warm up EMA for this symbol
+        if symbol not in self._smoothed_thresholds:
+            smoothed_threshold = self._warmup_ema_threshold(recent_z)
+            self._smoothed_thresholds[symbol] = smoothed_threshold
+            return smoothed_threshold
+
+        # Step 1: Calculate raw percentile threshold
         abs_z = recent_z.abs()
-        hist_threshold = float(np.percentile(abs_z, self._adaptive_percentile))
+        raw_threshold = float(np.percentile(abs_z, self._adaptive_percentile))
 
-        # Floor at minimum threshold (statistical significance)
-        dynamic_threshold = max(self._z_entry_threshold, hist_threshold)
+        # Step 2: Apply floor at minimum threshold
+        raw_threshold = max(self._z_entry_threshold, raw_threshold)
 
-        return dynamic_threshold
+        # Step 3: Apply EMA smoothing
+        previous_threshold = self._smoothed_thresholds[symbol]
+        alpha = self._threshold_ema_alpha
+        smoothed_threshold = (alpha * raw_threshold) + ((1 - alpha) * previous_threshold)
+
+        # Step 4: Final floor check (ensure never below min threshold after EMA)
+        smoothed_threshold = max(self._z_entry_threshold, smoothed_threshold)
+
+        # Store for next iteration
+        self._smoothed_thresholds[symbol] = smoothed_threshold
+
+        return smoothed_threshold
+
+    def _warmup_ema_threshold(self, z_series: pd.Series) -> float:
+        """
+        Warm up EMA threshold using historical rolling windows.
+
+        Simulates N iterations of EMA calculation on historical data
+        to get a "settled" threshold value on first call.
+
+        Args:
+            z_series: Z-score series (already trimmed to window size).
+
+        Returns:
+            Warmed-up EMA threshold.
+        """
+        window_size = self._dynamic_threshold_window
+        warmup_steps = 20  # Number of historical points to simulate
+        step_size = window_size // warmup_steps
+
+        if len(z_series) < window_size:
+            # Not enough data, return simple percentile
+            abs_z = z_series.abs()
+            raw = float(np.percentile(abs_z, self._adaptive_percentile))
+            return max(self._z_entry_threshold, raw)
+
+        # Initialize with first window's percentile
+        first_window = z_series.iloc[:window_size]
+        ema_threshold = float(np.percentile(first_window.abs(), self._adaptive_percentile))
+        ema_threshold = max(self._z_entry_threshold, ema_threshold)
+
+        alpha = self._threshold_ema_alpha
+
+        # Roll through history, updating EMA at each step
+        for i in range(1, warmup_steps):
+            end_idx = min(window_size + (i * step_size), len(z_series))
+            start_idx = end_idx - window_size
+
+            if start_idx < 0:
+                continue
+
+            window = z_series.iloc[start_idx:end_idx]
+            raw_threshold = float(np.percentile(window.abs(), self._adaptive_percentile))
+            raw_threshold = max(self._z_entry_threshold, raw_threshold)
+
+            # Apply EMA
+            ema_threshold = (alpha * raw_threshold) + ((1 - alpha) * ema_threshold)
+
+        # Final floor check
+        return max(self._z_entry_threshold, ema_threshold)
 
     def format_results(
         self,
