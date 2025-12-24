@@ -68,7 +68,7 @@ class Settings:
     ADAPTIVE_PERCENTILE: int = 97  # Percentile for dynamic Z-score threshold (97 = top 3%)
 
     # Trailing Entry settings (Smart Entry)
-    TRAILING_ENTRY_PULLBACK: float = 0.3  # Z-score pullback for reversal confirmation
+    TRAILING_ENTRY_PULLBACK: float = 0.2  # Z-score pullback for reversal confirmation
     TRAILING_ENTRY_TIMEOUT_MINUTES: int = 45  # Max watch duration before cancellation
 
     # Position sizing
@@ -148,7 +148,7 @@ class Settings:
 
         # Trailing Entry (Smart Entry)
         self.TRAILING_ENTRY_PULLBACK = float(
-            os.getenv("TRAILING_ENTRY_PULLBACK", "0.3")
+            os.getenv("TRAILING_ENTRY_PULLBACK", "0.2")
         )
         self.TRAILING_ENTRY_TIMEOUT_MINUTES = int(
             os.getenv("TRAILING_ENTRY_TIMEOUT_MINUTES", "45")

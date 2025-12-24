@@ -54,7 +54,7 @@ class EntryObserverService:
         primary_symbol: str = "ETH/USDT:USDT",
         z_entry_threshold: float = 2.0,
         z_sl_threshold: float = 4.5,
-        pullback: float = 0.3,
+        pullback: float = 0.2,
         watch_timeout_seconds: int = 2700,  # 45 minutes
         debounce_seconds: float = 1.0,
         max_watches: int = 10,
