@@ -129,7 +129,7 @@ class VolatilityFilterService:
         is_safe = True
         stop_reason = None
 
-        if round(current_volatility, 2) > self._volatility_threshold:
+        if current_volatility > self._volatility_threshold:
             is_safe = False
             stop_reason = (
                 f"HIGH_VOLATILITY: {current_volatility:.4f} > "
