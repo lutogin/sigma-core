@@ -54,6 +54,7 @@ class ZScoreService:
         z_tp_threshold: float = 0.0,
         z_sl_threshold: float = 4.5,
         adaptive_percentile: int = 97,
+        dynamic_threshold_window: int = 576,
     ):
         """
         Initialize ZScoreService.
@@ -66,6 +67,7 @@ class ZScoreService:
             z_tp_threshold: Z-score threshold for take profit.
             z_sl_threshold: Z-score threshold for stop loss.
             adaptive_percentile: Percentile for adaptive threshold calculation (default 97).
+            dynamic_threshold_window: Number of candles for dynamic threshold calculation (default 440 ~4.5 days @ 15m).
         """
         self._logger = logger
         self._lookback_window_days = lookback_window_days
@@ -77,6 +79,7 @@ class ZScoreService:
         self._z_tp_threshold = z_tp_threshold
         self._z_sl_threshold = z_sl_threshold
         self._adaptive_percentile = adaptive_percentile
+        self._dynamic_threshold_window = dynamic_threshold_window
 
     @property
     def z_entry_threshold(self) -> float:
@@ -251,7 +254,7 @@ class ZScoreService:
         Calculate dynamic entry threshold based on historical Z-score distribution.
 
         Algorithm "Adaptive Upper Bound":
-        - Take absolute Z-scores from the lookback window
+        - Take absolute Z-scores from the dynamic threshold window (440 candles ~4.5 days)
         - Calculate the 97th percentile (value exceeded only 3% of the time)
         - Return max(min_threshold, percentile_97)
 
@@ -264,8 +267,8 @@ class ZScoreService:
         Returns:
             Dynamic threshold = max(z_entry_threshold, percentile_97)
         """
-        # Use the lookback window for threshold calculation
-        recent_z = z_score_series.tail(self._lookback_window).dropna()
+        # Use the dynamic threshold window (576 candles by default)
+        recent_z = z_score_series.tail(self._dynamic_threshold_window).dropna()
 
         if len(recent_z) < 50:
             self._logger.warning(

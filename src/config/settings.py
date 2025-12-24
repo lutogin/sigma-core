@@ -66,7 +66,7 @@ class Settings:
 
     # Adaptive threshold settings
     ADAPTIVE_PERCENTILE: int = 97  # Percentile for dynamic Z-score threshold (97 = top 3%)
-
+    DYNAMIC_THRESHOLD_WINDOW_BARS: int = 576
     # Trailing Entry settings (Smart Entry)
     TRAILING_ENTRY_PULLBACK: float = 0.2  # Z-score pullback for reversal confirmation
     TRAILING_ENTRY_TIMEOUT_MINUTES: int = 45  # Max watch duration before cancellation
@@ -145,6 +145,10 @@ class Settings:
 
         # Adaptive threshold
         self.ADAPTIVE_PERCENTILE = int(os.getenv("ADAPTIVE_PERCENTILE", "97"))
+
+        self.DYNAMIC_THRESHOLD_WINDOW_BARS = int(
+            os.getenv("DYNAMIC_THRESHOLD_WINDOW_BARS", "576")
+        )
 
         # Trailing Entry (Smart Entry)
         self.TRAILING_ENTRY_PULLBACK = float(

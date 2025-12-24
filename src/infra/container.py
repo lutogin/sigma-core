@@ -353,6 +353,7 @@ class Container:
                 z_tp_threshold=self._settings.Z_TP_THRESHOLD,
                 z_sl_threshold=self._settings.Z_SL_THRESHOLD,
                 adaptive_percentile=self._settings.ADAPTIVE_PERCENTILE,
+                dynamic_threshold_window=self._settings.DYNAMIC_THRESHOLD_WINDOW_BARS
             )
         return self._instances["z_score_service"]
 

@@ -505,7 +505,6 @@ class ScreenerService:
             return "No z-score results to display."
 
         hurst_values = hurst_values or {}
-        z_entry = self._z_score_service.z_entry_threshold
         z_sl = self._z_score_service.z_sl_threshold
 
         # Build list of tuples for sorting
@@ -515,6 +514,7 @@ class ScreenerService:
                 {
                     "symbol": symbol,
                     "z_score": res.current_z_score,
+                    "dyn_threshold": res.dynamic_entry_threshold,
                     "beta": res.current_beta,
                     "correlation": res.current_correlation,
                     "spread": res.current_spread,
@@ -547,7 +547,7 @@ class ScreenerService:
 
         # Build table
         lines = []
-        header = f"{'Symbol':<20} {'Z-Score':>10} {'β (hedge)':>12} {'Corr':>8} {'Hurst':>8} {'Signal':>12}"
+        header = f"{'Symbol':<20} {'Z-Score':>10} {'DynThr':>8} {'β (hedge)':>12} {'Corr':>8} {'Hurst':>8} {'Signal':>12}"
         separator = "-" * len(header)
 
         lines.append("")
@@ -557,16 +557,17 @@ class ScreenerService:
 
         for row in data:
             z = row["z_score"]
+            dyn_thr = row["dyn_threshold"]
             beta = row["beta"]
             corr = row["correlation"]
             hurst = row["hurst"]
 
-            # Determine signal based on z-score
+            # Determine signal based on z-score and dynamic threshold
             if np.isnan(z):
                 signal = "N/A"
-            elif z >= z_entry and z <= z_sl:
+            elif z >= dyn_thr and z <= z_sl:
                 signal = "🔴 SHORT"
-            elif z <= -z_entry and z >= -z_sl:
+            elif z <= -dyn_thr and z >= -z_sl:
                 signal = "🟢 LONG"
             elif abs(z) >= 1.5:
                 signal = "⚠️ WATCH"
@@ -574,13 +575,14 @@ class ScreenerService:
                 signal = "—"
 
             z_str = f"{z:>10.4f}" if not np.isnan(z) else f"{'N/A':>10}"
+            dyn_thr_str = f"{dyn_thr:>8.2f}" if not np.isnan(dyn_thr) else f"{'N/A':>8}"
             beta_str = f"{beta:>12.4f}" if not np.isnan(beta) else f"{'N/A':>12}"
             corr_str = f"{corr:>8.4f}" if not np.isnan(corr) else f"{'N/A':>8}"
             # Hurst: show value only for entry candidates, "-" otherwise
             hurst_str = f"{hurst:>8.4f}" if hurst is not None else f"{'—':>8}"
 
             lines.append(
-                f"{row['symbol']:<20} {z_str} {beta_str} {corr_str} {hurst_str} {signal:>12}"
+                f"{row['symbol']:<20} {z_str} {dyn_thr_str} {beta_str} {corr_str} {hurst_str} {signal:>12}"
             )
 
         lines.append(separator)
