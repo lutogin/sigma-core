@@ -272,6 +272,12 @@ class Container:
         self._check_initialized()
         if "entry_observer_service" not in self._instances:
             from src.domain.entry_observer import EntryObserverService
+            from src.domain.entry_observer.repository import EntryObserverRepository
+
+            repository = EntryObserverRepository(
+                mongo_db=self.mongo_db,
+                logger=self.logger,
+            )
 
             self._instances["entry_observer_service"] = EntryObserverService(
                 event_emitter=self.event_emitter,
@@ -284,6 +290,7 @@ class Container:
                 watch_timeout_seconds=self._settings.TRAILING_ENTRY_TIMEOUT_MINUTES
                 * 60,
                 max_watches=self._settings.MAX_OPEN_SPREADS,
+                repository=repository,
             )
         return self._instances["entry_observer_service"]
 

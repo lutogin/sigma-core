@@ -23,7 +23,7 @@ This improves Sharpe Ratio by avoiding "catching falling knives".
 import asyncio
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.domain.entry_observer.models import WatchCandidate, WatchStatus
 from src.infra.event_emitter import (
@@ -36,6 +36,9 @@ from src.infra.event_emitter import (
     SpreadSide,
 )
 from src.integrations.exchange import BinanceClient
+
+if TYPE_CHECKING:
+    from src.domain.entry_observer.repository import EntryObserverRepository
 
 
 class EntryObserverService:
@@ -58,6 +61,7 @@ class EntryObserverService:
         watch_timeout_seconds: int = 2700,  # 45 minutes
         debounce_seconds: float = 1.0,
         max_watches: int = 10,
+        repository: Optional["EntryObserverRepository"] = None,
     ):
         """
         Initialize Entry Observer Service.
@@ -73,10 +77,12 @@ class EntryObserverService:
             watch_timeout_seconds: Maximum watch duration before cancellation.
             debounce_seconds: Minimum time between Z-score recalculations.
             max_watches: Maximum concurrent watches (limit WebSocket connections).
+            repository: Optional MongoDB repository for persistence.
         """
         self._emitter = event_emitter
         self._exchange = exchange_client
         self._logger = logger
+        self._repository = repository
 
         self._primary_symbol = primary_symbol
         self._z_entry = z_entry_threshold
@@ -112,11 +118,15 @@ class EntryObserverService:
         """
         Start the Entry Observer service.
 
+        - Restore watches from MongoDB (if not expired)
         - Subscribe to PendingEntrySignalEvent
         """
         if self._is_running:
             self._logger.warning("EntryObserverService is already running")
             return
+
+        # Restore watches from MongoDB
+        await self._restore_watches_from_db()
 
         # Subscribe to pending entry signals
         self._emitter.on(EventType.PENDING_ENTRY_SIGNAL, self._on_pending_signal)
@@ -226,6 +236,9 @@ class EntryObserverService:
 
             # Store in memory
             self._watches[coin] = watch
+
+            # Persist to MongoDB
+            self._save_watch_to_db(watch)
 
             self._logger.info(
                 f"👀 Started watching {coin} | "
@@ -509,6 +522,9 @@ class EntryObserverService:
             if coin in self._last_check:
                 del self._last_check[coin]
 
+        # Remove from MongoDB
+        self._delete_watch_from_db(coin)
+
         # Unsubscribe from WebSocket
         await self._unsubscribe_coin(coin)
 
@@ -603,3 +619,89 @@ class EntryObserverService:
             if status:
                 result[coin] = status
         return result
+
+    # =========================================================================
+    # MongoDB Persistence
+    # =========================================================================
+
+    def _save_watch_to_db(self, watch: WatchCandidate) -> None:
+        """Save watch to MongoDB (sync, non-blocking for main flow)."""
+        if self._repository is None:
+            return
+
+        try:
+            self._repository.save_watch(watch)
+        except Exception as e:
+            self._logger.warning(f"Failed to save watch to MongoDB: {e}")
+
+    def _delete_watch_from_db(self, coin: str) -> None:
+        """Delete watch from MongoDB."""
+        if self._repository is None:
+            return
+
+        try:
+            self._repository.delete_watch(coin)
+        except Exception as e:
+            self._logger.warning(f"Failed to delete watch from MongoDB: {e}")
+
+    async def _restore_watches_from_db(self) -> None:
+        """
+        Restore active watches from MongoDB on startup.
+
+        Only restores watches that are not expired (younger than timeout).
+        Expired watches are deleted from MongoDB.
+        """
+        if self._repository is None:
+            self._logger.debug("No repository configured, skipping watch restoration")
+            return
+
+        try:
+            # First, delete expired watches
+            deleted = self._repository.delete_expired_watches(self._timeout)
+            if deleted > 0:
+                self._logger.info(f"🗑️ Deleted {deleted} expired watches from MongoDB")
+
+            # Get remaining active watches
+            watches = self._repository.get_active_watches()
+
+            if not watches:
+                self._logger.debug("No watches to restore from MongoDB")
+                return
+
+            self._logger.info(f"🔄 Restoring {len(watches)} watches from MongoDB...")
+
+            restored_count = 0
+            for watch in watches:
+                # Double-check age (in case of race condition)
+                if watch.watch_duration_seconds > self._timeout:
+                    self._repository.delete_watch(watch.coin_symbol)
+                    self._logger.debug(
+                        f"Skipped expired watch: {watch.coin_symbol} "
+                        f"(age: {watch.watch_duration_minutes:.1f} min)"
+                    )
+                    continue
+
+                # Store in memory
+                self._watches[watch.coin_symbol] = watch
+
+                # Subscribe to WebSocket
+                await self._subscribe_coin(watch.coin_symbol)
+
+                restored_count += 1
+                self._logger.info(
+                    f"✅ Restored watch: {watch.coin_symbol} | "
+                    f"max_z={watch.max_z:.2f} | "
+                    f"age={watch.watch_duration_minutes:.1f}min"
+                )
+
+            # Subscribe to primary if we have watches
+            if self._watches and self._primary_ws_task is None:
+                await self._subscribe_primary()
+
+            if restored_count > 0:
+                self._logger.info(
+                    f"🔭 Restored {restored_count} watches from MongoDB"
+                )
+
+        except Exception as e:
+            self._logger.error(f"Failed to restore watches from MongoDB: {e}")
