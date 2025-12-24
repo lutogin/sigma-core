@@ -251,9 +251,10 @@ class CommunicatorService:
         result = state.scan_result
         age_min = state.get_age_seconds() / 60
         hurst_values = state.hurst_values or {}
+        dynamic_thresholds = state.dynamic_thresholds or {}
 
-        # Get thresholds from screener
-        z_entry = self._screener.z_score_service.z_entry_threshold
+        # Get static thresholds from screener (used as floor)
+        z_entry_floor = self._screener.z_score_service.z_entry_threshold
         z_sl = self._screener.z_score_service.z_sl_threshold
 
         # Check market safety
@@ -278,13 +279,15 @@ class CommunicatorService:
         for symbol, res in result.filtered_results.items():
             z = res.current_z_score
             hurst = hurst_values.get(symbol)
+            # Use dynamic threshold for this symbol, fallback to static floor
+            dyn_threshold = dynamic_thresholds.get(symbol, z_entry_floor)
 
-            # Determine signal
+            # Determine signal using dynamic threshold
             if np.isnan(z):
                 signal = "—"
-            elif z >= z_entry and z <= z_sl:
+            elif z >= dyn_threshold and z <= z_sl:
                 signal = "🔴 SHORT"
-            elif z <= -z_entry and z >= -z_sl:
+            elif z <= -dyn_threshold and z >= -z_sl:
                 signal = "🟢 LONG"
             elif abs(z) >= 1.5:
                 signal = "⚠️ WATCH"
@@ -297,6 +300,7 @@ class CommunicatorService:
                 "corr": res.current_correlation,
                 "beta": res.current_beta,
                 "hurst": hurst,
+                "dyn_th": dyn_threshold,
                 "signal": signal,
             })
 
@@ -305,16 +309,16 @@ class CommunicatorService:
 
         # Format as compact table (Telegram has message limits)
         lines.append("```")
-        lines.append(f"{'Sym':<6} {'Z':>6} {'Cor':>5} {'H':>5} {'Signal':<10}")
-        lines.append("-" * 35)
+        lines.append(f"{'Sym':<6} {'Z':>5} {'Th':>4} {'H':>4} {'Signal':<10}")
+        lines.append("-" * 32)
 
         for row in data[:15]:  # Limit to 15 rows for space
             z_str = f"{row['z']:.2f}" if not np.isnan(row['z']) else "N/A"
-            corr_str = f"{row['corr']:.2f}" if not np.isnan(row['corr']) else "N/A"
+            th_str = f"{row['dyn_th']:.1f}"
             h_str = f"{row['hurst']:.2f}" if row['hurst'] is not None else "—"
 
             lines.append(
-                f"{row['symbol']:<6} {z_str:>6} {corr_str:>5} {h_str:>5} {row['signal']:<10}"
+                f"{row['symbol']:<6} {z_str:>5} {th_str:>4} {h_str:>4} {row['signal']:<10}"
             )
 
         lines.append("```")

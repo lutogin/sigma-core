@@ -54,6 +54,7 @@ class LastScanState:
     scan_result: Optional[ScanResult] = None
     scan_time: Optional[datetime] = None
     hurst_values: Optional[Dict[str, float]] = None
+    dynamic_thresholds: Optional[Dict[str, float]] = None  # symbol -> dynamic_entry_threshold
 
     def is_empty(self) -> bool:
         """Check if state is empty (no scan performed yet)."""
@@ -259,11 +260,18 @@ class ScreenerService:
             symbols_after_correlation=symbols_after_corr,
         )
 
+        # Extract dynamic thresholds from z_score_results
+        dynamic_thresholds = {
+            symbol: result.dynamic_entry_threshold
+            for symbol, result in z_score_results.items()
+        }
+
         # Store last scan state (raw data only, formatting done by CommunicatorService)
         self._last_scan_state = LastScanState(
             scan_result=scan_result,
             scan_time=datetime.now(timezone.utc),
             hurst_values=hurst_values,
+            dynamic_thresholds=dynamic_thresholds,
         )
 
         return scan_result
@@ -317,7 +325,9 @@ class ScreenerService:
         Filter z-score results by Hurst exponent (mean-reversion quality).
 
         ONLY checks Hurst for entry candidates:
-        - |Z| >= entry_threshold AND |Z| <= sl_threshold
+        - |Z| >= dynamic_entry_threshold AND |Z| <= sl_threshold
+
+        Uses dynamic_entry_threshold from each symbol's ZScoreResult.
 
         Args:
             z_score_results: Dictionary mapping symbol -> ZScoreResult.
@@ -334,8 +344,7 @@ class ScreenerService:
         if not self._hurst_filter_service:
             return z_score_results, hurst_values
 
-        # Get Z-score thresholds from z_score_service
-        z_entry = self._z_score_service.z_entry_threshold
+        # Get SL threshold from z_score_service (static)
         z_sl = self._z_score_service.z_sl_threshold
 
         filtered = {}
@@ -349,8 +358,11 @@ class ScreenerService:
         for symbol, result in z_score_results.items():
             z = result.current_z_score
 
+            # Use dynamic entry threshold for this symbol
+            z_entry = result.dynamic_entry_threshold
+
             # Check if this is an entry candidate
-            # Entry candidate: |Z| >= entry_threshold AND |Z| <= sl_threshold
+            # Entry candidate: |Z| >= dynamic_entry_threshold AND |Z| <= sl_threshold
             is_entry_candidate = (
                 not np.isnan(z) and abs(z) >= z_entry and abs(z) <= z_sl
             )
@@ -390,7 +402,7 @@ class ScreenerService:
             if self._hurst_filter_service.is_mean_reverting(hurst):
                 filtered[symbol] = result
                 self._logger.info(
-                    f"✅ {symbol}: Z={z:.2f}, Hurst={hurst:.4f} < {self._hurst_filter_service.threshold} (mean-reverting)"
+                    f"✅ {symbol}: Z={z:.2f} (threshold={z_entry:.2f}), Hurst={hurst:.4f} < {self._hurst_filter_service.threshold} (mean-reverting)"
                 )
             else:
                 skipped.append(f"{symbol} (Z={z:.2f}, H={hurst:.4f})")

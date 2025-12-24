@@ -70,10 +70,10 @@ class CorrelationService:
         Returns:
             Dictionary mapping symbol -> CorrelationResult.
         """
-        self._logger.info(
-            f"Calculating correlation for {len(ohlcv)} symbols "
-            f"against {primary_symbol} (window={self._lookback_window} candles)"
-        )
+        # self._logger.debug(
+        #     f"Calculating correlation for {len(ohlcv)} symbols "
+        #     f"against {primary_symbol} (window={self._lookback_window} candles)"
+        # )
 
         # Step 1: Preprocess - calculate log returns
         log_returns = self._preprocess_log_returns(ohlcv)
@@ -88,7 +88,6 @@ class CorrelationService:
             primary_symbol=primary_symbol,
         )
 
-        self._logger.info(f"Calculated correlation for {len(results)} symbols")
         return results
 
     def _preprocess_log_returns(

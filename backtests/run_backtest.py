@@ -48,7 +48,7 @@ class BacktestConfig:
     max_spreads: int = 3  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
-    z_entry_threshold: float = 2.1  # |Z| >= this to enter
+    z_entry_threshold: float = 2.0  # |Z| >= this to enter
     z_tp_threshold: float = 0.25  # |Z| <= this to take profit
     z_sl_threshold: float = 4.0  # |Z| >= this to stop loss
     min_correlation: float = 0.8  # Minimum correlation to trade
@@ -615,11 +615,11 @@ class StatArbBacktest:
         filtered_results: Dict[str, ZScoreResult],
         correlation_results: Dict,
     ) -> None:
-        """Check for new entry signals."""
+        """Check for new entry signals using dynamic threshold."""
         if len(self.positions) >= self.config.max_spreads:
             return  # Max positions reached
 
-        # entry_candidates list of (z_abs, symbol, side, z_result)
+        # entry_candidates list of (z_abs, symbol, side, z_result, dyn_threshold)
         entry_candidates = []
 
         for symbol, z_result in filtered_results.items():
@@ -642,20 +642,23 @@ class StatArbBacktest:
             if np.isnan(z):
                 continue
 
-            # Check if signal is valid entry candidate
-            # Entry: |Z| >= entry_threshold AND |Z| <= sl_threshold
+            # Use dynamic threshold for this symbol (adaptive upper bound)
+            dyn_threshold = z_result.dynamic_entry_threshold
+
+            # Check if signal is valid entry candidate using dynamic threshold
+            # Entry: |Z| >= dynamic_threshold AND |Z| <= sl_threshold
             if (
-                abs(z) >= self.config.z_entry_threshold
+                abs(z) >= dyn_threshold
                 and abs(z) <= self.config.z_sl_threshold
             ):
-                side = "short" if z >= self.config.z_entry_threshold else "long"
-                entry_candidates.append((abs(z), symbol, side, z_result))
+                side = "short" if z >= dyn_threshold else "long"
+                entry_candidates.append((abs(z), symbol, side, z_result, dyn_threshold))
 
         # Sort candidates by Z-score strength (highest first)
         entry_candidates.sort(key=lambda x: x[0], reverse=True)
 
         # Open positions for valid candidates up to max_spreads
-        for _, symbol, side, z_result in entry_candidates:
+        for _, symbol, side, z_result, dyn_threshold in entry_candidates:
             if len(self.positions) >= self.config.max_spreads:
                 break
 
@@ -672,6 +675,7 @@ class StatArbBacktest:
                 current_time=current_time,
                 current_bar_idx=current_bar_idx,
                 window_data=window_data,
+                dynamic_threshold=dyn_threshold,
             )
 
     async def _open_position(
@@ -682,6 +686,7 @@ class StatArbBacktest:
         current_time: datetime,
         current_bar_idx: int,
         window_data: Dict[str, pd.DataFrame],
+        dynamic_threshold: float,
     ) -> None:
         """
         Open a spread position (two legs).
@@ -728,7 +733,7 @@ class StatArbBacktest:
 
         print(
             f"OPEN {side.upper()} SPREAD {symbol} | "
-            f"Z={z_result.current_z_score:.2f} β={beta:.3f} | "
+            f"Z={z_result.current_z_score:.2f} (th={dynamic_threshold:.2f}) β={beta:.3f} | "
             f"Coin: ${coin_size:.2f} @ {coin_price:.4f} | "
             f"Hedge: ${primary_size:.2f} @ {primary_price:.4f}"
         )
@@ -1432,7 +1437,7 @@ Examples:
 
         # Plot if not disabled
         if not args.no_plot:
-            plot_results(result, save_path="backtest_results.png")
+            plot_results(result, save_path=f"backtests/results/{start_date.strftime("%Y-%m-%d")}-{end_date.strftime("%Y-%m-%d")}.png")
 
     finally:
         await exchange.disconnect()

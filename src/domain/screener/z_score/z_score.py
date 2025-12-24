@@ -31,6 +31,7 @@ class ZScoreResult:
     current_z_score: float
     current_beta: float
     current_correlation: float
+    dynamic_entry_threshold: float  # Adaptive threshold based on 97th percentile
 
 
 class ZScoreService:
@@ -52,6 +53,7 @@ class ZScoreService:
         z_entry_threshold: float = 2.0,
         z_tp_threshold: float = 0.0,
         z_sl_threshold: float = 4.5,
+        adaptive_percentile: int = 97,
     ):
         """
         Initialize ZScoreService.
@@ -60,6 +62,10 @@ class ZScoreService:
             logger: Application logger.
             lookback_window_days: Number of days for lookback window.
             timeframe: Candle timeframe (e.g., "15m", "1h").
+            z_entry_threshold: Minimum Z-score threshold for entry (floor for adaptive).
+            z_tp_threshold: Z-score threshold for take profit.
+            z_sl_threshold: Z-score threshold for stop loss.
+            adaptive_percentile: Percentile for adaptive threshold calculation (default 97).
         """
         self._logger = logger
         self._lookback_window_days = lookback_window_days
@@ -70,6 +76,7 @@ class ZScoreService:
         self._z_entry_threshold = z_entry_threshold
         self._z_tp_threshold = z_tp_threshold
         self._z_sl_threshold = z_sl_threshold
+        self._adaptive_percentile = adaptive_percentile
 
     @property
     def z_entry_threshold(self) -> float:
@@ -108,10 +115,10 @@ class ZScoreService:
         Returns:
             Dictionary mapping symbol -> ZScoreResult.
         """
-        self._logger.info(
-            f"Calculating z-score for {len(correlation_results)} symbols "
-            f"(window={self._lookback_window} candles)"
-        )
+        # self._logger.debug(
+        #     f"Calculating z-score for {len(correlation_results)} symbols "
+        #     f"(window={self._lookback_window} candles)"
+        # )
 
         # Step 1: Extract log prices from OHLCV data
         log_prices = self._extract_log_prices(ohlcv)
@@ -152,6 +159,9 @@ class ZScoreService:
             std_spread = spread_series.rolling(window=self._lookback_window).std()
             z_score_series = (spread_series - mean_spread) / std_spread
 
+            # Calculate dynamic entry threshold based on historical z-score distribution
+            dynamic_threshold = self._calculate_dynamic_threshold(z_score_series)
+
             # Get current (latest) values
             current_spread = self._get_latest_value(spread_series)
             current_z_score = self._get_latest_value(z_score_series)
@@ -166,14 +176,15 @@ class ZScoreService:
                 current_z_score=current_z_score,
                 current_beta=current_beta,
                 current_correlation=current_correlation,
+                dynamic_entry_threshold=dynamic_threshold,
             )
 
             self._logger.debug(
                 f"{symbol}: z-score={current_z_score:.4f}, "
-                f"beta={current_beta:.4f}, corr={current_correlation:.4f}"
+                f"beta={current_beta:.4f}, corr={current_correlation:.4f}, "
+                f"dyn_threshold={dynamic_threshold:.2f}"
             )
 
-        self._logger.info(f"Calculated z-score for {len(results)} symbols")
         return results
 
     def _extract_log_prices(
@@ -234,6 +245,44 @@ class ZScoreService:
         """
         valid = series.dropna()
         return valid.iloc[-1] if len(valid) > 0 else np.nan
+
+    def _calculate_dynamic_threshold(self, z_score_series: pd.Series) -> float:
+        """
+        Calculate dynamic entry threshold based on historical Z-score distribution.
+
+        Algorithm "Adaptive Upper Bound":
+        - Take absolute Z-scores from the lookback window
+        - Calculate the 97th percentile (value exceeded only 3% of the time)
+        - Return max(min_threshold, percentile_97)
+
+        This ensures we only enter when Z-score is truly extreme for THIS pair,
+        not just above a static threshold that may be too low for volatile pairs.
+
+        Args:
+            z_score_series: Historical Z-score series.
+
+        Returns:
+            Dynamic threshold = max(z_entry_threshold, percentile_97)
+        """
+        # Use the lookback window for threshold calculation
+        recent_z = z_score_series.tail(self._lookback_window).dropna()
+
+        if len(recent_z) < 50:
+            self._logger.error(
+                f"Insufficient data for dynamic threshold calculation, "
+                f"using static threshold: {self._z_entry_threshold}"
+            )
+            # Not enough data, use static threshold
+            return self._z_entry_threshold
+
+        # Calculate percentile of absolute Z-scores
+        abs_z = recent_z.abs()
+        hist_threshold = float(np.percentile(abs_z, self._adaptive_percentile))
+
+        # Floor at minimum threshold (statistical significance)
+        dynamic_threshold = max(self._z_entry_threshold, hist_threshold)
+
+        return dynamic_threshold
 
     def format_results(
         self,

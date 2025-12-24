@@ -127,7 +127,7 @@ class AsyncDataLoaderService:
                                 ]
 
             except Exception as e:
-                self._logger.warning(
+                self._logger.error(
                     f"Error loading from cache for {symbol}: {e}, "
                     f"falling back to exchange"
                 )

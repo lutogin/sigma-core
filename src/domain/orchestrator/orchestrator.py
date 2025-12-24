@@ -306,10 +306,13 @@ class OrchestratorService:
         Check entry conditions for new positions.
 
         Entry conditions:
-        - |Z| >= z_entry (enough deviation for mean reversion)
+        - |Z| >= dynamic_entry_threshold (adaptive per-symbol threshold)
         - |Z| < z_sl (not too extreme)
         - Symbol not already in position
         - Symbol not in cooldown
+
+        The dynamic_entry_threshold is calculated as:
+        max(z_entry_threshold, percentile_97 of historical |Z|)
 
         Emits PendingEntrySignalEvent for EntryObserver to monitor.
         The EntryObserver will monitor in real-time and emit EntrySignalEvent
@@ -329,8 +332,11 @@ class OrchestratorService:
             if np.isnan(z):
                 continue
 
-            # Check entry condition: |Z| >= entry AND |Z| < sl
-            if not (abs(z) >= z_entry and abs(z) < z_sl):
+            # Use dynamic threshold for this symbol (adaptive upper bound)
+            dynamic_threshold = result.dynamic_entry_threshold
+
+            # Check entry condition: |Z| >= dynamic_threshold AND |Z| < sl
+            if not (abs(z) >= dynamic_threshold and abs(z) < z_sl):
                 continue
 
             # Check if already have position for this symbol
@@ -360,6 +366,7 @@ class OrchestratorService:
             spread_std = self._get_spread_std(result)
 
             # Create PendingEntrySignalEvent for trailing entry monitoring
+            # Pass dynamic threshold so EntryObserver uses the same threshold
             event = PendingEntrySignalEvent(
                 coin_symbol=symbol,
                 primary_symbol=self._primary_pair,
@@ -372,7 +379,7 @@ class OrchestratorService:
                 spread_std=spread_std,
                 coin_price=coin_price,
                 primary_price=primary_price,
-                z_entry_threshold=z_entry,
+                z_entry_threshold=dynamic_threshold,  # Use dynamic threshold
                 z_tp_threshold=z_tp,
                 z_sl_threshold=z_sl,
             )
@@ -383,6 +390,7 @@ class OrchestratorService:
             self._logger.info(
                 f"👀 Emitted PENDING_ENTRY_SIGNAL: {symbol} "
                 f"({spread_side.value.upper()}) Z={z:.2f} | "
+                f"dyn_threshold={dynamic_threshold:.2f} | "
                 f"EntryObserver will monitor for reversal"
             )
 

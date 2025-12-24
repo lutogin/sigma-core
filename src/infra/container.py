@@ -347,6 +347,10 @@ class Container:
                 logger=self.logger,
                 lookback_window_days=self._settings.LOOKBACK_WINDOW_DAYS,
                 timeframe=self._settings.TIMEFRAME,
+                z_entry_threshold=self._settings.Z_ENTRY_THRESHOLD,
+                z_tp_threshold=self._settings.Z_TP_THRESHOLD,
+                z_sl_threshold=self._settings.Z_SL_THRESHOLD,
+                adaptive_percentile=self._settings.ADAPTIVE_PERCENTILE,
             )
         return self._instances["z_score_service"]
 

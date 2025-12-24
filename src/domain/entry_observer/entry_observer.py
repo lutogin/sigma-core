@@ -344,8 +344,12 @@ class EntryObserverService:
         Implements the trailing entry algorithm:
         1. Apply debounce (min 1 second between checks)
         2. Calculate live Z-score
-        3. Check conditions (timeout, false alarm, SL, reversal)
-        4. Update max_z or execute entry
+        3. Check conditions in order:
+           a. FIRST: Check for reversal (pullback from max) - ENTRY
+           b. Check timeout
+           c. Check false alarm (Z returned below entry threshold)
+           d. Check SL hit
+           e. Update max_z if still widening
         """
         now = time.time()
 
@@ -364,7 +368,22 @@ class EntryObserverService:
         live_z = watch.current_z_score
         abs_z = abs(live_z)
 
-        # 1. Check timeout (45 minutes)
+        # Use dynamic threshold from the watch (set from PendingEntrySignalEvent)
+        z_entry = watch.z_entry_threshold
+        z_sl = watch.z_sl_threshold
+
+        # 1. FIRST: Check for reversal (pullback from max) - ENTRY CONDITION
+        # This must be checked first to capture the entry moment
+        if abs_z <= watch.max_z - self._pullback:
+            self._logger.info(
+                f"✅ {coin} reversal confirmed! | "
+                f"peak={watch.max_z:.2f}, current={abs_z:.2f}, "
+                f"pullback={watch.max_z - abs_z:.2f}"
+            )
+            await self._execute_entry(watch, live_z)
+            return
+
+        # 2. Check timeout (45 minutes)
         if watch.watch_duration_seconds > self._timeout:
             self._logger.info(
                 f"⏰ {coin} watch timeout after {watch.watch_duration_minutes:.1f}min | "
@@ -373,41 +392,31 @@ class EntryObserverService:
             await self._cancel_watch(coin, WatchCancelReason.TIMEOUT, live_z)
             return
 
-        # 2. Check false alarm - Z returned to normal
-        if abs_z < self._z_entry:
+        # 3. Check false alarm - Z returned below dynamic entry threshold
+        if abs_z < z_entry:
             self._logger.info(
                 f"❌ {coin} false alarm - Z returned to normal | "
-                f"max_z={watch.max_z:.2f}, final_z={live_z:.2f}"
+                f"max_z={watch.max_z:.2f}, final_z={live_z:.2f}, threshold={z_entry:.2f}"
             )
             await self._cancel_watch(coin, WatchCancelReason.FALSE_ALARM, live_z)
             return
 
-        # 3. Check SL hit - Z exceeded stop-loss
-        if abs_z >= self._z_sl:
+        # 4. Check SL hit - Z exceeded stop-loss
+        if abs_z >= z_sl:
             self._logger.info(
                 f"🛑 {coin} SL hit - Z exceeded threshold | "
-                f"max_z={watch.max_z:.2f}, final_z={live_z:.2f}, sl={self._z_sl}"
+                f"max_z={watch.max_z:.2f}, final_z={live_z:.2f}, sl={z_sl}"
             )
             await self._cancel_watch(coin, WatchCancelReason.SL_HIT, live_z)
             return
 
-        # 4. Check if spread is still widening (update max)
+        # 5. Check if spread is still widening (update max)
         if abs_z > watch.max_z:
             watch.max_z = abs_z
             self._logger.debug(
                 f"📈 {coin} new peak Z: {abs_z:.2f} | "
                 f"pullback_target={abs_z - self._pullback:.2f}"
             )
-            return
-
-        # 5. Check for reversal (pullback from max)
-        if abs_z <= watch.max_z - self._pullback:
-            self._logger.info(
-                f"✅ {coin} reversal confirmed! | "
-                f"peak={watch.max_z:.2f}, current={abs_z:.2f}, "
-                f"pullback={watch.max_z - abs_z:.2f}"
-            )
-            await self._execute_entry(watch, live_z)
 
     # =========================================================================
     # Entry Execution
