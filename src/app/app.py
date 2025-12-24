@@ -51,6 +51,10 @@ class Application:
         # Get logger from container (triggers logger setup)
         logger = self._container.logger
         logger.info("Initializing scanner application...")
+
+        # Log trading configuration
+        self._container.settings.log_trading_config(logger)
+
         logger.info("Application initialized successfully")
         return self
 

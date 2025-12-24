@@ -44,11 +44,11 @@ class BacktestConfig:
 
     # Capital
     initial_balance: float = 10_000.0  # Starting capital in USDT
-    position_size_pct: float = 0.3  # 3% of capital per spread
+    position_size_pct: float = 0.4  # 3% of capital per spread
     max_spreads: int = 3  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
-    z_entry_threshold: float = 2.0  # |Z| >= this to enter
+    z_entry_threshold: float = 2.1  # |Z| >= this to enter
     z_tp_threshold: float = 0.25  # |Z| <= this to take profit
     z_sl_threshold: float = 4.0  # |Z| >= this to stop loss
     min_correlation: float = 0.8  # Minimum correlation to trade
@@ -59,7 +59,7 @@ class BacktestConfig:
     use_limit_orders: bool = True  # Use maker fees (limit orders)
 
     # Risk
-    leverage: int = 3  # Leverage multiplier
+    leverage: int = 5  # Leverage multiplier
 
     # Cooldown after adverse exits (SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
     # 2 bars = 30 minutes for 15m timeframe

@@ -225,6 +225,48 @@ class Settings:
             },
         }
 
+    def log_trading_config(self, logger) -> None:
+        """Log trading configuration at startup."""
+        logger.info("=" * 60)
+        logger.info("📋 TRADING CONFIGURATION")
+        logger.info("=" * 60)
+        logger.info(f"ENV: {self.ENV}")
+        logger.info(f"TIMEFRAME: {self.TIMEFRAME}")
+        logger.info(f"PRIMARY_PAIR: {self.PRIMARY_PAIR}")
+        logger.info(f"CONSISTENT_PAIRS: {len(self.CONSISTENT_PAIRS)} pairs")
+        logger.info("-" * 40)
+        logger.info("📊 Screener Settings:")
+        logger.info(f"  LOOKBACK_WINDOW_DAYS: {self.LOOKBACK_WINDOW_DAYS}")
+        logger.info(f"  MIN_CORRELATION: {self.MIN_CORRELATION}")
+        logger.info("-" * 40)
+        logger.info("📈 Z-Score Settings:")
+        logger.info(f"  Z_ENTRY_THRESHOLD: {self.Z_ENTRY_THRESHOLD}")
+        logger.info(f"  Z_TP_THRESHOLD: {self.Z_TP_THRESHOLD}")
+        logger.info(f"  Z_SL_THRESHOLD: {self.Z_SL_THRESHOLD}")
+        logger.info(f"  ADAPTIVE_PERCENTILE: {self.ADAPTIVE_PERCENTILE}")
+        logger.info(f"  DYNAMIC_THRESHOLD_WINDOW_BARS: {self.DYNAMIC_THRESHOLD_WINDOW_BARS}")
+        logger.info(f"  THRESHOLD_EMA_ALPHA: {self.THRESHOLD_EMA_ALPHA}")
+        logger.info("-" * 40)
+        logger.info("📉 Beta Settings:")
+        logger.info(f"  MIN_BETA: {self.MIN_BETA}")
+        logger.info(f"  MAX_BETA: {self.MAX_BETA}")
+        logger.info("-" * 40)
+        logger.info("🔬 Hurst Settings:")
+        logger.info(f"  HURST_THRESHOLD: {self.HURST_THRESHOLD}")
+        logger.info(f"  HURST_LOOKBACK_CANDLES: {self.HURST_LOOKBACK_CANDLES}")
+        logger.info("-" * 40)
+        logger.info("🎯 Trailing Entry Settings:")
+        logger.info(f"  TRAILING_ENTRY_PULLBACK: {self.TRAILING_ENTRY_PULLBACK}")
+        logger.info(f"  TRAILING_ENTRY_TIMEOUT_MINUTES: {self.TRAILING_ENTRY_TIMEOUT_MINUTES}")
+        logger.info("-" * 40)
+        logger.info("💰 Position Settings:")
+        logger.info(f"  POSITION_SIZE_USDT: {self.POSITION_SIZE_USDT}")
+        logger.info(f"  MAX_OPEN_SPREADS: {self.MAX_OPEN_SPREADS}")
+        logger.info(f"  COOLDOWN_BARS: {self.COOLDOWN_BARS}")
+        logger.info(f"  MAX_POSITION_BARS: {self.MAX_POSITION_BARS}")
+        logger.info(f"  ALLOW_TRADING: {self.ALLOW_TRADING}")
+        logger.info("=" * 60)
+
 
 def load_settings(env_file: Optional[Union[str, Path]] = None) -> Settings:
     """
