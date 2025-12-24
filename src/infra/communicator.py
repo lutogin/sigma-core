@@ -59,6 +59,7 @@ class CommunicatorService:
         screener_service: "ScreenerService",
         binance_client: "BinanceClient",
         logger: Any,
+        entry_observer_service: Optional[Any] = None,
     ):
         """
         Initialize communicator service.
@@ -69,12 +70,14 @@ class CommunicatorService:
             screener_service: ScreenerService instance for accessing scan results.
             binance_client: BinanceClient instance for accessing positions.
             logger: Logger instance.
+            entry_observer_service: Optional EntryObserverService for watch status.
         """
         self._event_emitter = event_emitter
         self._telegram = telegram_service
         self._screener = screener_service
         self._binance = binance_client
         self._logger = logger
+        self._entry_observer = entry_observer_service
         self._started = False
 
     def start(self) -> None:
@@ -237,6 +240,95 @@ class CommunicatorService:
             await self._telegram.send_message_markdown(
                 f"❌ *Error closing positions*\n\n`{str(e)}`"
             )
+
+    async def send_entry_observer(self) -> None:
+        """
+        Send Entry Observer status to Telegram.
+
+        Shows all active watches with their current state:
+        - Symbol, side, status
+        - Current Z-score, max Z reached
+        - Pullback progress
+        - Watch duration
+        """
+        try:
+            if self._entry_observer is None:
+                await self._telegram.send_message_markdown(
+                    "❌ *Entry Observer not available*\n\n"
+                    "_Service not initialized._"
+                )
+                return
+
+            watches = self._entry_observer.get_active_watches()
+
+            if not watches:
+                await self._telegram.send_message_markdown(
+                    "👀 *Entry Observer*\n\n"
+                    "_No active watches._\n\n"
+                    "Watches are created when Z-score crosses entry threshold."
+                )
+                return
+
+            # Format the results
+            message = self._format_entry_observer(watches)
+            await self._telegram.send_message_markdown(message)
+            self._logger.debug(f"Sent entry observer status ({len(watches)} watches)")
+
+        except Exception as e:
+            self._logger.error(f"Failed to send entry observer status: {e}")
+            await self._telegram.send_message_markdown(
+                f"❌ *Error fetching entry observer*\n\n`{str(e)}`"
+            )
+
+    def _format_entry_observer(self, watches: dict) -> str:
+        """
+        Format Entry Observer watches for Telegram display.
+
+        Args:
+            watches: Dict of coin_symbol -> WatchCandidate.
+
+        Returns:
+            Formatted markdown string.
+        """
+        lines = [
+            f"👀 *Entry Observer* ({len(watches)} active)",
+            "",
+        ]
+
+        for coin, watch in watches.items():
+            side_emoji = "📈" if watch.spread_side == "long" else "📉"
+            side_text = watch.spread_side.upper()
+
+            current_z = watch.current_z_score
+            abs_z = abs(current_z)
+            pullback_done = watch.max_z - abs_z
+            pullback_target = 0.3  # Default pullback threshold
+
+            # Progress bar for pullback
+            progress_pct = min(pullback_done / pullback_target * 100, 100) if pullback_target > 0 else 0
+            progress_bar = self._make_progress_bar(progress_pct)
+
+            symbol_short = coin.replace("/USDT:USDT", "")
+
+            lines.extend([
+                f"{side_emoji} *{symbol_short}* ({side_text})",
+                f"├ Z: `{current_z:.3f}` | Max: `{watch.max_z:.3f}`",
+                f"├ Pullback: `{pullback_done:.3f}` / `{pullback_target:.2f}` {progress_bar}",
+                f"├ β: `{watch.beta:.3f}` | ρ: `{watch.correlation:.3f}` | H: `{watch.hurst:.3f}`",
+                f"├ Prices: COIN `{watch.coin_price:.4f}` | ETH `{watch.primary_price:.4f}`",
+                f"└ Duration: `{watch.watch_duration_minutes:.1f}` min",
+                "",
+            ])
+
+        lines.append("_Watching for pullback confirmation..._")
+
+        return "\n".join(lines)
+
+    def _make_progress_bar(self, pct: float, width: int = 10) -> str:
+        """Create a simple text progress bar."""
+        filled = int(pct / 100 * width)
+        empty = width - filled
+        return f"[{'█' * filled}{'░' * empty}]"
 
     def _format_opportunities(self, state) -> str:
         """

@@ -15,6 +15,7 @@ class MenuButtons:
     """Menu button labels - matches the TypeScript reference."""
 
     POSITIONS: str = "📈 Positions"
+    ENTRY_UBSERVER: str = "📝 Entry Ubserver"
     OPPORTUNITIES: str = "🔄 Opportunities"
     CLOSE_ALL: str = "⚠️ Close All"
     CLOSE_SYMBOL: str = "🎯 Close Symbol"
@@ -27,6 +28,7 @@ class MenuButtons:
         """Return all button labels."""
         return [
             cls.POSITIONS,
+            cls.ENTRY_UBSERVER,
             cls.OPPORTUNITIES,
             cls.CLOSE_ALL,
             cls.CLOSE_SYMBOL,
@@ -47,6 +49,7 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [
                 KeyboardButton(text=MenuButtons.POSITIONS),
+                KeyboardButton(text=MenuButtons.ENTRY_UBSERVER),
                 KeyboardButton(text=MenuButtons.OPPORTUNITIES),
             ],
             [

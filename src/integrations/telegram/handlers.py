@@ -243,6 +243,14 @@ class TelegramHandlers:
         # Stub response
         self.logger.info("Positions button clicked (stub)")
 
+    async def handle_entry_observer(self, message: Message) -> None:
+        """Handle Entry Observer button click."""
+        if not self.is_owner(message.chat.id):
+            return
+
+        await self._invoke_callback("get_entry_observer")
+        self.logger.info("Entry Observer button clicked")
+
     async def handle_opportunities(self, message: Message) -> None:
         """Handle Opportunities button click."""
         if not self.is_owner(message.chat.id):
@@ -484,6 +492,10 @@ def setup_handlers(handlers: TelegramHandlers) -> Router:
     router.message.register(
         handlers.handle_positions,
         F.text == MenuButtons.POSITIONS,
+    )
+    router.message.register(
+        handlers.handle_entry_observer,
+        F.text == MenuButtons.ENTRY_UBSERVER,
     )
     router.message.register(
         handlers.handle_opportunities,

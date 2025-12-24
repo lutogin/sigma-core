@@ -115,6 +115,10 @@ class Application:
                         communicator_service.send_positions
                     )
                     telegram_service.register_callback(
+                        "get_entry_observer",
+                        communicator_service.send_entry_observer
+                    )
+                    telegram_service.register_callback(
                         "get_balances",
                         communicator_service.send_balance
                     )

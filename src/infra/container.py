@@ -211,6 +211,7 @@ class Container:
                 screener_service=self.screener_service,
                 binance_client=self.exchange_client,
                 logger=self.logger,
+                entry_observer_service=self.entry_observer_service,
             )
         return self._instances["communicator_service"]
 
