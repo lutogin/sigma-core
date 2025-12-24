@@ -268,7 +268,7 @@ class ZScoreService:
         recent_z = z_score_series.tail(self._lookback_window).dropna()
 
         if len(recent_z) < 50:
-            self._logger.warn(
+            self._logger.warning(
                 f"Insufficient data for dynamic threshold calculation, "
                 f"using static threshold: {self._z_entry_threshold}"
             )
