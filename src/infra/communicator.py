@@ -402,16 +402,19 @@ class CommunicatorService:
 
         # Format as compact table (Telegram has message limits)
         lines.append("```")
-        lines.append(f"{'Sym':<6} {'Z':>5} {'Th':>4} {'H':>4} {'Signal':<10}")
-        lines.append("-" * 32)
+        lines.append(f"{'Sym':<6} {'Z':>5} {'Th':>4} {'β':>4} {'H':>4} {'':>2}")
+        lines.append("-" * 30)
 
         for row in data[:15]:  # Limit to 15 rows for space
             z_str = f"{row['z']:.2f}" if not np.isnan(row['z']) else "N/A"
             th_str = f"{row['dyn_th']:.1f}"
+            beta_str = f"{row['beta']:.1f}" if not np.isnan(row['beta']) else "—"
             h_str = f"{row['hurst']:.2f}" if row['hurst'] is not None else "—"
+            # Signal as emoji only
+            sig = row['signal'].split()[0] if row['signal'] != "—" else "—"
 
             lines.append(
-                f"{row['symbol']:<6} {z_str:>5} {th_str:>4} {h_str:>4} {row['signal']:<10}"
+                f"{row['symbol']:<6} {z_str:>5} {th_str:>4} {beta_str:>4} {h_str:>4} {sig:>2}"
             )
 
         lines.append("```")
