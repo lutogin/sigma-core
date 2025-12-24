@@ -54,7 +54,7 @@ class ZScoreService:
         z_tp_threshold: float = 0.0,
         z_sl_threshold: float = 4.5,
         adaptive_percentile: int = 97,
-        dynamic_threshold_window: int = 576,
+        dynamic_threshold_window: int = 440,
     ):
         """
         Initialize ZScoreService.
@@ -267,7 +267,7 @@ class ZScoreService:
         Returns:
             Dynamic threshold = max(z_entry_threshold, percentile_97)
         """
-        # Use the dynamic threshold window (576 candles by default)
+        # Use the dynamic threshold window (440 candles by default)
         recent_z = z_score_series.tail(self._dynamic_threshold_window).dropna()
 
         if len(recent_z) < 50:
