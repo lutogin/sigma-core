@@ -212,6 +212,7 @@ class Container:
                 binance_client=self.exchange_client,
                 logger=self.logger,
                 entry_observer_service=self.entry_observer_service,
+                exit_observer_service=self.exit_observer_service,
             )
         return self._instances["communicator_service"]
 
@@ -286,6 +287,23 @@ class Container:
                 max_watches=self._settings.MAX_OPEN_SPREADS,
             )
         return self._instances["entry_observer_service"]
+
+    @property
+    def exit_observer_service(self):
+        """Get Exit Observer Service for real-time TP/SL monitoring."""
+        self._check_initialized()
+        if "exit_observer_service" not in self._instances:
+            from src.domain.exit_observer import ExitObserverService
+
+            self._instances["exit_observer_service"] = ExitObserverService(
+                event_emitter=self.event_emitter,
+                exchange_client=self.exchange_client,
+                position_state_service=self.position_state_service,
+                logger=self.logger,
+                primary_symbol=self._settings.PRIMARY_PAIR,
+                debounce_seconds=1.0,
+            )
+        return self._instances["exit_observer_service"]
 
     @property
     def trading_service(self):
@@ -417,6 +435,10 @@ class Container:
         # Stop entry observer (cancel WebSocket tasks)
         if "entry_observer_service" in self._instances:
             await self._instances["entry_observer_service"].stop()
+
+        # Stop exit observer (cancel WebSocket tasks)
+        if "exit_observer_service" in self._instances:
+            await self._instances["exit_observer_service"].stop()
 
         # Stop trading service
         if "trading_service" in self._instances:

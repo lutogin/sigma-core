@@ -164,6 +164,10 @@ class EntrySignalEvent(BaseEvent):
     # Hurst exponent (mean-reversion quality)
     hurst: float = 0.0
 
+    # Spread statistics for real-time Z calculation
+    spread_mean: float = 0.0
+    spread_std: float = 0.0
+
     # Current prices (for reference)
     coin_price: float = 0.0
     primary_price: float = 0.0
@@ -183,6 +187,8 @@ class EntrySignalEvent(BaseEvent):
                 "beta": self.beta,
                 "correlation": self.correlation,
                 "hurst": self.hurst,
+                "spread_mean": self.spread_mean,
+                "spread_std": self.spread_std,
                 "coin_price": self.coin_price,
                 "primary_price": self.primary_price,
                 "z_tp_threshold": self.z_tp_threshold,
@@ -544,6 +550,10 @@ class TradeOpenedEvent(BaseEvent):
     correlation: float = 0.0
     hurst: float = 0.0
 
+    # Spread statistics for real-time Z calculation
+    spread_mean: float = 0.0
+    spread_std: float = 0.0
+
     # Position sizes
     coin_size_usdt: float = 0.0
     primary_size_usdt: float = 0.0
@@ -571,6 +581,8 @@ class TradeOpenedEvent(BaseEvent):
                 "beta": self.beta,
                 "correlation": self.correlation,
                 "hurst": self.hurst,
+                "spread_mean": self.spread_mean,
+                "spread_std": self.spread_std,
                 "coin_size_usdt": self.coin_size_usdt,
                 "primary_size_usdt": self.primary_size_usdt,
                 "coin_price": self.coin_price,

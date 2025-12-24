@@ -385,6 +385,8 @@ class TradingService:
                     primary_entry_price=primary_price,
                     z_tp_threshold=event.z_tp_threshold,
                     z_sl_threshold=event.z_sl_threshold,
+                    spread_mean=event.spread_mean,
+                    spread_std=event.spread_std,
                     leverage=self._leverage,
                 )
 
@@ -404,6 +406,8 @@ class TradingService:
                         beta=event.beta,
                         correlation=event.correlation,
                         hurst=event.hurst,
+                        spread_mean=event.spread_mean,
+                        spread_std=event.spread_std,
                         coin_size_usdt=coin_size_usdt,
                         primary_size_usdt=primary_size_usdt,
                         coin_price=coin_price,

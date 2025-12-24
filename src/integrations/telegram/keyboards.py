@@ -15,7 +15,8 @@ class MenuButtons:
     """Menu button labels - matches the TypeScript reference."""
 
     POSITIONS: str = "📈 Positions"
-    ENTRY_UBSERVER: str = "📝 Entry Ubserver"
+    ENTRY_OBSERVER: str = "📝 Entry Observer"
+    EXIT_OBSERVER: str = "📝 Exit Observer"
     OPPORTUNITIES: str = "🔄 Opportunities"
     CLOSE_ALL: str = "⚠️ Close All"
     CLOSE_SYMBOL: str = "🎯 Close Symbol"
@@ -28,7 +29,8 @@ class MenuButtons:
         """Return all button labels."""
         return [
             cls.POSITIONS,
-            cls.ENTRY_UBSERVER,
+            cls.ENTRY_OBSERVER,
+            cls.EXIT_OBSERVER,
             cls.OPPORTUNITIES,
             cls.CLOSE_ALL,
             cls.CLOSE_SYMBOL,
@@ -49,12 +51,13 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [
                 KeyboardButton(text=MenuButtons.POSITIONS),
-                KeyboardButton(text=MenuButtons.ENTRY_UBSERVER),
+                KeyboardButton(text=MenuButtons.ENTRY_OBSERVER),
                 KeyboardButton(text=MenuButtons.OPPORTUNITIES),
             ],
             [
                 KeyboardButton(text=MenuButtons.CLOSE_ALL),
                 KeyboardButton(text=MenuButtons.CLOSE_SYMBOL),
+                KeyboardButton(text=MenuButtons.EXIT_OBSERVER),
             ],
             [
                 KeyboardButton(text=MenuButtons.STOP_TRADING),

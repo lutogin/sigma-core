@@ -104,6 +104,10 @@ class Application:
                 # Start trading service (subscribes to events)
                 await trading_service.start()
 
+                # Start exit observer service (real-time TP/SL monitoring)
+                exit_observer_service = self._container.exit_observer_service
+                await exit_observer_service.start()
+
                 # Start Telegram bot polling in background
                 if telegram_service.is_enabled():
                     await telegram_service.start_polling_background()
@@ -121,6 +125,10 @@ class Application:
                     telegram_service.register_callback(
                         "get_entry_observer",
                         communicator_service.send_entry_observer
+                    )
+                    telegram_service.register_callback(
+                        "get_exit_observer",
+                        communicator_service.send_exit_observer
                     )
                     telegram_service.register_callback(
                         "get_balances",
@@ -175,6 +183,13 @@ class Application:
                 await self._container.trading_service.stop()
         except Exception as e:
             logger.warning(f"Error stopping trading service: {e}")
+
+        # Stop exit observer service
+        try:
+            if self._container.has_instance("exit_observer_service"):
+                await self._container.exit_observer_service.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping exit observer service: {e}")
 
         # Stop communicator service
         try:

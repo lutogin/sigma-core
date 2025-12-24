@@ -46,6 +46,10 @@ class SpreadPosition:
     entry_correlation: float = 0.0
     entry_hurst: float = 0.0
 
+    # Spread statistics for real-time Z calculation
+    spread_mean: float = 0.0
+    spread_std: float = 0.0
+
     # Position sizing
     coin_size_usdt: float = 0.0  # COIN leg size in USDT
     primary_size_usdt: float = 0.0  # PRIMARY leg size in USDT

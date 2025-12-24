@@ -101,6 +101,8 @@ class PositionStateService:
         primary_entry_price: float,
         z_tp_threshold: float,
         z_sl_threshold: float,
+        spread_mean: float = 0.0,
+        spread_std: float = 0.0,
         coin_contracts: float = 0.0,
         primary_contracts: float = 0.0,
         leverage: int = 1,
@@ -122,6 +124,8 @@ class PositionStateService:
             primary_entry_price: PRIMARY entry price.
             z_tp_threshold: Take profit Z threshold.
             z_sl_threshold: Stop loss Z threshold.
+            spread_mean: Spread mean for real-time Z calculation.
+            spread_std: Spread std for real-time Z calculation.
             coin_contracts: COIN leg size in contracts.
             primary_contracts: PRIMARY leg size in contracts.
             leverage: Position leverage.
@@ -137,6 +141,8 @@ class PositionStateService:
             entry_beta=entry_beta,
             entry_correlation=entry_correlation,
             entry_hurst=entry_hurst,
+            spread_mean=spread_mean,
+            spread_std=spread_std,
             coin_size_usdt=coin_size_usdt,
             primary_size_usdt=primary_size_usdt,
             coin_contracts=coin_contracts,

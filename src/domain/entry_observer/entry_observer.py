@@ -457,6 +457,8 @@ class EntryObserverService:
             beta=watch.beta,
             correlation=watch.correlation,
             hurst=watch.hurst,
+            spread_mean=watch.spread_mean,
+            spread_std=watch.spread_std,
             coin_price=watch.coin_price,
             primary_price=watch.primary_price,
             z_tp_threshold=watch.z_tp_threshold,

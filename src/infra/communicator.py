@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 import numpy as np
 
 from src.domain.entry_observer.entry_observer import EntryObserverService
+from src.domain.exit_observer.exit_observer import ExitObserverService
 from src.infra.event_emitter.events import (
     EventType,
     ExitReason,
@@ -61,6 +62,7 @@ class CommunicatorService:
         binance_client: "BinanceClient",
         logger: Any,
         entry_observer_service: "EntryObserverService",
+        exit_observer_service: "ExitObserverService",
     ):
         """
         Initialize communicator service.
@@ -71,7 +73,8 @@ class CommunicatorService:
             screener_service: ScreenerService instance for accessing scan results.
             binance_client: BinanceClient instance for accessing positions.
             logger: Logger instance.
-            entry_observer_service: Optional EntryObserverService for watch status.
+            entry_observer_service: EntryObserverService for watch status.
+            exit_observer_service: ExitObserverService for exit monitoring status.
         """
         self._event_emitter = event_emitter
         self._telegram = telegram_service
@@ -79,6 +82,7 @@ class CommunicatorService:
         self._binance = binance_client
         self._logger = logger
         self._entry_observer = entry_observer_service
+        self._exit_observer = exit_observer_service
         self._started = False
 
     def start(self) -> None:
@@ -322,6 +326,98 @@ class CommunicatorService:
             ])
 
         lines.append("_Watching for pullback confirmation..._")
+
+        return "\n".join(lines)
+
+    async def send_exit_observer(self) -> None:
+        """
+        Send Exit Observer status to Telegram.
+
+        Shows all active exit watches with their current state:
+        - Symbol, side, status
+        - Entry Z-score, current Z-score
+        - TP/SL thresholds and progress
+        - Watch duration
+        """
+        try:
+            if self._exit_observer is None:
+                await self._telegram.send_message_markdown(
+                    "❌ *Exit Observer not available*\n\n"
+                    "_Service not initialized._"
+                )
+                return
+
+            watches = self._exit_observer.get_active_watches()
+
+            if not watches:
+                await self._telegram.send_message_markdown(
+                    "🎯 *Exit Observer*\n\n"
+                    "_No active exit monitors._\n\n"
+                    "Exit monitors are created when positions are opened."
+                )
+                return
+
+            # Format the results
+            message = self._format_exit_observer(watches)
+            await self._telegram.send_message_markdown(message)
+            self._logger.debug(f"Sent exit observer status ({len(watches)} watches)")
+
+        except Exception as e:
+            self._logger.error(f"Failed to send exit observer status: {e}")
+            await self._telegram.send_message_markdown(
+                f"❌ *Error fetching exit observer*\n\n`{str(e)}`"
+            )
+
+    def _format_exit_observer(self, watches: dict) -> str:
+        """
+        Format Exit Observer watches for Telegram display.
+
+        Args:
+            watches: Dict of coin_symbol -> ExitWatch.
+
+        Returns:
+            Formatted markdown string.
+        """
+        lines = [
+            f"🎯 *Exit Observer* ({len(watches)} active)",
+            "",
+        ]
+
+        for coin, watch in watches.items():
+            side_emoji = "📈" if watch.spread_side == "long" else "📉"
+            side_text = watch.spread_side.upper()
+
+            current_z = watch.current_z_score
+            abs_z = abs(current_z)
+
+            # Calculate progress to TP (how close to mean reversion)
+            # TP is when |Z| <= z_tp_threshold
+            entry_abs_z = abs(watch.entry_z_score)
+            tp_progress = 0.0
+            if entry_abs_z > watch.z_tp_threshold:
+                distance_to_tp = entry_abs_z - watch.z_tp_threshold
+                current_distance = abs_z - watch.z_tp_threshold
+                tp_progress = max(0, min(100, (1 - current_distance / distance_to_tp) * 100))
+
+            tp_bar = self._make_progress_bar(tp_progress)
+
+            # SL warning if getting close
+            sl_warning = "⚠️" if abs_z >= watch.z_sl_threshold * 0.8 else ""
+
+            symbol_short = coin.replace("/USDT:USDT", "")
+
+            lines.extend([
+                f"{side_emoji} *{symbol_short}* ({side_text}) {sl_warning}",
+                f"├ Entry Z: `{watch.entry_z_score:.3f}` → Current: `{current_z:.3f}`",
+                f"├ TP: `{watch.z_tp_threshold:.2f}` | SL: `{watch.z_sl_threshold:.2f}`",
+                f"├ Progress to TP: {tp_bar} `{tp_progress:.0f}%`",
+                f"├ β: `{watch.beta:.3f}` | ρ: `{watch.correlation:.3f}`",
+                f"├ Prices: COIN `{watch.coin_price:.4f}` | ETH `{watch.primary_price:.4f}`",
+                f"└ Duration: `{watch.watch_duration_minutes:.1f}` min",
+                "",
+            ])
+
+        lines.append("_Monitoring for TP/SL conditions..._")
 
         return "\n".join(lines)
 
