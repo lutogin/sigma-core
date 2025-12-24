@@ -8,6 +8,7 @@ Also provides formatted output for screener results on demand.
 from typing import TYPE_CHECKING, Any, Dict, Optional
 import numpy as np
 
+from src.domain.entry_observer.entry_observer import EntryObserverService
 from src.infra.event_emitter.events import (
     EventType,
     ExitReason,
@@ -59,7 +60,7 @@ class CommunicatorService:
         screener_service: "ScreenerService",
         binance_client: "BinanceClient",
         logger: Any,
-        entry_observer_service: Optional[Any] = None,
+        entry_observer_service: "EntryObserverService",
     ):
         """
         Initialize communicator service.
@@ -302,7 +303,7 @@ class CommunicatorService:
             current_z = watch.current_z_score
             abs_z = abs(current_z)
             pullback_done = watch.max_z - abs_z
-            pullback_target = 0.3  # Default pullback threshold
+            pullback_target = self._entry_observer.pullback  # Default pullback threshold
 
             # Progress bar for pullback
             progress_pct = min(pullback_done / pullback_target * 100, 100) if pullback_target > 0 else 0

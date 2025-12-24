@@ -26,6 +26,9 @@ class EventType(str, Enum):
     WATCH_CANCELLED = (
         "watch_cancelled"  # Watch cancelled without entry (timeout/false alarm)
     )
+    WATCH_TIMEOUT_COOLDOWN = (
+        "watch_timeout_cooldown"  # Watch timed out, apply cooldown to symbol
+    )
 
     # Position management (for future TradeExecutor)
     POSITION_OPENED = "position_opened"
@@ -321,6 +324,40 @@ class WatchCancelledEvent(BaseEvent):
                 "coin_symbol": self.coin_symbol,
                 "primary_symbol": self.primary_symbol,
                 "reason": self.reason.value,
+                "max_z_reached": self.max_z_reached,
+                "final_z": self.final_z,
+                "watch_duration_seconds": self.watch_duration_seconds,
+            }
+        )
+        return base
+
+
+@dataclass
+class WatchTimeoutCooldownEvent(BaseEvent):
+    """
+    Event when a watch times out and symbol should be placed in cooldown.
+
+    This prevents immediate re-entry after a failed trailing entry attempt.
+    The symbol will be blocked from new entries for the cooldown period.
+    """
+
+    event_type: EventType = field(default=EventType.WATCH_TIMEOUT_COOLDOWN, init=False)
+
+    # Symbol info
+    coin_symbol: str = ""
+    primary_symbol: str = ""
+
+    # Stats at timeout
+    max_z_reached: float = 0.0
+    final_z: float = 0.0
+    watch_duration_seconds: float = 0.0
+
+    def to_dict(self) -> dict:
+        base = super().to_dict()
+        base.update(
+            {
+                "coin_symbol": self.coin_symbol,
+                "primary_symbol": self.primary_symbol,
                 "max_z_reached": self.max_z_reached,
                 "final_z": self.final_z,
                 "watch_duration_seconds": self.watch_duration_seconds,

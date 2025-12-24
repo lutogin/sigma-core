@@ -46,8 +46,8 @@ def process_trailing_entry(ticker, live_z_score):
         elif current_abs_z < Z_ENTRY_THRESHOLD:
              del state[ticker]
 
-        # Г. Таймаут - 45 минут прошло без входа
-        elif watch_started > 45 minutes ago:
+        # Г. Таймаут - 60 минут прошло без входа
+        elif watch_started > 60 minutes ago:
              del state[ticker]
 ```
 
@@ -57,16 +57,16 @@ def process_trailing_entry(ticker, live_z_score):
 
 ```bash
 # Trailing Entry параметры
-TRAILING_ENTRY_PULLBACK=0.3              # Откат от максимума Z-score для входа (0.2-0.5)
-TRAILING_ENTRY_TIMEOUT_MINUTES=45        # Таймаут мониторинга (3 свечи по 15 мин)
+TRAILING_ENTRY_PULLBACK=0.2              # Откат от максимума Z-score для входа (0.2-0.5)
+TRAILING_ENTRY_TIMEOUT_MINUTES=60        # Таймаут мониторинга (3 свечи по 15 мин)
 ```
 
 ### Settings.py
 
 ```python
 # Trailing Entry settings
-TRAILING_ENTRY_PULLBACK: float = 0.3       # Откат от максимума
-TRAILING_ENTRY_TIMEOUT_MINUTES: int = 45   # Таймаут мониторинга
+TRAILING_ENTRY_PULLBACK: float = 0.2       # Откат от максимума
+TRAILING_ENTRY_TIMEOUT_MINUTES: int = 60   # Таймаут мониторинга
 ```
 
 ## 🏗️ Архитектура
@@ -92,7 +92,7 @@ class PendingEntrySignalEvent(BaseEvent):
 **WatchCancelledEvent** - отмена мониторинга:
 ```python
 class WatchCancelReason(str, Enum):
-    TIMEOUT = "timeout"                    # Таймаут 45 мин
+    TIMEOUT = "timeout"                    # Таймаут 60 мин
     RETURNED_TO_NORMAL = "returned_to_normal"  # Z вернулся < entry_threshold
     STOP_LOSS = "stop_loss"               # Z превысил SL порог
     POSITION_OPENED = "position_opened"    # Позиция уже открыта

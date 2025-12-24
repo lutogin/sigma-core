@@ -33,6 +33,7 @@ from src.infra.event_emitter import (
     EntrySignalEvent,
     WatchCancelledEvent,
     WatchCancelReason,
+    WatchTimeoutCooldownEvent,
     SpreadSide,
 )
 from src.integrations.exchange import BinanceClient
@@ -164,6 +165,11 @@ class EntryObserverService:
     def active_watch_count(self) -> int:
         """Get number of active watches."""
         return len(self._watches)
+
+    @property
+    def pullback(self) -> float:
+        """Get pullback threshold."""
+        return self._pullback
 
     def get_active_watches(self) -> Dict[str, WatchCandidate]:
         """Get all active watches."""
@@ -383,11 +389,21 @@ class EntryObserverService:
             await self._execute_entry(watch, live_z)
             return
 
-        # 2. Check timeout (45 minutes)
+        # 2. Check timeout (60 minutes)
         if watch.watch_duration_seconds > self._timeout:
             self._logger.info(
                 f"⏰ {coin} watch timeout after {watch.watch_duration_minutes:.1f}min | "
                 f"max_z={watch.max_z:.2f}, final_z={live_z:.2f}"
+            )
+            # Emit cooldown event so PositionStateService can apply cooldown
+            await self._emitter.emit(
+                WatchTimeoutCooldownEvent(
+                    coin_symbol=coin,
+                    primary_symbol=watch.primary_symbol,
+                    max_z_reached=watch.max_z,
+                    final_z=live_z,
+                    watch_duration_seconds=watch.watch_duration_seconds,
+                )
             )
             await self._cancel_watch(coin, WatchCancelReason.TIMEOUT, live_z)
             return

@@ -10,7 +10,12 @@ from typing import List, Optional, Tuple
 
 from src.domain.position_state.models import SpreadPosition, SymbolCooldown, SpreadSide
 from src.domain.position_state.repository import PositionStateRepository
-from src.infra.event_emitter import EventEmitter, ExitReason
+from src.infra.event_emitter import (
+    EventEmitter,
+    EventType,
+    ExitReason,
+    WatchTimeoutCooldownEvent,
+)
 
 
 class PositionStateService:
@@ -61,6 +66,12 @@ class PositionStateService:
             f"timeframe={timeframe} | "
             f"cooldown={cooldown_bars} bars ({self._cooldown_minutes} min) | "
             f"max_position={max_position_bars} bars ({self._max_position_minutes} min)"
+        )
+
+        # Subscribe to watch timeout events for cooldown
+        self._event_emitter.on(
+            EventType.WATCH_TIMEOUT_COOLDOWN,
+            self._on_watch_timeout_cooldown
         )
 
     @staticmethod
@@ -219,6 +230,39 @@ class PositionStateService:
     # =========================================================================
     # Cooldown Management
     # =========================================================================
+
+    async def _on_watch_timeout_cooldown(self, event: WatchTimeoutCooldownEvent) -> None:
+        """
+        Handle watch timeout cooldown event.
+
+        Applies cooldown to symbol when trailing entry watch times out.
+        """
+        self._logger.info(
+            f"⏸️ Watch timeout cooldown | {event.coin_symbol} | "
+            f"max_z={event.max_z_reached:.2f} | "
+            f"duration={event.watch_duration_seconds/60:.1f}min"
+        )
+        self._apply_cooldown_for_watch_timeout(event.coin_symbol)
+
+    def _apply_cooldown_for_watch_timeout(self, symbol: str) -> None:
+        """Apply cooldown to a symbol after watch timeout."""
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(minutes=self._cooldown_minutes)
+
+        cooldown = SymbolCooldown(
+            symbol=symbol,
+            started_at=now,
+            expires_at=expires_at,
+            exit_reason="watch_timeout",
+        )
+
+        self._repository.save_cooldown(cooldown)
+
+        self._logger.warning(
+            f"⏸️ Cooldown applied (watch timeout) | {symbol} | "
+            f"expires={expires_at.strftime('%H:%M:%S')} | "
+            f"duration={self._cooldown_minutes} min"
+        )
 
     def _apply_cooldown(self, symbol: str, exit_reason: ExitReason) -> None:
         """Apply cooldown to a symbol after adverse exit (SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)."""

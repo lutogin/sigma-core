@@ -31,6 +31,7 @@ from .events import (
     ExitSignalEvent,
     SignalSkippedEvent,
     WatchCancelledEvent,
+    WatchTimeoutCooldownEvent,
     # Trade lifecycle events
     TradeOpenedEvent,
     TradeClosedEvent,
@@ -62,6 +63,7 @@ __all__ = [
     "ExitSignalEvent",
     "SignalSkippedEvent",
     "WatchCancelledEvent",
+    "WatchTimeoutCooldownEvent",
     # Trade lifecycle events
     "TradeOpenedEvent",
     "TradeClosedEvent",
