@@ -261,6 +261,7 @@ class Container:
                 position_state_service=self.position_state_service,
                 hurst_filter_service=self.hurst_filter_service,
                 primary_pair=self._settings.PRIMARY_PAIR,
+                entry_observer_service=self.entry_observer_service,
             )
         return self._instances["orchestrator_service"]
 

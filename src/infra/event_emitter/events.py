@@ -90,6 +90,8 @@ class WatchCancelReason(str, Enum):
     SL_HIT = "sl_hit"  # Z-score exceeded stop-loss threshold
     ALREADY_WATCHING = "already_watching"  # Symbol is already being watched
     MAX_WATCHES_REACHED = "max_watches_reached"  # Too many concurrent watches
+    CORRELATION_DROP = "correlation_drop"  # Correlation dropped below threshold
+    HURST_TRENDING = "hurst_trending"  # Spread became trending (Hurst >= threshold)
 
 
 # =============================================================================

@@ -535,6 +535,40 @@ class EntryObserverService:
         )
         return True
 
+    async def remove_watch_by_filter(
+        self, coin: str, reason: WatchCancelReason
+    ) -> bool:
+        """
+        Remove a watch because it failed screener filters (Hurst/Correlation).
+
+        Called by OrchestratorService when a watched pair drops out of filters.
+        Only unsubscribes from the coin's WebSocket, keeps ETH if other pairs need it.
+
+        Args:
+            coin: Coin symbol to remove.
+            reason: Reason for removal (CORRELATION_DROP or HURST_TRENDING).
+
+        Returns:
+            True if watch was removed, False if not found.
+        """
+        if coin not in self._watches:
+            return False
+
+        watch = self._watches[coin]
+        final_z = watch.current_z_score
+
+        self._logger.info(
+            f"🚫 Removing watch {coin} | reason={reason.value} | "
+            f"max_z={watch.max_z:.2f} | final_z={final_z:.2f}"
+        )
+
+        await self._cancel_watch(coin, reason, final_z)
+        return True
+
+    def has_watch(self, coin: str) -> bool:
+        """Check if a coin is currently being watched."""
+        return coin in self._watches
+
     def get_watch_status(self, coin: str) -> Optional[Dict]:
         """
         Get status of a specific watch.

@@ -6,11 +6,12 @@ Responsible for:
 - Running the screener scan cycle
 - Checking exit conditions for open positions (TP, SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
 - Checking entry conditions for new positions
+- Removing watched pairs from EntryObserver if they fail filters
 - Emitting PendingEntrySignalEvent for trailing entry (EntryObserver will handle)
 - Emitting ExitSignalEvent for position closes
 """
 
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
@@ -26,7 +27,11 @@ from src.infra.event_emitter import (
     SpreadSide,
     MarketUnsafeEvent,
     ScanCompleteEvent,
+    WatchCancelReason,
 )
+
+if TYPE_CHECKING:
+    from src.domain.entry_observer import EntryObserverService
 
 
 class OrchestratorService:
@@ -58,6 +63,7 @@ class OrchestratorService:
         position_state_service: PositionStateService,
         hurst_filter_service: HurstFilterService,
         primary_pair: str,
+        entry_observer_service: Optional["EntryObserverService"] = None,
     ):
         """
         Initialize Orchestrator Service.
@@ -69,6 +75,7 @@ class OrchestratorService:
             position_state_service: Service for position state management.
             hurst_filter_service: Service for Hurst exponent calculation.
             primary_pair: Primary trading pair (e.g., "ETH/USDT:USDT").
+            entry_observer_service: Optional service for trailing entry monitoring.
         """
         self._logger = logger
         self._screener_service = screener_service
@@ -76,6 +83,7 @@ class OrchestratorService:
         self._position_state = position_state_service
         self._hurst_filter = hurst_filter_service
         self._primary_pair = primary_pair
+        self._entry_observer = entry_observer_service
 
     async def run(self) -> None:
         """
@@ -140,7 +148,15 @@ class OrchestratorService:
             min_correlation=min_correlation,
         )
 
-        # 4. Check entry conditions for new positions
+        # 4. Check watched pairs in EntryObserver - remove if they failed filters
+        await self._check_watched_pairs(
+            z_score_results=scan_result.all_z_score_results,
+            filtered_results=scan_result.filtered_results,
+            raw_data=scan_result.raw_data,
+            min_correlation=min_correlation,
+        )
+
+        # 5. Check entry conditions for new positions
         entry_signals = await self._check_entry_conditions(
             filtered_results=scan_result.filtered_results,
             hurst_values=scan_result.hurst_values,
@@ -150,7 +166,7 @@ class OrchestratorService:
             z_tp=z_tp,
         )
 
-        # 5. Emit scan complete event
+        # 6. Emit scan complete event
         await self._event_emitter.emit(
             ScanCompleteEvent(
                 symbols_scanned=scan_result.symbols_scanned,
@@ -166,6 +182,75 @@ class OrchestratorService:
             exit_signals_emitted=len(exit_signals),
             entry_signals_emitted=len(entry_signals),
         )
+
+    # =========================================================================
+    # Watched Pairs Checking (EntryObserver)
+    # =========================================================================
+
+    async def _check_watched_pairs(
+        self,
+        z_score_results: Dict[str, ZScoreResult],
+        filtered_results: Dict[str, ZScoreResult],
+        raw_data: Dict[str, pd.DataFrame],
+        min_correlation: float,
+    ) -> None:
+        """
+        Check if any watched pairs in EntryObserver should be removed.
+
+        A watched pair should be removed if:
+        1. CORRELATION_DROP: symbol not in filtered_results (correlation < threshold)
+        2. HURST_TRENDING: Hurst >= hurst_threshold (spread became trending)
+
+        This prevents entering positions on pairs that no longer meet criteria.
+        """
+        if self._entry_observer is None:
+            return
+
+        # Get currently watched symbols
+        watched = self._entry_observer.get_active_watches()
+        if not watched:
+            return
+
+        primary_df = raw_data.get(self._primary_pair)
+
+        for coin_symbol in list(watched.keys()):
+            remove_reason = None
+
+            # Check if symbol dropped from correlation filter
+            if coin_symbol not in filtered_results:
+                z_result = z_score_results.get(coin_symbol)
+                current_corr = z_result.current_correlation if z_result else 0.0
+
+                self._logger.info(
+                    f"🔻 Watch {coin_symbol} failed CORRELATION filter | "
+                    f"corr={current_corr:.3f} < {min_correlation}"
+                )
+                remove_reason = WatchCancelReason.CORRELATION_DROP
+            else:
+                # Check Hurst filter
+                if self._hurst_filter is not None:
+                    z_result = z_score_results.get(coin_symbol)
+                    coin_df = raw_data.get(coin_symbol)
+
+                    if z_result and coin_df is not None and primary_df is not None:
+                        hurst = self._hurst_filter.calculate_for_spread(
+                            coin_log_prices=coin_df["close"].apply(np.log),
+                            primary_log_prices=primary_df["close"].apply(np.log),
+                            beta=z_result.current_beta,
+                        )
+
+                        if not self._hurst_filter.is_mean_reverting(hurst):
+                            self._logger.info(
+                                f"📈 Watch {coin_symbol} failed HURST filter | "
+                                f"H={hurst:.3f} >= {self._hurst_filter.threshold}"
+                            )
+                            remove_reason = WatchCancelReason.HURST_TRENDING
+
+            # Remove from EntryObserver if failed any filter
+            if remove_reason:
+                await self._entry_observer.remove_watch_by_filter(
+                    coin_symbol, remove_reason
+                )
 
     # =========================================================================
     # Exit Condition Checking
