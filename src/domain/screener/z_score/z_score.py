@@ -53,7 +53,7 @@ class ZScoreService:
         z_entry_threshold: float = 2.0,
         z_tp_threshold: float = 0.0,
         z_sl_threshold: float = 4.5,
-        adaptive_percentile: int = 97,
+        adaptive_percentile: int = 95,
         dynamic_threshold_window: int = 440,
         threshold_ema_alpha: float = 0.1,
     ):
@@ -67,7 +67,7 @@ class ZScoreService:
             z_entry_threshold: Minimum Z-score threshold for entry (floor for adaptive).
             z_tp_threshold: Z-score threshold for take profit.
             z_sl_threshold: Z-score threshold for stop loss.
-            adaptive_percentile: Percentile for adaptive threshold calculation (default 97).
+            adaptive_percentile: Percentile for adaptive threshold calculation (default 95).
             dynamic_threshold_window: Number of candles for dynamic threshold calculation (default 440 ~4.5 days @ 15m).
             threshold_ema_alpha: EMA smoothing factor for threshold (0.1 = 10% new, 90% old).
         """

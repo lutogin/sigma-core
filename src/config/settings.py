@@ -43,11 +43,16 @@ class Settings:
     TIMEFRAME: str = "15m"
     PRIMARY_PAIR: str = "ETH/USDT:USDT"
     CONSISTENT_PAIRS: list[str] = [
-        "LINK/USDT:USDT", "UNI/USDT:USDT", "AAVE/USDT:USDT", "RENDER/USDT:USDT", "TURBO/USDT:USDT", "ENS/USDT:USDT", "FET/USDT:USDT", "MORPHO/USDT:USDT", "SPX/USDT:USDT"
+        "LINK/USDT:USDT",
+        "UNI/USDT:USDT",
+        "AAVE/USDT:USDT",
+        "RENDER/USDT:USDT",
+        "TURBO/USDT:USDT",
+        "ENS/USDT:USDT",
+        "FET/USDT:USDT",
+        "MORPHO/USDT:USDT",
+        "SPX/USDT:USDT",
     ]
-
-    MAX_BETA: float = 2.0
-    MIN_BETA: float = 0.5
 
     # Scan settings
     LOOKBACK_WINDOW_DAYS: int = 3  # 3 days (244 candles for 15m timeframe)
@@ -65,7 +70,9 @@ class Settings:
     HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
 
     # Adaptive threshold settings
-    ADAPTIVE_PERCENTILE: int = 96  # Percentile for dynamic Z-score threshold (97 = top 3%)
+    ADAPTIVE_PERCENTILE: int = (
+        95  # Percentile for dynamic Z-score threshold (95 = top 5%)
+    )
     DYNAMIC_THRESHOLD_WINDOW_BARS: int = 440
     THRESHOLD_EMA_ALPHA: float = 0.1  # EMA smoothing factor (0.1 = 10% new, 90% old)
     # Trailing Entry settings (Smart Entry)
@@ -145,22 +152,20 @@ class Settings:
         self.HURST_LOOKBACK_CANDLES = int(os.getenv("HURST_LOOKBACK_CANDLES", "300"))
 
         # Adaptive threshold
-        self.ADAPTIVE_PERCENTILE = int(os.getenv("ADAPTIVE_PERCENTILE", "96"))
+        self.ADAPTIVE_PERCENTILE = int(os.getenv("ADAPTIVE_PERCENTILE", "95"))
 
         self.DYNAMIC_THRESHOLD_WINDOW_BARS = int(
             os.getenv("DYNAMIC_THRESHOLD_WINDOW_BARS", "440")
         )
 
-        self.THRESHOLD_EMA_ALPHA = float(
-            os.getenv("THRESHOLD_EMA_ALPHA", "0.1")
-        )
+        self.THRESHOLD_EMA_ALPHA = float(os.getenv("THRESHOLD_EMA_ALPHA", "0.1"))
 
         # Trailing Entry (Smart Entry)
         self.TRAILING_ENTRY_PULLBACK = float(
             os.getenv("TRAILING_ENTRY_PULLBACK", "0.2")
         )
         self.TRAILING_ENTRY_TIMEOUT_MINUTES = int(
-            os.getenv("TRAILING_ENTRY_TIMEOUT_MINUTES", "45")
+            os.getenv("TRAILING_ENTRY_TIMEOUT_MINUTES", "60")
         )
 
         # Position sizing

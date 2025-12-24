@@ -66,7 +66,7 @@ class BacktestConfig:
     cooldown_bars: int = 16  # 4 hours
 
     # Maximum position duration before forced exit (in bars)
-    # 96 bars = 24 hours for 15m timeframe
+    # 144 bars = 32 hours for 15m timeframe
     max_position_bars: int = 144  # 32 hours
 
     # Trading pairs (from settings or CLI)
