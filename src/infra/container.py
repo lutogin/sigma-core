@@ -108,22 +108,22 @@ class Container:
             self._instances["timescale_db"] = db
         return self._instances["timescale_db"]
 
-    @property
-    def redis_cache(self):
-        """Get Redis cache connection."""
-        self._check_initialized()
-        if "redis_cache" not in self._instances:
-            from src.infra.redis import RedisCache
+    # @property
+    # def redis_cache(self):
+    #     """Get Redis cache connection."""
+    #     self._check_initialized()
+    #     if "redis_cache" not in self._instances:
+    #         from src.infra.redis import RedisCache
 
-            redis_cache = RedisCache(
-                redis_url=self._settings.REDIS_URL,
-                logger=self.logger,
-            )
-            # Note: Redis connection is async, so we can't connect here
-            # Connections will be established when RedisCache.connect() is called
-            # This can be done in the application startup if needed
-            self._instances["redis_cache"] = redis_cache
-        return self._instances["redis_cache"]
+    #         redis_cache = RedisCache(
+    #             redis_url=self._settings.REDIS_URL,
+    #             logger=self.logger,
+    #         )
+    #         # Note: Redis connection is async, so we can't connect here
+    #         # Connections will be established when RedisCache.connect() is called
+    #         # This can be done in the application startup if needed
+    #         self._instances["redis_cache"] = redis_cache
+    #     return self._instances["redis_cache"]
 
     @property
     def ohlcv_repository(self):

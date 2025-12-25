@@ -1,0 +1,505 @@
+sequenceDiagram
+    autonumber
+
+    participant Cron as ⏰ Cron Scheduler
+    participant Planner as 📅 PlannerService
+    participant Orchestrator as 🎯 OrchestratorService
+    participant Screener as 📊 ScreenerService
+    participant DataLoader as � DeataLoaderService
+    participant Exchange as 🏦 BinanceClient
+    participant VolFilter as �️ VolatCilityFilter
+    participant CorrService as 📈 CorrelationService
+    participant ZScoreService as � ZrScoreService
+    participant HurstFilter as 🔬 HurstFilter
+    participant PositionState as � PositlionStateService
+    participant EntryObserver as � EontryObserver
+    participant ExitObserver as 🎯 ExitObserver
+    participant Trading as 💰 TradingService
+    participant Redis as �️ Redids
+    participant MongoDB as �️ MongoDB
+    participant WebSocket as � WegbSocket
+    participant EventEmitter as � EvekntEmitter
+
+    rect rgb(45, 52, 54)
+        Note over Cron,Planner: 🕐 SCHEDULED SCAN CYCLE - Every 15 minutes
+
+        Cron->>Planner: Trigger scan job
+
+        rect rgb(214, 48, 49)
+            Note over Planner,Trading: ⏰ PRE-SCAN: Check Position Timeouts
+            Planner->>Trading: check_and_close_timeouts()
+            Trading->>PositionState: check_timeouts()
+            PositionState->>MongoDB: Find positions where bars_held >= 144
+            MongoDB-->>PositionState: Timed out positions
+
+            alt Positions timed out
+                PositionState-->>Trading: List of timed out positions
+                loop For each timed out position
+                    Trading->>Trading: _close_spread with TIMEOUT reason
+                end
+            end
+        end
+
+        Planner->>Orchestrator: run()
+    end
+
+    rect rgb(9, 132, 227)
+        Note over Orchestrator,ZScoreService: 📊 SCREENER PIPELINE
+
+        Orchestrator->>Screener: scan()
+
+        rect rgb(0, 184, 148)
+            Note over Screener,Exchange: 💾 LOAD OHLCV DATA
+            Screener->>DataLoader: load_ohlcv_bulk for all symbols
+            DataLoader->>MongoDB: Query cached OHLCV
+            MongoDB-->>DataLoader: Cached candles
+
+            alt Missing candles
+                DataLoader->>Exchange: fetch_ohlcv per symbol
+                Exchange-->>DataLoader: New candles
+                DataLoader->>MongoDB: Cache new candles
+            end
+
+            DataLoader-->>Screener: Dict of symbol to DataFrame - 7 days of data
+        end
+
+        rect rgb(108, 92, 231)
+            Note over Screener,VolFilter: 🌡️ VOLATILITY FILTER - Market Safety
+            Screener->>VolFilter: check_from_loader with 8h lookback
+            VolFilter->>VolFilter: Calculate ETH volatility and 4h price change
+
+            alt MxchangUNSAFE
+                VolFilter-->>Screener: is_safe=False
+                Screener-->>Orchestrator: ScanResult with volatility_result
+                Orchestrator->>EventEmitter: emit MarketUnsafeEvent
+                Note over Orchestrator: ⛔ SCAN ABORTED - Market Unsafe
+            else Market SAFE
+                VolFilter-->>Screener: is_safe=True
+            end
+        end
+
+        rect rgb(0, 206, 201)
+            Note over Screener,CorrService: 📈 CORRELATION SERVICE
+            Screener->>CorrService: calculate for primary_symbol and ohlcv
+
+            loop For each COIN symbol
+                CorrService->>CorrService: Calculate log returns
+                CorrService->>CorrService: Rolling correlation over 3 days
+                CorrService->>CorrService: Rolling beta via OLS regression
+            end
+
+            CorrService-->>Screener: Dict of symbol to CorrelationResult
+        end
+
+        rect rgb(253, 203, 110)
+            Note over Screener,ZScoreService: 📉 Z-SCORE SERVICE
+            Screener->>ZScoreService: calculate for all symbols
+
+            loop For each symbol
+                ZScoreService->>ZScoreService: Spread = log COIN minus beta times log ETH
+                ZScoreService->>ZScoreService: Z = Spread minus Mean divided by Std
+
+                rect rgb(225, 112, 85)
+                    Note over ZScoreService: 🎚️ DYNAMIC ENTRY THRESHOLD
+                    ZScoreService->>ZScoreService: Get last 440 bars of abs Z
+                    ZScoreService->>ZScoreService: raw = 95th percentile of abs Z
+                    ZScoreService->>ZScoreService: raw = max of 2.1 and raw
+
+                    alt First calculation for symbol
+                        ZScoreService->>ZScoreService: Warmup EMA with 20 historical windows
+                    else Subsequent calculation
+                        ZScoreService->>ZScoreService: EMA = 0.1 times raw plus 0.9 times previous
+                    end
+
+                    ZScoreService->>ZScoreService: dynamic_threshold = max of 2.1 and EMA
+                end
+            end
+
+            ZScoreService-->>Screener: Dict of symbol to ZScoreResult with dynamic_entry_threshold
+        end
+
+        rect rgb(116, 185, 255)
+            Note over Screener: 🔍 FILTER BY CORRELATION
+            Screener->>Screener: Filter corr >= 0.8
+            Screener->>Screener: Filter 0.5 <= beta <= 2.0
+        end
+
+        rect rgb(162, 155, 254)
+            Note over Screener,HurstFilter: 🔬 HURST FILTER - Entry Candidates Only
+
+            loop For symbols where abs Z >= dynamic_threshold
+                Screener->>HurstFilter: calculate_for_spread
+                HurstFilter->>HurstFilter: R/S Analysis over 300 candles
+                HurstFilter-->>Screener: Hurst exponent H
+
+                alt H < 0.45
+                    Note over Screener: ✅ Mean-reverting - Keep
+                else H >= 0.45
+                    Note over Screener: ❌ Trending - Remove from candidates
+                end
+            end
+        end
+
+        Screener-->>Orchestrator: ScanResult with filtered_results and hurst_values
+    end
+
+    rect rgb(214, 48, 49)
+        Note over Orchestrator,PositionState: 🚪 CHECK EXIT CONDITIONS FOR OPEN POSITIONS
+
+        Orchestrator->>PositionState: get_active_positions()
+        PositionState->>MongoDB: Find where is_active=True
+        MongoDB-->>PositionState: Active positions
+        PositionState-->>Orchestrator: List of SpreadPosition
+
+        loop For each open position
+            Orchestrator->>Orchestrator: Get z_result for symbol
+
+            alt Symbol NOT in filtered_results
+                Note over Orchestrator: 📉 CORRELATION_DROP - corr below 0.8
+                Orchestrator->>EventEmitter: emit ExitSignalEvent CORRELATION_DROP
+            else Check Z-Score conditions
+                alt LONG spread and Z >= -0.25
+                    Note over Orchestrator: ✅ TAKE_PROFIT
+                    Orchestrator->>EventEmitter: emit ExitSignalEvent TAKE_PROFIT
+                else LONG spread and Z <= -4.0
+                    Note over Orchestrator: 🛑 STOP_LOSS
+                    Orchestrator->>EventEmitter: emit ExitSignalEvent STOP_LOSS
+                else SHORT spread and Z <= 0.25
+                    Note over Orchestrator: ✅ TAKE_PROFIT
+                    Orchestrator->>EventEmitter: emit ExitSignalEvent TAKE_PROFIT
+                else SHORT spread and Z >= 4.0
+                    Note over Orchestrator: 🛑 STOP_LOSS
+                    Orchestrator->>EventEmitter: emit ExitSignalEvent STOP_LOSS
+                else Check Hurst
+                    Orchestrator->>HurstFilter: calculate_for_spread
+                    HurstFilter-->>Orchestrator: H value
+                    alt H >= 0.45
+                        Note over Orchestrator: 📈 HURST_TRENDING
+                        Orchestrator->>EventEmitter: emit ExitSignalEvent HURST_TRENDING
+                    end
+                end
+            end
+        end
+    end
+
+    rect rgb(225, 112, 85)
+        Note over Orchestrator,EntryObserver: 👁️ CHECK WATCHED PAIRS - Remove if failed filters
+
+        Orchestrator->>EntryObserver: get_active_watches()
+        EntryObserver-->>Orchestrator: Dict of watched symbols
+
+        loop For each watched symbol
+            alt Symbol NOT in filtered_results
+                Note over Orchestrator: Watch failed CORRELATION filter
+                Orchestrator->>EntryObserver: remove_watch_by_filter CORRELATION_DROP
+            else Check Hurst
+                Orchestrator->>HurstFilter: calculate_for_spread
+                alt H >= 0.45
+                    Note over Orchestrator: Watch failed HURST filter
+                    Orchestrator->>EntryObserver: remove_watch_by_filter HURST_TRENDING
+                end
+            end
+        end
+    end
+
+    rect rgb(0, 184, 148)
+        Note over Orchestrator,EventEmitter: 🚀 CHECK ENTRY CONDITIONS
+
+        loop For each symbol in filtered_results
+            Orchestrator->>Orchestrator: Get z and dynamic_threshold from z_result
+
+            alt abs Z >= dynamic_threshold AND abs Z < 4.0
+                Orchestrator->>PositionState: has_position for symbol
+                PositionState-->>Orchestrator: False
+
+                Orchestrator->>PositionState: is_in_cooldown for symbol
+                PositionState->>MongoDB: Check cooldown expiry
+                MongoDB-->>PositionState: Cooldown status
+                PositionState-->>Orchestrator: False
+
+                Orchestrator->>PositionState: count_active_positions
+                PositionState-->>Orchestrator: count below MAX_OPEN_SPREADS 3
+
+                Note over Orchestrator: ✅ All entry conditions passed
+
+                Orchestrator->>Orchestrator: Determine side - Z below 0 means LONG spread
+
+                Orchestrator->>Orchestrator: Get spread_mean and spread_std for live Z calculation
+
+                Orchestrator->>EventEmitter: emit PendingEntrySignalEvent with symbol side z beta corr hurst spread_mean spread_std dynamic_threshold z_tp z_sl
+            end
+        end
+
+        Orchestrator->>EventEmitter: emit ScanCompleteEvent
+    end
+
+    rect rgb(253, 121, 168)
+        Note over EntryObserver,WebSocket: 👀 ENTRY OBSERVER - TRAILING ENTRY LOGIC
+
+        EventEmitter->>EntryObserver: on PendingEntrySignalEvent
+
+        EntryObserver->>EntryObserver: Check max_watches limit of 5
+
+        EntryObserver->>EntryObserver: Create WatchCandidate with max_z equals abs z
+
+        EntryObserver->>Redis: Save watch state with TTL timeout plus 5min buffer
+
+        rect rgb(108, 92, 231)
+            Note over EntryObserver,WebSocket: 📡 WEBSOCKET SUBSCRIPTION
+            EntryObserver->>Exchange: subscribe_book_ticker for COIN
+            Exchange->>WebSocket: Subscribe to COIN bookTicker
+            WebSocket-->>EntryObserver: Task handle
+
+            alt Primary not subscribed yet
+                EntryObserver->>Exchange: subscribe_book_ticker for ETH
+                Exchange->>WebSocket: Subscribe to ETH bookTicker
+            end
+        end
+
+        rect rgb(0, 206, 201)
+            Note over WebSocket,EntryObserver: 🔄 REAL-TIME MONITORING LOOP
+
+            loop Every price update with 1s debounce
+                WebSocket-->>EntryObserver: bid_price and ask_price
+                EntryObserver->>EntryObserver: mid_price = bid plus ask divided by 2
+                EntryObserver->>EntryObserver: Update watch.coin_price
+
+                EntryObserver->>EntryObserver: Calculate live Z-score using spread_mean and spread_std
+
+                alt watch_duration > 60 minutes TIMEOUT
+                    Note over EntryObserver: ⏰ TIMEOUT
+                    EntryObserver->>EventEmitter: emit WatchCancelledEvent TIMEOUT
+                    EntryObserver->>EventEmitter: emit WatchTimeoutCooldownEvent
+                    EntryObserver->>EntryObserver: cleanup_watch
+
+                else abs Z < z_entry_threshold FALSE ALARM
+                    Note over EntryObserver: ❌ FALSE ALARM - Z returned to normal
+                    EntryObserver->>EventEmitter: emit WatchCancelledEvent FALSE_ALARM
+                    EntryObserver->>EntryObserver: cleanup_watch
+
+                else abs Z >= 4.0 SL HIT
+                    Note over EntryObserver: 🛑 SL HIT
+                    EntryObserver->>EventEmitter: emit WatchCancelledEvent SL_HIT
+                    EntryObserver->>EntryObserver: cleanup_watch
+
+                else abs Z > max_z STILL WIDENING
+                    EntryObserver->>EntryObserver: max_z = abs Z
+                    EntryObserver->>Redis: Update watch state
+                    Note over EntryObserver: 📈 New peak max_z - pullback_target = max_z minus 0.2
+
+                else abs Z <= max_z minus 0.2 PULLBACK DETECTED
+                    Note over EntryObserver: ✅ REVERSAL CONFIRMED - Pullback from peak detected
+
+                    EntryObserver->>EntryObserver: Calculate dynamic TP = max of 0.25 and abs Z times 0.1
+
+                    EntryObserver->>EventEmitter: emit EntrySignalEvent with symbol side z beta corr hurst spread_mean spread_std z_tp z_sl
+
+                    EntryObserver->>EntryObserver: cleanup_watch
+                end
+            end
+        end
+    end
+
+    rect rgb(253, 203, 110)
+        Note over Trading,Exchange: 💰 TRADING SERVICE - OPEN SPREAD
+
+        EventEmitter->>Trading: on EntrySignalEvent
+
+        rect rgb(116, 185, 255)
+            Note over Trading,PositionState: ✅ PRE-TRADE VALIDATION
+
+            Trading->>Trading: Check allow_trading flag
+
+            Trading->>PositionState: can_open_position for coin primary max_spreads
+            PositionState->>PositionState: Check cooldown
+            PositionState->>PositionState: Check existing position
+            PositionState->>PositionState: Check max spreads
+            PositionState-->>Trading: True None or False reason
+
+            Trading->>Exchange: get_balance USDT
+            Exchange-->>Trading: Balance with free used total
+            Trading->>Trading: Check free >= coin_size plus primary_size times beta
+        end
+
+        rect rgb(0, 184, 148)
+            Note over Trading,Exchange: 📐 POSITION SIZING
+            Trading->>Trading: coin_size_usdt = 300 USDT
+            Trading->>Trading: primary_size_usdt = coin_size times abs beta
+
+            Trading->>Exchange: calculate_amount_from_usdt for COIN
+            Exchange-->>Trading: coin_contracts
+
+            Trading->>Exchange: calculate_amount_from_usdt for PRIMARY
+            Exchange-->>Trading: primary_contracts
+        end
+
+        rect rgb(214, 48, 49)
+            Note over Trading,Exchange: ⚡ ATOMIC EXECUTION with ACID guarantees
+
+            par Open COIN position
+                Trading->>Exchange: open_position_limit COIN side amount leverage
+                Note over Exchange: LONG spread means BUY COIN - SHORT spread means SELL COIN
+                Exchange-->>Trading: Order for coin
+            and Open PRIMARY position
+                Trading->>Exchange: open_position_limit PRIMARY side amount leverage
+                Note over Exchange: LONG spread means SELL PRIMARY - SHORT spread means BUY PRIMARY
+                Exchange-->>Trading: Order for primary
+            end
+
+            alt Both succeeded
+                Note over Trading: ✅ Spread opened successfully
+            else COIN succeeded PRIMARY failed
+                Trading->>Exchange: flash_close_position COIN
+                Note over Trading: 🔄 ROLLBACK - Close COIN
+            else PRIMARY succeeded COIN failed
+                Trading->>Exchange: flash_close_position PRIMARY
+                Note over Trading: 🔄 ROLLBACK - Close PRIMARY
+            else Both failed
+                Note over Trading: ❌ Both legs failed
+                Trading->>EventEmitter: emit TradeFailedEvent
+            end
+        end
+
+        rect rgb(108, 92, 231)
+            Note over Trading,MongoDB: 📝 REGISTER POSITION
+            Trading->>PositionState: register_position with coin primary side z beta corr hurst spread_mean spread_std sizes prices z_tp z_sl leverage
+
+            PositionState->>MongoDB: Insert SpreadPosition with is_active true and opened_at now
+            MongoDB-->>PositionState: position_id
+
+            Trading->>EventEmitter: emit TradeOpenedEvent
+        end
+    end
+
+    rect rgb(225, 112, 85)
+        Note over ExitObserver,WebSocket: 🎯 EXIT OBSERVER - REAL-TIME TP/SL MONITORING
+
+        EventEmitter->>ExitObserver: on TradeOpenedEvent
+
+        ExitObserver->>ExitObserver: Create ExitWatch with z_tp_threshold z_sl_threshold spread_mean spread_std
+
+        ExitObserver->>Exchange: subscribe_book_ticker for COIN
+        Exchange->>WebSocket: Subscribe
+
+        alt Primary not subscribed
+            ExitObserver->>Exchange: subscribe_book_ticker for ETH
+        end
+
+        rect rgb(162, 155, 254)
+            Note over WebSocket,ExitObserver: 🔄 REAL-TIME EXIT MONITORING
+
+            loop Every price update with 1s debounce
+                WebSocket-->>ExitObserver: bid_price and ask_price
+                ExitObserver->>ExitObserver: Calculate live Z-score
+
+                rect rgb(253, 203, 110)
+                    Note over ExitObserver: 🎚️ DYNAMIC TP based on Time-Based Coefficient
+                    ExitObserver->>ExitObserver: hours = now minus created_at in hours
+
+                    alt hours <= 4
+                        ExitObserver->>ExitObserver: time_coef = 1.0
+                    else 4 < hours < 12
+                        ExitObserver->>ExitObserver: time_coef = 3.0
+                    else 12 <= hours < 24
+                        ExitObserver->>ExitObserver: time_coef = 5.0
+                    else hours >= 24
+                        ExitObserver->>ExitObserver: time_coef = 8.0
+                    end
+
+                    ExitObserver->>ExitObserver: dynamic_tp = z_tp_threshold times time_coef
+                end
+
+                alt abs Z <= dynamic_tp
+                    Note over ExitObserver: ✅ TAKE PROFIT HIT
+                    ExitObserver->>EventEmitter: emit ExitSignalEvent TAKE_PROFIT
+                    ExitObserver->>ExitObserver: cleanup_watch
+
+                else abs Z >= z_sl_threshold
+                    Note over ExitObserver: 🛑 STOP LOSS HIT
+                    ExitObserver->>EventEmitter: emit ExitSignalEvent STOP_LOSS
+                    ExitObserver->>ExitObserver: cleanup_watch
+                end
+            end
+        end
+    end
+
+    rect rgb(214, 48, 49)
+        Note over Trading,MongoDB: 🔒 CLOSE SPREAD
+
+        EventEmitter->>Trading: on ExitSignalEvent
+
+        Trading->>PositionState: get_position for coin_symbol
+        PositionState->>MongoDB: Find active position
+        MongoDB-->>PositionState: SpreadPosition
+        PositionState-->>Trading: position
+
+        rect rgb(108, 92, 231)
+            Note over Trading,Exchange: ⚡ CLOSE EXECUTION
+
+            par Close COIN entirely
+                Trading->>Exchange: flash_close_position COIN
+                Exchange-->>Trading: Success
+            and Close PRIMARY partially
+                Trading->>Exchange: flash_close_position PRIMARY with amount=position.primary_contracts and close_side=opposite_of_entry
+                Note over Exchange: LONG spread means BUY to close short - SHORT spread means SELL to close long
+                Exchange-->>Trading: Success
+            end
+        end
+
+        rect rgb(253, 121, 168)
+            Note over Trading,MongoDB: ⏸️ APPLY COOLDOWN if adverse exit
+
+            Trading->>PositionState: close_position with coin and exit_reason
+
+            PositionState->>MongoDB: Update is_active = false
+
+            alt exit_reason in SL CORRELATION_DROP TIMEOUT HURST_TRENDING
+                PositionState->>PositionState: Calculate cooldown expiry = now plus 16 bars times 15min = 4 hours
+
+                PositionState->>MongoDB: Upsert SymbolCooldown with symbol and expires_at
+
+                Note over PositionState: ⏸️ Symbol blocked for 4 hours
+            else exit_reason == TAKE_PROFIT
+                Note over PositionState: ✅ No cooldown for TP
+            end
+        end
+
+        Trading->>EventEmitter: emit TradeClosedEvent
+
+        EventEmitter->>ExitObserver: on TradeClosedEvent
+        ExitObserver->>ExitObserver: cleanup_watch for coin
+        ExitObserver->>WebSocket: Unsubscribe from COIN
+    end
+
+    rect rgb(45, 52, 54)
+        Note over Planner,ExitObserver: 🚀 STARTUP / RESTORE after Deploy or Restart
+
+        Planner->>EntryObserver: start()
+        EntryObserver->>Redis: keys with pattern watch_candidate
+        Redis-->>EntryObserver: Saved watches
+
+        loop For each saved watch
+            alt Not expired
+                EntryObserver->>EntryObserver: Restore WatchCandidate
+                EntryObserver->>Exchange: subscribe_book_ticker for COIN
+            else Expired
+                EntryObserver->>Redis: delete key
+            end
+        end
+
+        Planner->>Trading: start()
+        Trading->>PositionState: initialize()
+        PositionState->>MongoDB: create_indexes()
+        PositionState->>PositionState: cleanup_expired_cooldowns()
+
+        Planner->>ExitObserver: start()
+        ExitObserver->>PositionState: get_active_positions()
+        PositionState-->>ExitObserver: Active positions
+
+        loop For each active position
+            ExitObserver->>ExitObserver: Create ExitWatch from position
+            ExitObserver->>Exchange: subscribe_book_ticker for COIN
+        end
+
+        Note over Planner: ✅ All services restored
+    end

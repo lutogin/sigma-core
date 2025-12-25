@@ -381,7 +381,7 @@ class CoinWalkForwardRunner:
 
     def _save_results(self):
         """Save results to JSON file."""
-        output_file = f"backtests/results/coin_walk_forward_{self.start_date.strftime("%Y-%m-%d")}-{self.end_date.strftime("%Y-%m-%d")}.json"
+        output_file = f"backtests/results/coin_walk_forward_{self.start_date}-{self.end_date}.json"
 
         successful = [r for r in self.results if not r.error]
         failed = [r for r in self.results if r.error]

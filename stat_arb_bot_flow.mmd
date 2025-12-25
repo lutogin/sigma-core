@@ -1,0 +1,283 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1a1a2e', 'primaryTextColor': '#fff', 'primaryBorderColor': '#7C0000', 'lineColor': '#F8B229', 'secondaryColor': '#006064', 'tertiaryColor': '#fff'}}}%%
+
+flowchart TB
+    subgraph SCHEDULER["⏰ SCHEDULER (PlannerService)"]
+        CRON["Cron: */15 * * * *<br/>Every 15 minutes"]
+        TIMEOUT_CHECK["Check Position Timeouts<br/>MAX_POSITION_BARS=144 (~32h)"]
+    end
+
+    subgraph ORCHESTRATOR["🎯 ORCHESTRATOR (OrchestratorService.run)"]
+        direction TB
+        START_SCAN["Start Scan Cycle"]
+
+        subgraph SCREENER["📊 SCREENER PIPELINE"]
+            direction TB
+            LOAD_DATA["Load OHLCV Data<br/>LOOKBACK_WINDOW_DAYS=3 × 2 + 1"]
+
+            subgraph VOLATILITY["🌡️ VOLATILITY FILTER"]
+                VOL_CHECK["Check ETH Volatility<br/>& 4h Price Change"]
+                VOL_SAFE{Market Safe?}
+            end
+
+            subgraph CORRELATION["📈 CORRELATION SERVICE"]
+                CALC_CORR["Calculate Rolling Correlation<br/>& Beta (hedge ratio)"]
+                CORR_FILTER["Filter: corr >= MIN_CORRELATION (0.8)<br/>Filter: MIN_BETA (0.5) <= β <= MAX_BETA (2.0)"]
+            end
+
+            subgraph ZSCORE["📉 Z-SCORE SERVICE"]
+                CALC_SPREAD["Calculate Spread:<br/>Spread = log(COIN) - β × log(ETH)"]
+                CALC_Z["Calculate Z-Score:<br/>Z = (Spread - Mean) / Std"]
+
+                subgraph DYNAMIC_THRESHOLD["🎚️ DYNAMIC ENTRY THRESHOLD"]
+                    PERCENTILE["Calculate 95th percentile<br/>of |Z| over 440 bars (~4.5 days)"]
+                    EMA_SMOOTH["Apply EMA smoothing<br/>α = 0.1 (10% new, 90% old)"]
+                    FLOOR["Apply floor:<br/>max(Z_ENTRY_THRESHOLD, percentile)"]
+                    DYN_RESULT["dynamic_entry_threshold<br/>per symbol"]
+                end
+            end
+        end
+
+        subgraph EXIT_CHECK["🚪 EXIT CONDITIONS CHECK"]
+            direction TB
+            GET_POSITIONS["Get Active Positions"]
+
+            subgraph EXIT_CONDITIONS["Exit Conditions (checked in order)"]
+                EXIT_TP["✅ TAKE_PROFIT<br/>|Z| <= Z_TP_THRESHOLD (0.25)"]
+                EXIT_SL["🛑 STOP_LOSS<br/>|Z| >= Z_SL_THRESHOLD (4.0)"]
+                EXIT_CORR["📉 CORRELATION_DROP<br/>corr < MIN_CORRELATION (0.8)"]
+                EXIT_HURST["📈 HURST_TRENDING<br/>H >= HURST_THRESHOLD (0.45)"]
+                EXIT_TIMEOUT["⏰ TIMEOUT<br/>bars >= MAX_POSITION_BARS (144)"]
+            end
+
+            EMIT_EXIT["Emit ExitSignalEvent"]
+        end
+
+        subgraph WATCH_CHECK["👁️ WATCHED PAIRS CHECK"]
+            CHECK_WATCHES["Check EntryObserver watches"]
+            REMOVE_WATCH["Remove if failed:<br/>CORRELATION_DROP or HURST_TRENDING"]
+        end
+
+        subgraph ENTRY_CHECK["🚀 ENTRY CONDITIONS CHECK"]
+            direction TB
+
+            subgraph ENTRY_CONDITIONS["Entry Conditions (all must pass)"]
+                ENTRY_Z["|Z| >= dynamic_entry_threshold<br/>AND |Z| < Z_SL_THRESHOLD (4.0)"]
+                ENTRY_NO_POS["No existing position for symbol"]
+                ENTRY_NO_COOL["Not in cooldown<br/>COOLDOWN_BARS=16 (~4h)"]
+                ENTRY_MAX["Active positions < MAX_OPEN_SPREADS (3)"]
+            end
+
+            subgraph HURST_FILTER["🔬 HURST FILTER (Final Gate)"]
+                CALC_HURST["Calculate Hurst Exponent<br/>HURST_LOOKBACK_CANDLES=300"]
+                HURST_CHECK{"H < HURST_THRESHOLD<br/>(0.45)?"}
+                MEAN_REV["✅ Mean-Reverting<br/>Allow Entry"]
+                TRENDING["❌ Trending<br/>Skip Entry"]
+            end
+
+            EMIT_PENDING["Emit PendingEntrySignalEvent<br/>(with dynamic_entry_threshold)"]
+        end
+    end
+
+    subgraph ENTRY_OBSERVER["👀 ENTRY OBSERVER (Trailing Entry)"]
+        direction TB
+        RECEIVE_PENDING["Receive PendingEntrySignalEvent"]
+
+        subgraph WS_MONITOR["📡 WebSocket Real-Time Monitoring"]
+            SUBSCRIBE["Subscribe to Book Ticker<br/>COIN + ETH prices"]
+            CALC_LIVE_Z["Calculate Live Z-Score<br/>every 1 second (debounce)"]
+            TRACK_MAX["Track max |Z| reached"]
+        end
+
+        subgraph TRAILING_LOGIC["🎯 Trailing Entry Logic"]
+            direction TB
+            CHECK_TIMEOUT_W{"Watch Timeout?<br/>TRAILING_ENTRY_TIMEOUT=60min"}
+            CHECK_FALSE{"|Z| < entry_threshold?<br/>(False Alarm)"}
+            CHECK_SL_W{"|Z| >= Z_SL_THRESHOLD?<br/>(SL Hit)"}
+            CHECK_PULLBACK{"|Z| <= max_Z - PULLBACK?<br/>(PULLBACK=0.2)"}
+
+            CANCEL_TIMEOUT["Cancel: TIMEOUT<br/>Apply Cooldown"]
+            CANCEL_FALSE["Cancel: FALSE_ALARM"]
+            CANCEL_SL["Cancel: SL_HIT"]
+            REVERSAL_CONFIRMED["✅ Reversal Confirmed!"]
+        end
+
+        EMIT_ENTRY["Emit EntrySignalEvent<br/>z_tp = max(Z_TP, current_Z × 0.1)"]
+    end
+
+    subgraph TRADING["💰 TRADING SERVICE"]
+        direction TB
+        RECEIVE_ENTRY["Receive EntrySignalEvent"]
+
+        subgraph VALIDATION["✅ Pre-Trade Validation"]
+            VAL_TRADING["Trading Enabled?"]
+            VAL_CAN_OPEN["can_open_position?<br/>(cooldown, overlap, max_spreads)"]
+            VAL_BALANCE["Sufficient Balance?<br/>COIN + PRIMARY × β"]
+        end
+
+        subgraph EXECUTION["⚡ Atomic Execution (ACID)"]
+            CALC_SIZE["Calculate Position Sizes<br/>COIN: POSITION_SIZE_USDT (300)<br/>PRIMARY: COIN × β"]
+
+            subgraph OPEN_SPREAD["Open Spread (Parallel)"]
+                OPEN_COIN["Open COIN Position<br/>LONG spread → BUY<br/>SHORT spread → SELL"]
+                OPEN_PRIMARY["Open PRIMARY Position<br/>LONG spread → SELL<br/>SHORT spread → BUY"]
+            end
+
+            ROLLBACK["🔄 Rollback on Failure<br/>(Delta-Neutral Protection)"]
+        end
+
+        REGISTER_POS["Register Position<br/>in PositionStateService"]
+        EMIT_OPENED["Emit TradeOpenedEvent"]
+    end
+
+    subgraph EXIT_OBSERVER["🎯 EXIT OBSERVER (Real-Time TP/SL)"]
+        direction TB
+        RECEIVE_OPENED["Receive TradeOpenedEvent"]
+
+        subgraph EXIT_WS["📡 WebSocket Monitoring"]
+            EXIT_SUBSCRIBE["Subscribe to Book Ticker"]
+            EXIT_CALC_Z["Calculate Live Z-Score"]
+        end
+
+        subgraph DYNAMIC_TP["🎚️ DYNAMIC TP (Time-Based)"]
+            TIME_COEF["Calculate time_based_coefficient:<br/>0-4h: 1.0<br/>4-12h: 3.0<br/>12-24h: 5.0<br/>24h+: 8.0"]
+            DYN_TP_CALC["dynamic_TP = z_tp_threshold × time_coef"]
+        end
+
+        subgraph EXIT_LIVE_CHECK["Exit Conditions"]
+            LIVE_TP{"|Z| <= dynamic_TP?"}
+            LIVE_SL{"|Z| >= Z_SL_THRESHOLD?"}
+        end
+
+        EMIT_EXIT_SIGNAL["Emit ExitSignalEvent"]
+    end
+
+    subgraph CLOSE_TRADE["🔒 CLOSE TRADE"]
+        RECEIVE_EXIT["Receive ExitSignalEvent"]
+
+        subgraph CLOSE_EXECUTION["Close Spread (Parallel)"]
+            CLOSE_COIN["Close COIN entirely"]
+            CLOSE_PRIMARY["Close PRIMARY partially<br/>(only this spread's contracts)"]
+        end
+
+        subgraph COOLDOWN_APPLY["⏸️ Apply Cooldown"]
+            COOLDOWN_CHECK{"Exit Reason?"}
+            COOLDOWN_YES["Apply COOLDOWN_BARS=16<br/>(~4h for 15m)"]
+            COOLDOWN_NO["No Cooldown"]
+        end
+
+        DEACTIVATE["Deactivate Position<br/>(is_active = false)"]
+        EMIT_CLOSED["Emit TradeClosedEvent"]
+    end
+
+    %% Main Flow Connections
+    CRON --> TIMEOUT_CHECK
+    TIMEOUT_CHECK --> START_SCAN
+
+    START_SCAN --> LOAD_DATA
+    LOAD_DATA --> VOL_CHECK
+    VOL_CHECK --> VOL_SAFE
+    VOL_SAFE -->|No| MARKET_UNSAFE["⛔ Market Unsafe<br/>Skip Scan"]
+    VOL_SAFE -->|Yes| CALC_CORR
+
+    CALC_CORR --> CORR_FILTER
+    CORR_FILTER --> CALC_SPREAD
+    CALC_SPREAD --> CALC_Z
+    CALC_Z --> PERCENTILE
+    PERCENTILE --> EMA_SMOOTH
+    EMA_SMOOTH --> FLOOR
+    FLOOR --> DYN_RESULT
+
+    DYN_RESULT --> GET_POSITIONS
+    GET_POSITIONS --> EXIT_TP
+    EXIT_TP --> EXIT_SL
+    EXIT_SL --> EXIT_CORR
+    EXIT_CORR --> EXIT_HURST
+    EXIT_HURST --> EXIT_TIMEOUT
+    EXIT_TIMEOUT --> EMIT_EXIT
+
+    EMIT_EXIT --> CHECK_WATCHES
+    CHECK_WATCHES --> REMOVE_WATCH
+    REMOVE_WATCH --> ENTRY_Z
+
+    ENTRY_Z --> ENTRY_NO_POS
+    ENTRY_NO_POS --> ENTRY_NO_COOL
+    ENTRY_NO_COOL --> ENTRY_MAX
+    ENTRY_MAX --> CALC_HURST
+    CALC_HURST --> HURST_CHECK
+    HURST_CHECK -->|Yes| MEAN_REV
+    HURST_CHECK -->|No| TRENDING
+    MEAN_REV --> EMIT_PENDING
+
+    %% Entry Observer Flow
+    EMIT_PENDING --> RECEIVE_PENDING
+    RECEIVE_PENDING --> SUBSCRIBE
+    SUBSCRIBE --> CALC_LIVE_Z
+    CALC_LIVE_Z --> TRACK_MAX
+    TRACK_MAX --> CHECK_TIMEOUT_W
+
+    CHECK_TIMEOUT_W -->|Yes| CANCEL_TIMEOUT
+    CHECK_TIMEOUT_W -->|No| CHECK_FALSE
+    CHECK_FALSE -->|Yes| CANCEL_FALSE
+    CHECK_FALSE -->|No| CHECK_SL_W
+    CHECK_SL_W -->|Yes| CANCEL_SL
+    CHECK_SL_W -->|No| CHECK_PULLBACK
+    CHECK_PULLBACK -->|Yes| REVERSAL_CONFIRMED
+    CHECK_PULLBACK -->|No| CALC_LIVE_Z
+
+    REVERSAL_CONFIRMED --> EMIT_ENTRY
+
+    %% Trading Flow
+    EMIT_ENTRY --> RECEIVE_ENTRY
+    RECEIVE_ENTRY --> VAL_TRADING
+    VAL_TRADING --> VAL_CAN_OPEN
+    VAL_CAN_OPEN --> VAL_BALANCE
+    VAL_BALANCE --> CALC_SIZE
+    CALC_SIZE --> OPEN_COIN
+    CALC_SIZE --> OPEN_PRIMARY
+    OPEN_COIN --> REGISTER_POS
+    OPEN_PRIMARY --> REGISTER_POS
+    REGISTER_POS --> EMIT_OPENED
+
+    %% Exit Observer Flow
+    EMIT_OPENED --> RECEIVE_OPENED
+    RECEIVE_OPENED --> EXIT_SUBSCRIBE
+    EXIT_SUBSCRIBE --> EXIT_CALC_Z
+    EXIT_CALC_Z --> TIME_COEF
+    TIME_COEF --> DYN_TP_CALC
+    DYN_TP_CALC --> LIVE_TP
+    LIVE_TP -->|Yes| EMIT_EXIT_SIGNAL
+    LIVE_TP -->|No| LIVE_SL
+    LIVE_SL -->|Yes| EMIT_EXIT_SIGNAL
+    LIVE_SL -->|No| EXIT_CALC_Z
+
+    %% Close Trade Flow
+    EMIT_EXIT_SIGNAL --> RECEIVE_EXIT
+    EMIT_EXIT --> RECEIVE_EXIT
+    RECEIVE_EXIT --> CLOSE_COIN
+    RECEIVE_EXIT --> CLOSE_PRIMARY
+    CLOSE_COIN --> COOLDOWN_CHECK
+    CLOSE_PRIMARY --> COOLDOWN_CHECK
+    COOLDOWN_CHECK -->|SL/CORR_DROP/TIMEOUT/HURST| COOLDOWN_YES
+    COOLDOWN_CHECK -->|TP| COOLDOWN_NO
+    COOLDOWN_YES --> DEACTIVATE
+    COOLDOWN_NO --> DEACTIVATE
+    DEACTIVATE --> EMIT_CLOSED
+
+    %% Styling
+    classDef scheduler fill:#2d3436,stroke:#00b894,stroke-width:2px,color:#fff
+    classDef screener fill:#0984e3,stroke:#74b9ff,stroke-width:2px,color:#fff
+    classDef filter fill:#6c5ce7,stroke:#a29bfe,stroke-width:2px,color:#fff
+    classDef entry fill:#00b894,stroke:#55efc4,stroke-width:2px,color:#fff
+    classDef exit fill:#d63031,stroke:#ff7675,stroke-width:2px,color:#fff
+    classDef trading fill:#fdcb6e,stroke:#f39c12,stroke-width:2px,color:#000
+    classDef observer fill:#e17055,stroke:#fab1a0,stroke-width:2px,color:#fff
+    classDef decision fill:#fd79a8,stroke:#e84393,stroke-width:2px,color:#fff
+
+    class CRON,TIMEOUT_CHECK scheduler
+    class LOAD_DATA,CALC_CORR,CORR_FILTER,CALC_SPREAD,CALC_Z screener
+    class VOL_CHECK,CALC_HURST,PERCENTILE,EMA_SMOOTH,FLOOR filter
+    class ENTRY_Z,ENTRY_NO_POS,ENTRY_NO_COOL,ENTRY_MAX,EMIT_PENDING,EMIT_ENTRY entry
+    class EXIT_TP,EXIT_SL,EXIT_CORR,EXIT_HURST,EXIT_TIMEOUT,EMIT_EXIT,EMIT_EXIT_SIGNAL exit
+    class CALC_SIZE,OPEN_COIN,OPEN_PRIMARY,CLOSE_COIN,CLOSE_PRIMARY trading
+    class SUBSCRIBE,CALC_LIVE_Z,TRACK_MAX,EXIT_SUBSCRIBE,EXIT_CALC_Z observer
+    class VOL_SAFE,HURST_CHECK,CHECK_TIMEOUT_W,CHECK_FALSE,CHECK_SL_W,CHECK_PULLBACK,LIVE_TP,LIVE_SL,COOLDOWN_CHECK decision

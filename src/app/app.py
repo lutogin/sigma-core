@@ -93,9 +93,9 @@ class Application:
             telegram_service = self._container.telegram_service
 
             # Connect to async services that need explicit connection
-            # Access redis_cache property to create instance, then connect
-            redis_cache = self._container.redis_cache
-            await redis_cache.connect()
+            # # Access redis_cache property to create instance, then connect
+            # redis_cache = self._container.redis_cache
+            # await redis_cache.connect()
 
             try:
                 # Start communicator service (subscribes to events)

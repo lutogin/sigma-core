@@ -72,6 +72,8 @@ class BacktestConfig:
     # Trading pairs (from settings or CLI)
     consistent_pairs: List[str] = field(default_factory=list)
 
+    use_dynamic_tp: bool = True  # Use dynamic take profit
+
 
 @dataclass
 class Position:
@@ -610,9 +612,13 @@ class StatArbBacktest:
             else:
                 z = z_result.current_z_score
 
-                # Dynamic TP threshold based on time in position
-                time_coef = self._get_time_based_tp_coefficient(bars_held)
-                dynamic_tp = self.config.z_tp_threshold * time_coef
+                if (self.config.use_dynamic_tp):
+                    # Dynamic TP threshold based on time in position
+                    time_coef = self._get_time_based_tp_coefficient(bars_held)
+                    dynamic_tp = self.config.z_tp_threshold * time_coef
+                else:
+                    dynamic_tp = self.config.z_tp_threshold
+
 
                 if position.side == "long":
                     # Long: entered at Z <= -entry, exit at Z >= tp or Z <= -sl
@@ -1353,6 +1359,13 @@ Examples:
         help="Comma-separated list of coin symbols (e.g., 'sol,arb,dot'). Default: from settings.CONSISTENT_PAIRS",
     )
 
+    parser.add_argument(
+        "--use-dynamic-tp",
+        type=str,
+        default=True,
+        help="Use dynamic TP by time base exponent",
+    )
+
     args = parser.parse_args()
 
     # Parse dates
@@ -1384,7 +1397,7 @@ Examples:
         print(f"\n📋 Using pairs from settings: {len(consistent_pairs)} pairs")
 
     # Create backtest config
-    config = BacktestConfig(consistent_pairs=consistent_pairs)
+    config = BacktestConfig(consistent_pairs=consistent_pairs, use_dynamic_tp=args.use_dynamic_tp)
 
     print("\n" + "=" * 70)
     print("              STATISTICAL ARBITRAGE BACKTEST")

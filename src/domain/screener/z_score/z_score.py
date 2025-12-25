@@ -284,7 +284,7 @@ class ZScoreService:
 
         if len(recent_z) < 50:
             self._logger.warning(
-                f"Insufficient data for dynamic threshold calculation, "
+                f"Insufficient data for dynamic threshold calculation for {symbol}, "
                 f"using static threshold: {self._z_entry_threshold}"
             )
             return self._z_entry_threshold

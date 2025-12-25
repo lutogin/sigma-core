@@ -50,14 +50,14 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text=MenuButtons.POSITIONS),
-                KeyboardButton(text=MenuButtons.ENTRY_OBSERVER),
                 KeyboardButton(text=MenuButtons.OPPORTUNITIES),
+                KeyboardButton(text=MenuButtons.ENTRY_OBSERVER),
+                KeyboardButton(text=MenuButtons.EXIT_OBSERVER),
             ],
             [
+                KeyboardButton(text=MenuButtons.POSITIONS),
                 KeyboardButton(text=MenuButtons.CLOSE_ALL),
                 KeyboardButton(text=MenuButtons.CLOSE_SYMBOL),
-                KeyboardButton(text=MenuButtons.EXIT_OBSERVER),
             ],
             [
                 KeyboardButton(text=MenuButtons.STOP_TRADING),
