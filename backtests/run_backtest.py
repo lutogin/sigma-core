@@ -210,6 +210,9 @@ class StatArbBacktest:
         self.timeframe = settings.TIMEFRAME
         self.lookback_window_days = settings.LOOKBACK_WINDOW_DAYS
 
+        # Calculate timeframe in minutes for time-based TP coefficient
+        self._timeframe_minutes = get_timeframe_minutes(self.timeframe)
+
         # State
         self.balance = config.initial_balance
         self.positions: Dict[str, Position] = {}
@@ -553,6 +556,31 @@ class StatArbBacktest:
 
         return is_trending
 
+    def _get_time_based_tp_coefficient(self, bars_held: int) -> float:
+        """
+        Calculate time-based coefficient for dynamic TP threshold.
+
+        As position ages, we become more aggressive with TP (lower threshold).
+        This matches the live bot's ExitObserverService.get_time_based_coefficient().
+
+        Args:
+            bars_held: Number of bars the position has been held.
+
+        Returns:
+            Coefficient to multiply z_tp_threshold by.
+        """
+        # Convert bars to hours (assuming 15m timeframe)
+        hours = bars_held * self._timeframe_minutes / 60
+
+        if hours <= 4:
+            return 1.0  # Normal TP threshold
+        elif hours < 12:
+            return 3.0  # More aggressive after 4h
+        elif hours < 24:
+            return 5.0  # Even more aggressive after 12h
+        else:
+            return 8.0  # Most aggressive after 24h
+
     async def _check_exits(
         self,
         current_time: datetime,
@@ -582,15 +610,19 @@ class StatArbBacktest:
             else:
                 z = z_result.current_z_score
 
+                # Dynamic TP threshold based on time in position
+                time_coef = self._get_time_based_tp_coefficient(bars_held)
+                dynamic_tp = self.config.z_tp_threshold * time_coef
+
                 if position.side == "long":
                     # Long: entered at Z <= -entry, exit at Z >= tp or Z <= -sl
-                    if z >= self.config.z_tp_threshold:
+                    if z >= -dynamic_tp:  # Z moving toward 0 from negative
                         exit_reason = "TP"
                     elif z <= -self.config.z_sl_threshold:
                         exit_reason = "SL"
                 else:
                     # Short: entered at Z >= entry, exit at Z <= tp or Z >= sl
-                    if z <= self.config.z_tp_threshold:
+                    if z <= dynamic_tp:  # Z moving toward 0 from positive
                         exit_reason = "TP"
                     elif z >= self.config.z_sl_threshold:
                         exit_reason = "SL"
