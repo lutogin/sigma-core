@@ -424,8 +424,10 @@ class ExitObserverService:
         live_z = watch.current_z_score
         abs_z = abs(live_z)
 
+        time_based_coef = ExitObserverService.get_time_based_coefficient(watch)
+
         # 1. Check TAKE PROFIT condition
-        if abs_z <= watch.z_tp_threshold:
+        if abs_z <= watch.z_tp_threshold * time_based_coef:
             self._logger.info(
                 f"✅ {coin} TP hit! | "
                 f"entry_Z={watch.entry_z_score:.2f}, current_Z={live_z:.2f}, "
@@ -443,6 +445,28 @@ class ExitObserverService:
             )
             await self._emit_exit_signal(watch, ExitReason.STOP_LOSS, live_z)
             return
+
+    @staticmethod
+    def get_time_based_coefficient(watch: ExitWatch) -> int:
+        """
+        Calculate time-based coefficient for TP threshold adjustment.
+
+        Args:
+            watch: Exit watch with creation time.
+        """
+        now = datetime.now(timezone.utc)
+        age = now - watch.created_at
+        hours = age.total_seconds() / 3600
+
+        time_based_coef = 1
+        if 4 < hours < 12:
+            time_based_coef = 3
+        elif 12 <= hours < 24:
+            time_based_coef = 5
+        else:
+            time_based_coef = 8
+
+        return time_based_coef
 
     # =========================================================================
     # Exit Signal Emission

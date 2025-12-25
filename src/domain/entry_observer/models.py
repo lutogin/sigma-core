@@ -57,7 +57,7 @@ class WatchCandidate:
 
     # Thresholds
     z_entry_threshold: float = 2.0
-    z_tp_threshold: float = 0.0
+    z_tp_threshold: float = 0.25
     z_sl_threshold: float = 4.5
 
     # Live prices (updated via WebSocket)
