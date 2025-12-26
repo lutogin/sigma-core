@@ -36,7 +36,7 @@ class PositionStateService:
         logger,
         timeframe: str = "15m",
         cooldown_bars: int = 16,  # 4 hours for 15m timeframe
-        max_position_bars: int = 244,  # ~61 hours for 15m timeframe
+        max_position_bars: int = 96,  # ~24 hours for 15m timeframe
     ):
         """
         Initialize Position State Service.

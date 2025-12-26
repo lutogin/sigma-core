@@ -69,6 +69,12 @@ class Settings:
     HURST_THRESHOLD: float = 0.45  # Максимальный Hurst для спрэдов
     HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
 
+    # Volatility filter
+    VOLATILITY_WINDOW: int = 24  # 6 hours (24 x 15min candles)
+    VOLATILITY_THRESHOLD: float = 0.008
+    VOLATILITY_CRASH_WINDOW: int = 16  # 4 hours (16 x 15min candles)
+    VOLATILITY_CRASH_THRESHOLD: float = 0.05
+
     # Adaptive threshold settings
     ADAPTIVE_PERCENTILE: int = (
         95  # Percentile for dynamic Z-score threshold (95 = top 5%)
@@ -88,7 +94,7 @@ class Settings:
 
     # Position state settings
     COOLDOWN_BARS: int = 16  # Cooldown after SL/CORRELATION_DROP (16 bars = 4h for 15m)
-    MAX_POSITION_BARS: int = 144  # Max position duration before timeout (~32h for 15m)
+    MAX_POSITION_BARS: int = 96  # Max position duration before timeout (~24h for 15m)
 
     # Planner/Scan settings
     SCAN_CRON_EXPRESSION: str = "*/15 * * * *"  # Every 15 minutes
@@ -139,17 +145,25 @@ class Settings:
         pairs = os.getenv("CONSISTENT_PAIRS", "").split(", ")
         self.CONSISTENT_PAIRS = list(dict.fromkeys(p for p in pairs if p))
 
+        # Screener
         self.LOOKBACK_WINDOW_DAYS = int(os.getenv("LOOKBACK_WINDOW_DAYS", "3"))
         self.MIN_CORRELATION = float(os.getenv("MIN_CORRELATION", "0.8"))
         self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.0"))
         self.Z_TP_THRESHOLD = float(os.getenv("Z_TP_THRESHOLD", "0.0"))
         self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "4.5"))
-
+        # Beta
         self.MIN_BETA = float(os.getenv("MIN_BETA", "0.5"))
         self.MAX_BETA = float(os.getenv("MAX_BETA", "2"))
-
+        # Hurst
         self.HURST_THRESHOLD = float(os.getenv("HURST_THRESHOLD", "0.45"))
         self.HURST_LOOKBACK_CANDLES = int(os.getenv("HURST_LOOKBACK_CANDLES", "300"))
+        # Volatility filter
+        self.VOLATILITY_WINDOW = int(os.getenv("VOLATILITY_WINDOW", "24"))
+        self.VOLATILITY_THRESHOLD = float(os.getenv("VOLATILITY_THRESHOLD", "0.008"))
+        self.VOLATILITY_CRASH_WINDOW = int(os.getenv("VOLATILITY_CRASH_WINDOW", "16"))
+        self.VOLATILITY_CRASH_THRESHOLD = float(
+            os.getenv("VOLATILITY_CRASH_THRESHOLD", "0.05")
+        )
 
         # Adaptive threshold
         self.ADAPTIVE_PERCENTILE = int(os.getenv("ADAPTIVE_PERCENTILE", "95"))
@@ -157,7 +171,6 @@ class Settings:
         self.DYNAMIC_THRESHOLD_WINDOW_BARS = int(
             os.getenv("DYNAMIC_THRESHOLD_WINDOW_BARS", "440")
         )
-
         self.THRESHOLD_EMA_ALPHA = float(os.getenv("THRESHOLD_EMA_ALPHA", "0.1"))
 
         # Trailing Entry (Smart Entry)
@@ -177,7 +190,7 @@ class Settings:
 
         # Position state
         self.COOLDOWN_BARS = int(os.getenv("COOLDOWN_BARS", "16"))
-        self.MAX_POSITION_BARS = int(os.getenv("MAX_POSITION_BARS", "244"))
+        self.MAX_POSITION_BARS = int(os.getenv("MAX_POSITION_BARS", "96"))
 
         # Exchange
         self.EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "binance")
@@ -244,7 +257,9 @@ class Settings:
         logger.info(f"  Z_TP_THRESHOLD: {self.Z_TP_THRESHOLD}")
         logger.info(f"  Z_SL_THRESHOLD: {self.Z_SL_THRESHOLD}")
         logger.info(f"  ADAPTIVE_PERCENTILE: {self.ADAPTIVE_PERCENTILE}")
-        logger.info(f"  DYNAMIC_THRESHOLD_WINDOW_BARS: {self.DYNAMIC_THRESHOLD_WINDOW_BARS}")
+        logger.info(
+            f"  DYNAMIC_THRESHOLD_WINDOW_BARS: {self.DYNAMIC_THRESHOLD_WINDOW_BARS}"
+        )
         logger.info(f"  THRESHOLD_EMA_ALPHA: {self.THRESHOLD_EMA_ALPHA}")
         logger.info("-" * 40)
         logger.info("📉 Beta Settings:")
@@ -257,7 +272,9 @@ class Settings:
         logger.info("-" * 40)
         logger.info("🎯 Trailing Entry Settings:")
         logger.info(f"  TRAILING_ENTRY_PULLBACK: {self.TRAILING_ENTRY_PULLBACK}")
-        logger.info(f"  TRAILING_ENTRY_TIMEOUT_MINUTES: {self.TRAILING_ENTRY_TIMEOUT_MINUTES}")
+        logger.info(
+            f"  TRAILING_ENTRY_TIMEOUT_MINUTES: {self.TRAILING_ENTRY_TIMEOUT_MINUTES}"
+        )
         logger.info("-" * 40)
         logger.info("💰 Position Settings:")
         logger.info(f"  POSITION_SIZE_USDT: {self.POSITION_SIZE_USDT}")

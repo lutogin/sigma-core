@@ -36,12 +36,14 @@ from run_backtest import (
     BacktestResult,
     StatArbBacktest,
     print_symbol_stats,
-    SymbolStats
+    SymbolStats,
 )
 
 
 class WalkForwardRunner:
-    def __init__(self, services, base_config: BacktestConfig, json_output: bool = False):
+    def __init__(
+        self, services, base_config: BacktestConfig, json_output: bool = False
+    ):
         self.services = services
         self.base_config = base_config
         self.results: List[Tuple[str, BacktestResult]] = []
@@ -72,13 +74,12 @@ class WalkForwardRunner:
 
             period_name = current_start.strftime("%Y-%B")
             if not self.json_output:
-                print(f"\n📅 Analyzing Period: {period_name} ({current_start.date()} to {current_end.date()})")
+                print(
+                    f"\n📅 Analyzing Period: {period_name} ({current_start.date()} to {current_end.date()})"
+                )
 
             # Run backtest for this slice
-            backtester = StatArbBacktest(
-                config=self.base_config,
-                **self.services
-            )
+            backtester = StatArbBacktest(config=self.base_config, **self.services)
 
             try:
                 result = await backtester.run(current_start, current_end)
@@ -92,6 +93,7 @@ class WalkForwardRunner:
                 if not self.json_output:
                     print(f"❌ Error analysis for {period_name}: {e}")
                     import traceback
+
                     traceback.print_exc()
 
             # Move next
@@ -116,17 +118,19 @@ class WalkForwardRunner:
 
         monthly_data = []
         for period, res in self.results:
-            monthly_data.append({
-                "period": period,
-                "pnl": res.total_pnl,
-                "pnl_pct": res.total_pnl_pct,
-                "trades": res.total_trades,
-                "winning_trades": res.winning_trades,
-                "win_rate": res.win_rate,
-                "max_drawdown": res.max_drawdown,
-                "max_drawdown_pct": res.max_drawdown_pct,
-                "sharpe_ratio": res.sharpe_ratio,
-            })
+            monthly_data.append(
+                {
+                    "period": period,
+                    "pnl": res.total_pnl,
+                    "pnl_pct": res.total_pnl_pct,
+                    "trades": res.total_trades,
+                    "winning_trades": res.winning_trades,
+                    "win_rate": res.win_rate,
+                    "max_drawdown": res.max_drawdown,
+                    "max_drawdown_pct": res.max_drawdown_pct,
+                    "sharpe_ratio": res.sharpe_ratio,
+                }
+            )
 
         output = {
             "monthly": monthly_data,
@@ -137,10 +141,18 @@ class WalkForwardRunner:
                 "win_rate": total_wins / total_trades if total_trades > 0 else 0,
                 "profitable_months": sum(1 for _, r in self.results if r.total_pnl > 0),
                 "losing_months": sum(1 for _, r in self.results if r.total_pnl < 0),
-                "max_drawdown": min((r.max_drawdown for _, r in self.results), default=0),
-                "max_drawdown_pct": min((r.max_drawdown_pct for _, r in self.results), default=0),
-                "avg_sharpe": sum(r.sharpe_ratio for _, r in self.results) / len(self.results) if self.results else 0,
-            }
+                "max_drawdown": min(
+                    (r.max_drawdown for _, r in self.results), default=0
+                ),
+                "max_drawdown_pct": min(
+                    (r.max_drawdown_pct for _, r in self.results), default=0
+                ),
+                "avg_sharpe": (
+                    sum(r.sharpe_ratio for _, r in self.results) / len(self.results)
+                    if self.results
+                    else 0
+                ),
+            },
         }
 
         print(json.dumps(output))
@@ -154,7 +166,9 @@ class WalkForwardRunner:
         # Best pair
         if result.symbol_stats:
             best_pair = result.symbol_stats[0]
-            print(f"      🏆 Best Pair: {best_pair.symbol} (+${best_pair.total_pnl:.2f})")
+            print(
+                f"      🏆 Best Pair: {best_pair.symbol} (+${best_pair.total_pnl:.2f})"
+            )
         else:
             print("      ⚠️ No trades this month")
 
@@ -171,15 +185,19 @@ class WalkForwardRunner:
         # 1. Monthly Breakdown Table
         print("\n1️⃣  MONTHLY BREAKDOWN")
         print("-" * 100)
-        print(f"{'Period':<15} | {'PnL ($)':>10} | {'PnL (%)':>8} | {'Trades':>6} | {'WR %':>6} | {'Best Pair':<20} | {'Worst Pair':<20}")
+        print(
+            f"{'Period':<15} | {'PnL ($)':>10} | {'PnL (%)':>8} | {'Trades':>6} | {'WR %':>6} | {'Best Pair':<20} | {'Worst Pair':<20}"
+        )
         print("-" * 100)
 
         total_pnl = 0
         total_trades = 0
 
         # Track pair consistency
-        pair_profitability: Dict[str, List[float]] = {}  # symbol -> list of pnl per month
-        pair_appearances: Dict[str, int] = {} # symbol -> count of months traded
+        pair_profitability: Dict[str, List[float]] = (
+            {}
+        )  # symbol -> list of pnl per month
+        pair_appearances: Dict[str, int] = {}  # symbol -> count of months traded
 
         for period, res in self.results:
             total_pnl += res.total_pnl
@@ -203,16 +221,22 @@ class WalkForwardRunner:
                     pair_profitability[s.symbol].append(s.total_pnl)
                     pair_appearances[s.symbol] += 1
 
-            print(f"{period:<15} | {res.total_pnl:>10.2f} | {res.total_pnl_pct:>7.2f}% | {res.total_trades:>6} | {res.win_rate*100:>6.1f} | {best_pair_str:<20} | {worst_pair_str:<20}")
+            print(
+                f"{period:<15} | {res.total_pnl:>10.2f} | {res.total_pnl_pct:>7.2f}% | {res.total_trades:>6} | {res.win_rate*100:>6.1f} | {best_pair_str:<20} | {worst_pair_str:<20}"
+            )
 
         print("-" * 100)
-        print(f"{'TOTAL':<15} | {total_pnl:>10.2f} | {'-':>8} | {total_trades:>6} | {'-':>6} |")
+        print(
+            f"{'TOTAL':<15} | {total_pnl:>10.2f} | {'-':>8} | {total_trades:>6} | {'-':>6} |"
+        )
 
         # 2. Consistency Analysis
         print("\n2️⃣  PAIR CONSISTENCY ANALYSIS (Top 10)")
         print(f"    (Pairs that appeared in multiple months and were profitable)")
         print("-" * 100)
-        print(f"{'Symbol':<15} | {'Months Traded':>13} | {'Profitable Months':>17} | {'Total PnL':>12} | {'Avg Monthly PnL':>15}")
+        print(
+            f"{'Symbol':<15} | {'Months Traded':>13} | {'Profitable Months':>17} | {'Total PnL':>12} | {'Avg Monthly PnL':>15}"
+        )
         print("-" * 100)
 
         # Calculate consistency metrics
@@ -223,32 +247,53 @@ class WalkForwardRunner:
             total_pnl_pair = sum(pnls)
             avg_pnl = total_pnl_pair / months_traded if months_traded > 0 else 0
 
-            consistency_data.append({
-                "symbol": symbol,
-                "months": months_traded,
-                "profitable_months": profitable_months,
-                "total_pnl": total_pnl_pair,
-                "avg_pnl": avg_pnl,
-                "reliability": profitable_months / months_traded if months_traded > 0 else 0
-            })
+            consistency_data.append(
+                {
+                    "symbol": symbol,
+                    "months": months_traded,
+                    "profitable_months": profitable_months,
+                    "total_pnl": total_pnl_pair,
+                    "avg_pnl": avg_pnl,
+                    "reliability": (
+                        profitable_months / months_traded if months_traded > 0 else 0
+                    ),
+                }
+            )
 
         # Sort: Primary by Profitable Months, Secondary by Total PnL
-        consistency_data.sort(key=lambda x: (x["profitable_months"], x["total_pnl"]), reverse=True)
+        consistency_data.sort(
+            key=lambda x: (x["profitable_months"], x["total_pnl"]), reverse=True
+        )
 
         for item in consistency_data[:15]:
             # Highlight consistent winners (e.g., > 50% profitable months)
             marker = "🌟" if item["reliability"] >= 0.7 else " "
-            print(f"{marker} {item['symbol']:<13} | {item['months']:>13} | {item['profitable_months']:>17} | {item['total_pnl']:>12.2f} | {item['avg_pnl']:>15.2f}")
+            print(
+                f"{marker} {item['symbol']:<13} | {item['months']:>13} | {item['profitable_months']:>17} | {item['total_pnl']:>12.2f} | {item['avg_pnl']:>15.2f}"
+            )
 
 
 async def main():
     parser = argparse.ArgumentParser(description="Walk-Forward Backtest Runner")
-    parser.add_argument("--start", type=str, required=True, help="Start date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--start", type=str, required=True, help="Start date (YYYY-MM-DD)"
+    )
     parser.add_argument("--end", type=str, default=None, help="End date (YYYY-MM-DD)")
-    parser.add_argument("--balance", type=float, default=10000.0, help="Initial balance")
+    parser.add_argument(
+        "--balance", type=float, default=10000.0, help="Initial balance"
+    )
     parser.add_argument("--leverage", type=int, default=None, help="Leverage")
-    parser.add_argument("--coin", type=str, default=None, help="Single coin to test (e.g., LINK). Will test COIN/USDT:USDT")
-    parser.add_argument("--json-output", action="store_true", help="Output results as JSON (for programmatic use)")
+    parser.add_argument(
+        "--coin",
+        type=str,
+        default=None,
+        help="Single coin to test (e.g., LINK). Will test COIN/USDT:USDT",
+    )
+    parser.add_argument(
+        "--json-output",
+        action="store_true",
+        help="Output results as JSON (for programmatic use)",
+    )
 
     args = parser.parse_args()
 
@@ -287,10 +332,29 @@ async def main():
     try:
         services = {
             "settings": settings,
-            "data_loader": AsyncDataLoaderService(logger, exchange, container.ohlcv_repository),
-            "correlation_service": CorrelationService(logger, settings.LOOKBACK_WINDOW_DAYS, settings.TIMEFRAME),
-            "z_score_service": ZScoreService(logger, settings.LOOKBACK_WINDOW_DAYS, settings.TIMEFRAME, settings.Z_ENTRY_THRESHOLD, settings.Z_TP_THRESHOLD, settings.Z_SL_THRESHOLD),
-            "volatility_filter_service": VolatilityFilterService(logger, settings.PRIMARY_PAIR, settings.TIMEFRAME),
+            "data_loader": AsyncDataLoaderService(
+                logger, exchange, container.ohlcv_repository
+            ),
+            "correlation_service": CorrelationService(
+                logger, settings.LOOKBACK_WINDOW_DAYS, settings.TIMEFRAME
+            ),
+            "z_score_service": ZScoreService(
+                logger,
+                settings.LOOKBACK_WINDOW_DAYS,
+                settings.TIMEFRAME,
+                settings.Z_ENTRY_THRESHOLD,
+                settings.Z_TP_THRESHOLD,
+                settings.Z_SL_THRESHOLD,
+            ),
+            "volatility_filter_service": VolatilityFilterService(
+                logger=logger,
+                primary_pair=settings.PRIMARY_PAIR,
+                timeframe=settings.TIMEFRAME,
+                volatility_window=settings.VOLATILITY_WINDOW,
+                volatility_threshold=settings.VOLATILITY_THRESHOLD,
+                crash_window=settings.VOLATILITY_CRASH_WINDOW,
+                crash_threshold=settings.VOLATILITY_CRASH_THRESHOLD,
+            ),
             "hurst_filter_service": HurstFilterService(logger),
         }
 

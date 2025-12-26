@@ -387,6 +387,10 @@ class Container:
                 logger=self.logger,
                 primary_pair=self._settings.PRIMARY_PAIR,
                 timeframe=self._settings.TIMEFRAME,
+                volatility_window=self._settings.VOLATILITY_WINDOW,
+                volatility_threshold=self._settings.VOLATILITY_THRESHOLD,
+                crash_window=self._settings.VOLATILITY_CRASH_WINDOW,
+                crash_threshold=self._settings.VOLATILITY_CRASH_THRESHOLD,
             )
         return self._instances["volatility_filter_service"]
 

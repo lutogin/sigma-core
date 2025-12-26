@@ -208,7 +208,7 @@ class StatArbBacktest:
         self.hurst_filter_service = hurst_filter_service
 
         self.primary_pair = settings.PRIMARY_PAIR
-        self.consistent_pairs = config.consistent_pairs  # Use pairs from config
+        self.consistent_pairs = config.consistent_pairs
         self.timeframe = settings.TIMEFRAME
         self.lookback_window_days = settings.LOOKBACK_WINDOW_DAYS
 
@@ -1453,6 +1453,10 @@ Examples:
             logger=logger,
             primary_pair=settings.PRIMARY_PAIR,
             timeframe=settings.TIMEFRAME,
+            volatility_window=settings.VOLATILITY_WINDOW,
+            volatility_threshold=settings.VOLATILITY_THRESHOLD,
+            crash_window=settings.VOLATILITY_CRASH_WINDOW,
+            crash_threshold=settings.VOLATILITY_CRASH_THRESHOLD,
         )
 
         # Create Hurst filter service
