@@ -34,6 +34,232 @@ from src.domain.utils import get_timeframe_minutes
 
 
 # =============================================================================
+# Historical Funding Rate Cache
+# =============================================================================
+
+
+class HistoricalFundingCache:
+    """
+    Cache for historical funding rates.
+
+    Loads funding rates once at backtest start and provides
+    lookup by symbol and timestamp.
+    """
+
+    def __init__(self, logger):
+        self._logger = logger
+        # symbol -> list of (funding_time, rate_8h_normalized)
+        self._cache: Dict[str, List[Tuple[datetime, float]]] = {}
+        # symbol -> funding_interval_hours (for normalization)
+        self._intervals: Dict[str, int] = {}
+
+    async def load(
+        self,
+        exchange_client,
+        symbols: List[str],
+        start_date: datetime,
+        end_date: datetime,
+    ) -> None:
+        """
+        Load historical funding rates for all symbols.
+
+        Args:
+            exchange_client: BinanceClient instance
+            symbols: List of symbols to load funding for
+            start_date: Start date for funding data
+            end_date: End date for funding data
+        """
+        self._logger.info(f"Loading historical funding rates for {len(symbols)} symbols...")
+
+        for symbol in symbols:
+            try:
+                rates = await exchange_client.get_historical_funding_rates(
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+
+                if rates:
+                    # Store interval for this symbol
+                    self._intervals[symbol] = rates[0].funding_interval_hours
+
+                    # Normalize all rates to 8h and store
+                    normalized = []
+                    for r in rates:
+                        rate_8h = self._normalize_to_8h(r.funding_rate, r.funding_interval_hours)
+                        normalized.append((r.funding_time, rate_8h))
+
+                    # Sort by time
+                    normalized.sort(key=lambda x: x[0])
+                    self._cache[symbol] = normalized
+
+                    self._logger.debug(
+                        f"  {symbol}: {len(rates)} funding records, "
+                        f"interval={self._intervals[symbol]}h"
+                    )
+                else:
+                    self._logger.warning(f"  {symbol}: No funding data found")
+                    self._cache[symbol] = []
+
+                # Rate limit protection
+                await asyncio.sleep(0.1)
+
+            except Exception as e:
+                self._logger.warning(f"  {symbol}: Failed to load funding - {e}")
+                self._cache[symbol] = []
+
+        total_records = sum(len(v) for v in self._cache.values())
+        self._logger.info(f"Loaded {total_records} total funding records")
+
+    def _normalize_to_8h(self, rate: float, interval_hours: int) -> float:
+        """Normalize funding rate to 8-hour equivalent."""
+        if interval_hours <= 0:
+            return rate
+        return rate * (8 / interval_hours)
+
+    def get_rate_at(self, symbol: str, timestamp: datetime) -> Optional[float]:
+        """
+        Get the funding rate (normalized to 8h) at a specific timestamp.
+
+        Returns the most recent funding rate before or at the timestamp.
+
+        Args:
+            symbol: Symbol to look up
+            timestamp: Timestamp to get rate for
+
+        Returns:
+            Funding rate normalized to 8h, or None if not found
+        """
+        if symbol not in self._cache or not self._cache[symbol]:
+            return None
+
+        rates = self._cache[symbol]
+
+        # Binary search for the most recent rate <= timestamp
+        left, right = 0, len(rates) - 1
+        result = None
+
+        while left <= right:
+            mid = (left + right) // 2
+            if rates[mid][0] <= timestamp:
+                result = rates[mid][1]
+                left = mid + 1
+            else:
+                right = mid - 1
+
+        return result
+
+    def calculate_net_funding(
+        self,
+        coin_symbol: str,
+        primary_symbol: str,
+        timestamp: datetime,
+        spread_side: str,
+    ) -> Optional[float]:
+        """
+        Calculate net funding cost for a spread at a specific timestamp.
+
+        Args:
+            coin_symbol: Coin symbol (e.g., "LINK/USDT:USDT")
+            primary_symbol: Primary/index symbol (e.g., "ETH/USDT:USDT")
+            timestamp: Timestamp to calculate for
+            spread_side: "long" or "short"
+
+        Returns:
+            Net funding cost (negative = we pay), or None if data unavailable
+        """
+        coin_rate = self.get_rate_at(coin_symbol, timestamp)
+        primary_rate = self.get_rate_at(primary_symbol, timestamp)
+
+        if coin_rate is None or primary_rate is None:
+            return None
+
+        if spread_side == "long":
+            # Long COIN (pay if rate > 0), Short PRIMARY (receive if rate > 0)
+            return primary_rate - coin_rate
+        else:
+            # Short COIN (receive if rate > 0), Long PRIMARY (pay if rate > 0)
+            return coin_rate - primary_rate
+
+    def calculate_funding_pnl(
+        self,
+        coin_symbol: str,
+        primary_symbol: str,
+        entry_time: datetime,
+        exit_time: datetime,
+        spread_side: str,
+        coin_size_usdt: float,
+        primary_size_usdt: float,
+        leverage: int = 1,
+    ) -> float:
+        """
+        Calculate total funding PnL for a position over its lifetime.
+
+        Funding is paid/received at each funding interval (8h normalized).
+        We sum up all funding payments between entry and exit.
+
+        Args:
+            coin_symbol: Coin symbol
+            primary_symbol: Primary symbol (ETH)
+            entry_time: Position entry time
+            exit_time: Position exit time
+            spread_side: "long" or "short"
+            coin_size_usdt: COIN leg size in USDT
+            primary_size_usdt: PRIMARY leg size in USDT
+            leverage: Position leverage
+
+        Returns:
+            Total funding PnL in USDT (positive = received, negative = paid)
+        """
+        if coin_symbol not in self._cache or primary_symbol not in self._cache:
+            return 0.0
+
+        total_funding_pnl = 0.0
+
+        # Get all funding events for COIN between entry and exit
+        coin_rates = self._cache.get(coin_symbol, [])
+        primary_rates = self._cache.get(primary_symbol, [])
+
+        # Build a set of funding timestamps that occurred during position
+        funding_times = set()
+
+        for ts, _ in coin_rates:
+            if entry_time <= ts < exit_time:
+                funding_times.add(ts)
+
+        for ts, _ in primary_rates:
+            if entry_time <= ts < exit_time:
+                funding_times.add(ts)
+
+        # For each funding event, calculate the PnL
+        for funding_ts in sorted(funding_times):
+            coin_rate = self.get_rate_at(coin_symbol, funding_ts)
+            primary_rate = self.get_rate_at(primary_symbol, funding_ts)
+
+            if coin_rate is None or primary_rate is None:
+                continue
+
+            # Calculate funding for each leg
+            # Funding PnL = position_size * funding_rate * leverage
+            # Sign depends on position direction
+
+            if spread_side == "long":
+                # Long COIN: pay if rate > 0, receive if rate < 0
+                coin_funding = -coin_size_usdt * coin_rate * leverage
+                # Short PRIMARY: receive if rate > 0, pay if rate < 0
+                primary_funding = primary_size_usdt * primary_rate * leverage
+            else:
+                # Short COIN: receive if rate > 0, pay if rate < 0
+                coin_funding = coin_size_usdt * coin_rate * leverage
+                # Long PRIMARY: pay if rate > 0, receive if rate < 0
+                primary_funding = -primary_size_usdt * primary_rate * leverage
+
+            total_funding_pnl += coin_funding + primary_funding
+
+        return total_funding_pnl
+
+
+# =============================================================================
 # Backtest Configuration
 # =============================================================================
 
@@ -43,8 +269,8 @@ class BacktestConfig:
     """Backtest configuration parameters."""
 
     # Capital
-    initial_balance: float = 10_000.0  # Starting capital in USDT
-    position_size_pct: float = 0.35  # 3% of capital per spread
+    initial_balance: float = 40_000.0  # Starting capital in USDT
+    position_size_pct: float = 0.33  # 3% of capital per spread
     max_spreads: int = 3  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
@@ -69,6 +295,12 @@ class BacktestConfig:
     # 144 bars = 32 hours for 15m timeframe
     # 96 bars = 24 hours for 15m timeframe
     max_position_bars: int = 96  # 24 hours
+
+    # Funding filter
+    # Block entry if net funding cost exceeds this threshold per 8h
+    # -0.0005 = -0.05% (5x standard rate of 0.01%)
+    max_funding_cost_threshold: float = -0.0005
+    use_funding_filter: bool = True  # Enable/disable funding filter
 
     # Trading pairs (from settings or CLI)
     consistent_pairs: List[str] = field(default_factory=list)
@@ -120,6 +352,7 @@ class Trade:
     pnl_pct: float
     exit_reason: str  # "TP", "SL", "CORRELATION_DROP"
     duration_hours: float
+    funding_pnl: float = 0.0  # PnL from funding payments (positive = received)
 
 
 @dataclass
@@ -177,6 +410,10 @@ class BacktestResult:
     # Per-symbol statistics
     symbol_stats: List["SymbolStats"] = field(default_factory=list)
 
+    # Funding filter stats
+    funding_blocked_entries: int = 0
+    total_funding_pnl: float = 0.0  # Total funding PnL across all trades
+
 
 class StatArbBacktest:
     """
@@ -199,6 +436,7 @@ class StatArbBacktest:
         z_score_service: ZScoreService,
         volatility_filter_service: VolatilityFilterService,
         hurst_filter_service: HurstFilterService,
+        funding_cache: Optional[HistoricalFundingCache] = None,
     ):
         self.config = config
         self.settings = settings
@@ -207,6 +445,7 @@ class StatArbBacktest:
         self.z_score_service = z_score_service
         self.volatility_filter_service = volatility_filter_service
         self.hurst_filter_service = hurst_filter_service
+        self.funding_cache = funding_cache
 
         self.primary_pair = settings.PRIMARY_PAIR
         self.consistent_pairs = config.consistent_pairs
@@ -225,6 +464,9 @@ class StatArbBacktest:
         # Cooldown tracking: symbol -> unlock_time (datetime)
         # Symbols in cooldown are blocked from entry after SL or CORRELATION_DROP
         self.symbol_cooldowns: Dict[str, datetime] = {}
+
+        # Funding filter stats
+        self.funding_blocked_count: int = 0
 
     async def run(
         self,
@@ -705,6 +947,23 @@ class StatArbBacktest:
             ):
                 continue  # Spread is trending, skip entry
 
+            # Funding filter: Check if funding cost is acceptable
+            if self.config.use_funding_filter and self.funding_cache is not None:
+                net_funding = self.funding_cache.calculate_net_funding(
+                    coin_symbol=symbol,
+                    primary_symbol=self.primary_pair,
+                    timestamp=current_time,
+                    spread_side=side,
+                )
+
+                if net_funding is not None and net_funding < self.config.max_funding_cost_threshold:
+                    self.funding_blocked_count += 1
+                    print(
+                        f"⛔ FUNDING FILTER: {symbol} ({side.upper()}) blocked | "
+                        f"Net cost: {net_funding * 100:.3f}%/8h < {self.config.max_funding_cost_threshold * 100:.3f}%"
+                    )
+                    continue  # Toxic funding, skip entry
+
             await self._open_position(
                 symbol=symbol,
                 side=side,
@@ -791,6 +1050,8 @@ class StatArbBacktest:
         - Short spread: PnL = -coin_pnl + primary_pnl (short coin, long primary)
 
         Where coin_pnl = coin_size * (exit_price - entry_price) / entry_price
+
+        Also includes funding PnL accumulated during position lifetime.
         """
         position = self.positions.pop(symbol)
 
@@ -827,7 +1088,23 @@ class StatArbBacktest:
         )
         # 4 transactions: open coin, open primary, close coin, close primary
         total_fees = (position.coin_size + position.primary_size) * fee_rate * 2
-        pnl = raw_pnl - total_fees
+
+        # Calculate funding PnL
+        funding_pnl = 0.0
+        if self.funding_cache is not None:
+            funding_pnl = self.funding_cache.calculate_funding_pnl(
+                coin_symbol=symbol,
+                primary_symbol=self.primary_pair,
+                entry_time=position.entry_time,
+                exit_time=current_time,
+                spread_side=position.side,
+                coin_size_usdt=position.coin_size,
+                primary_size_usdt=position.primary_size,
+                leverage=self.config.leverage,
+            )
+
+        # Total PnL = spread PnL - fees + funding PnL
+        pnl = raw_pnl - total_fees + funding_pnl
 
         # Update balance
         self.balance += pnl
@@ -849,6 +1126,7 @@ class StatArbBacktest:
             pnl_pct=pnl / position.size_usdt * 100,
             exit_reason=exit_reason,
             duration_hours=duration,
+            funding_pnl=funding_pnl,
         )
 
         self.trades.append(trade)
@@ -868,8 +1146,9 @@ class StatArbBacktest:
             )
 
         emoji = "✅" if pnl >= 0 else "❌"
+        funding_str = f" | Funding: ${funding_pnl:+.2f}" if funding_pnl != 0 else ""
 
-        print(f"Reason: {exit_reason} | " f"Duration: {duration:.1f}h")
+        print(f"Reason: {exit_reason} | Duration: {duration:.1f}h{funding_str}")
         self._print_portfolio_state()
 
     async def _close_all_positions(
@@ -1030,6 +1309,8 @@ class StatArbBacktest:
             drawdown_curve=drawdown_pct,
             trades=self.trades,
             symbol_stats=symbol_stats,
+            funding_blocked_entries=self.funding_blocked_count,
+            total_funding_pnl=sum(t.funding_pnl for t in self.trades),
         )
 
     def _calculate_symbol_stats(self) -> List[SymbolStats]:
@@ -1185,6 +1466,16 @@ def print_results(result: BacktestResult) -> None:
         emoji = "✅" if reason == "TP" else "❌" if reason == "SL" else "⚠️"
         print(f"  {emoji} {reason:20s} {count:5d} ({pct:.1f}%)")
 
+    # Funding filter stats
+    if result.funding_blocked_entries > 0 or result.total_funding_pnl != 0:
+        print("\n💸 FUNDING")
+        print("-" * 40)
+        if result.funding_blocked_entries > 0:
+            print(f"  Entries blocked:     {result.funding_blocked_entries}")
+        if result.total_funding_pnl != 0:
+            funding_emoji = "🟢" if result.total_funding_pnl >= 0 else "🔴"
+            print(f"  Total Funding PnL:   {funding_emoji} ${result.total_funding_pnl:+,.2f}")
+
     # Print per-symbol statistics
     if result.symbol_stats:
         print_symbol_stats(result.symbol_stats)
@@ -1280,6 +1571,7 @@ def export_trades(result: BacktestResult, filepath: str) -> None:
                 "size_usdt": t.size_usdt,
                 "pnl": t.pnl,
                 "pnl_pct": t.pnl_pct,
+                "funding_pnl": t.funding_pnl,
                 "exit_reason": t.exit_reason,
                 "duration_hours": t.duration_hours,
             }
@@ -1364,6 +1656,12 @@ Examples:
         help="Use dynamic TP by time base exponent",
     )
 
+    parser.add_argument(
+        "--no-funding-filter",
+        action="store_true",
+        help="Disable funding rate filter",
+    )
+
     args = parser.parse_args()
 
     # Parse dates
@@ -1399,6 +1697,8 @@ Examples:
         consistent_pairs=consistent_pairs,
         use_dynamic_tp=args.use_dynamic_tp,
         max_position_bars=settings.MAX_POSITION_BARS,
+        use_funding_filter=not args.no_funding_filter,
+        max_funding_cost_threshold=settings.MAX_FUNDING_COST_THRESHOLD,
     )
 
     print("\n" + "=" * 70)
@@ -1420,6 +1720,9 @@ Examples:
     print(f"  Trading Pairs:       {len(config.consistent_pairs)} pairs")
     for pair in config.consistent_pairs:
         print(f"    • {pair}")
+    print(f"\n  Funding Filter:      {'ON' if config.use_funding_filter else 'OFF'}")
+    if config.use_funding_filter:
+        print(f"  Max Funding Cost:    {config.max_funding_cost_threshold * 100:.3f}% per 8h")
     print("=" * 70 + "\n")
 
     # Connect to exchange for data loading
@@ -1466,6 +1769,29 @@ Examples:
             logger=logger,
         )
 
+        # Load historical funding rates if funding filter is enabled
+        funding_cache = None
+        if config.use_funding_filter:
+            print("\n💸 Loading historical funding rates...")
+            funding_cache = HistoricalFundingCache(logger=logger)
+
+            # Load funding for all symbols + primary pair
+            all_funding_symbols = [settings.PRIMARY_PAIR] + consistent_pairs
+
+            # Calculate data range (need funding from warmup period too)
+            warmup_days = settings.LOOKBACK_WINDOW_DAYS * 2 + 1
+            funding_start = start_date - timedelta(days=warmup_days)
+
+            await funding_cache.load(
+                exchange_client=exchange,
+                symbols=all_funding_symbols,
+                start_date=funding_start,
+                end_date=end_date,
+            )
+            print(f"  Funding filter threshold: {config.max_funding_cost_threshold * 100:.3f}% per 8h")
+        else:
+            print("\n💸 Funding filter: DISABLED")
+
         # Create and run backtester
         backtester = StatArbBacktest(
             config=config,
@@ -1475,6 +1801,7 @@ Examples:
             z_score_service=z_score_service,
             volatility_filter_service=volatility_filter_service,
             hurst_filter_service=hurst_filter_service,
+            funding_cache=funding_cache,
         )
 
         result = await backtester.run(start_date, end_date)
