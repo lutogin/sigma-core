@@ -67,7 +67,8 @@ class BacktestConfig:
 
     # Maximum position duration before forced exit (in bars)
     # 144 bars = 32 hours for 15m timeframe
-    max_position_bars: int = 144  # 32 hours
+    # 96 bars = 24 hours for 15m timeframe
+    max_position_bars: int = 96  # 24 hours
 
     # Trading pairs (from settings or CLI)
     consistent_pairs: List[str] = field(default_factory=list)
@@ -352,16 +353,18 @@ class StatArbBacktest:
                 aligned_df = df.reindex(common_index, method="ffill")
 
                 # Check for NaN values after reindex
-                nan_count = aligned_df['close'].isna().sum()
+                nan_count = aligned_df["close"].isna().sum()
                 if nan_count > 0:
                     # Forward fill to handle any remaining NaNs
                     aligned_df = aligned_df.ffill()
                     # If still NaN at the start (no data before), backfill from first valid value
                     aligned_df = aligned_df.bfill()
 
-                    remaining_nan = aligned_df['close'].isna().sum()
+                    remaining_nan = aligned_df["close"].isna().sum()
                     if remaining_nan > 0:
-                        print(f"  ❌ {symbol}: Has {remaining_nan} NaN values after fill - SKIPPING")
+                        print(
+                            f"  ❌ {symbol}: Has {remaining_nan} NaN values after fill - SKIPPING"
+                        )
                         continue
 
                 aligned[symbol] = aligned_df
@@ -612,13 +615,12 @@ class StatArbBacktest:
             else:
                 z = z_result.current_z_score
 
-                if (self.config.use_dynamic_tp):
+                if self.config.use_dynamic_tp:
                     # Dynamic TP threshold based on time in position
                     time_coef = self._get_time_based_tp_coefficient(bars_held)
                     dynamic_tp = self.config.z_tp_threshold * time_coef
                 else:
                     dynamic_tp = self.config.z_tp_threshold
-
 
                 if position.side == "long":
                     # Long: entered at Z <= -entry, exit at Z >= tp or Z <= -sl
@@ -685,10 +687,7 @@ class StatArbBacktest:
 
             # Check if signal is valid entry candidate using dynamic threshold
             # Entry: |Z| >= dynamic_threshold AND |Z| <= sl_threshold
-            if (
-                abs(z) >= dyn_threshold
-                and abs(z) <= self.config.z_sl_threshold
-            ):
+            if abs(z) >= dyn_threshold and abs(z) <= self.config.z_sl_threshold:
                 side = "short" if z >= dyn_threshold else "long"
                 entry_candidates.append((abs(z), symbol, side, z_result, dyn_threshold))
 
@@ -870,10 +869,7 @@ class StatArbBacktest:
 
         emoji = "✅" if pnl >= 0 else "❌"
 
-        print(
-            f"Reason: {exit_reason} | "
-            f"Duration: {duration:.1f}h"
-        )
+        print(f"Reason: {exit_reason} | " f"Duration: {duration:.1f}h")
         self._print_portfolio_state()
 
     async def _close_all_positions(
@@ -949,7 +945,9 @@ class StatArbBacktest:
             )
 
         direction = "LONG" if total_primary_exposure > 0 else "SHORT"
-        print(f"      ∑ Net Hedge Exposure: {direction} ${abs(total_primary_exposure):.2f}")
+        print(
+            f"      ∑ Net Hedge Exposure: {direction} ${abs(total_primary_exposure):.2f}"
+        )
 
     def _calculate_results(self) -> BacktestResult:
         """Calculate final backtest results."""
@@ -1397,7 +1395,11 @@ Examples:
         print(f"\n📋 Using pairs from settings: {len(consistent_pairs)} pairs")
 
     # Create backtest config
-    config = BacktestConfig(consistent_pairs=consistent_pairs, use_dynamic_tp=args.use_dynamic_tp)
+    config = BacktestConfig(
+        consistent_pairs=consistent_pairs,
+        use_dynamic_tp=args.use_dynamic_tp,
+        max_position_bars=settings.MAX_POSITION_BARS,
+    )
 
     print("\n" + "=" * 70)
     print("              STATISTICAL ARBITRAGE BACKTEST")
@@ -1486,7 +1488,10 @@ Examples:
 
         # Plot if not disabled
         if not args.no_plot:
-            plot_results(result, save_path=f"backtests/results/{start_date.strftime("%Y-%m-%d")}-{end_date.strftime("%Y-%m-%d")}.png")
+            plot_results(
+                result,
+                save_path=f"backtests/results/{start_date.strftime("%Y-%m-%d")}-{end_date.strftime("%Y-%m-%d")}.png",
+            )
 
     finally:
         await exchange.disconnect()
