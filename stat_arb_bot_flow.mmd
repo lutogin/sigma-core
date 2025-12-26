@@ -74,6 +74,14 @@ flowchart TB
                 TRENDING["❌ Trending<br/>Skip Entry"]
             end
 
+            subgraph FUNDING_FILTER["💸 FUNDING FILTER"]
+                CALC_FUNDING["Fetch Funding Rates<br/>COIN + ETH (normalize to 8h)"]
+                CALC_NET["Calculate Net Funding Cost:<br/>LONG: ETH_rate - COIN_rate<br/>SHORT: COIN_rate - ETH_rate"]
+                FUNDING_CHECK{"Net Cost >= -0.05%<br/>per 8h?"}
+                FUNDING_OK["✅ Funding OK"]
+                FUNDING_TOXIC["❌ TOXIC_FUNDING<br/>Block Entry"]
+            end
+
             EMIT_PENDING["Emit PendingEntrySignalEvent<br/>(with dynamic_entry_threshold)"]
         end
     end
@@ -206,7 +214,12 @@ flowchart TB
     CALC_HURST --> HURST_CHECK
     HURST_CHECK -->|Yes| MEAN_REV
     HURST_CHECK -->|No| TRENDING
-    MEAN_REV --> EMIT_PENDING
+    MEAN_REV --> CALC_FUNDING
+    CALC_FUNDING --> CALC_NET
+    CALC_NET --> FUNDING_CHECK
+    FUNDING_CHECK -->|Yes| FUNDING_OK
+    FUNDING_CHECK -->|No| FUNDING_TOXIC
+    FUNDING_OK --> EMIT_PENDING
 
     %% Entry Observer Flow
     EMIT_PENDING --> RECEIVE_PENDING
@@ -275,9 +288,9 @@ flowchart TB
 
     class CRON,TIMEOUT_CHECK scheduler
     class LOAD_DATA,CALC_CORR,CORR_FILTER,CALC_SPREAD,CALC_Z screener
-    class VOL_CHECK,CALC_HURST,PERCENTILE,EMA_SMOOTH,FLOOR filter
-    class ENTRY_Z,ENTRY_NO_POS,ENTRY_NO_COOL,ENTRY_MAX,EMIT_PENDING,EMIT_ENTRY entry
-    class EXIT_TP,EXIT_SL,EXIT_CORR,EXIT_HURST,EXIT_TIMEOUT,EMIT_EXIT,EMIT_EXIT_SIGNAL exit
+    class VOL_CHECK,CALC_HURST,PERCENTILE,EMA_SMOOTH,FLOOR,CALC_FUNDING,CALC_NET filter
+    class ENTRY_Z,ENTRY_NO_POS,ENTRY_NO_COOL,ENTRY_MAX,EMIT_PENDING,EMIT_ENTRY,FUNDING_OK entry
+    class EXIT_TP,EXIT_SL,EXIT_CORR,EXIT_HURST,EXIT_TIMEOUT,EMIT_EXIT,EMIT_EXIT_SIGNAL,FUNDING_TOXIC exit
     class CALC_SIZE,OPEN_COIN,OPEN_PRIMARY,CLOSE_COIN,CLOSE_PRIMARY trading
     class SUBSCRIBE,CALC_LIVE_Z,TRACK_MAX,EXIT_SUBSCRIBE,EXIT_CALC_Z observer
-    class VOL_SAFE,HURST_CHECK,CHECK_TIMEOUT_W,CHECK_FALSE,CHECK_SL_W,CHECK_PULLBACK,LIVE_TP,LIVE_SL,COOLDOWN_CHECK decision
+    class VOL_SAFE,HURST_CHECK,CHECK_TIMEOUT_W,CHECK_FALSE,CHECK_SL_W,CHECK_PULLBACK,LIVE_TP,LIVE_SL,COOLDOWN_CHECK,FUNDING_CHECK decision

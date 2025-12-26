@@ -75,6 +75,11 @@ class Settings:
     VOLATILITY_CRASH_WINDOW: int = 16  # 4 hours (16 x 15min candles)
     VOLATILITY_CRASH_THRESHOLD: float = 0.05
 
+    # Funding filter
+    # Block entry if net funding cost exceeds this threshold per 8h
+    # -0.0005 = -0.05% (5x standard rate of 0.01%)
+    MAX_FUNDING_COST_THRESHOLD: float = -0.0005
+
     # Adaptive threshold settings
     ADAPTIVE_PERCENTILE: int = (
         95  # Percentile for dynamic Z-score threshold (95 = top 5%)
@@ -163,6 +168,11 @@ class Settings:
         self.VOLATILITY_CRASH_WINDOW = int(os.getenv("VOLATILITY_CRASH_WINDOW", "16"))
         self.VOLATILITY_CRASH_THRESHOLD = float(
             os.getenv("VOLATILITY_CRASH_THRESHOLD", "0.05")
+        )
+
+        # Funding filter
+        self.MAX_FUNDING_COST_THRESHOLD = float(
+            os.getenv("MAX_FUNDING_COST_THRESHOLD", "-0.0005")
         )
 
         # Adaptive threshold
@@ -269,6 +279,12 @@ class Settings:
         logger.info("🔬 Hurst Settings:")
         logger.info(f"  HURST_THRESHOLD: {self.HURST_THRESHOLD}")
         logger.info(f"  HURST_LOOKBACK_CANDLES: {self.HURST_LOOKBACK_CANDLES}")
+        logger.info("-" * 40)
+        logger.info("💸 Funding Filter Settings:")
+        logger.info(
+            f"  MAX_FUNDING_COST_THRESHOLD: {self.MAX_FUNDING_COST_THRESHOLD} "
+            f"({self.MAX_FUNDING_COST_THRESHOLD * 100:.3f}% per 8h)"
+        )
         logger.info("-" * 40)
         logger.info("🎯 Trailing Entry Settings:")
         logger.info(f"  TRAILING_ENTRY_PULLBACK: {self.TRAILING_ENTRY_PULLBACK}")

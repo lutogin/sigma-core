@@ -264,6 +264,7 @@ class Container:
                 hurst_filter_service=self.hurst_filter_service,
                 primary_pair=self._settings.PRIMARY_PAIR,
                 entry_observer_service=self.entry_observer_service,
+                funding_filter_service=self.funding_filter_service,
             )
         return self._instances["orchestrator_service"]
 
@@ -405,6 +406,21 @@ class Container:
                 logger=self.logger,
             )
         return self._instances["hurst_filter_service"]
+
+    @property
+    def funding_filter_service(self):
+        """Get Funding Filter Service for toxic funding detection."""
+        self._check_initialized()
+        if "funding_filter_service" not in self._instances:
+            from src.domain.screener.funding_filter import FundingFilterService
+
+            self._instances["funding_filter_service"] = FundingFilterService(
+                logger=self.logger,
+                exchange_client=self.exchange_client,
+                primary_symbol=self._settings.PRIMARY_PAIR,
+                max_funding_cost_threshold=self._settings.MAX_FUNDING_COST_THRESHOLD,
+            )
+        return self._instances["funding_filter_service"]
 
     # =========================================================================
     # Exchange

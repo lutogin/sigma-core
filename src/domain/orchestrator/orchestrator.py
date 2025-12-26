@@ -18,6 +18,7 @@ import pandas as pd
 from src.domain.position_state import PositionStateService
 from src.domain.screener import ScreenerService
 from src.domain.screener.hurst_filter import HurstFilterService
+from src.domain.screener.funding_filter import FundingFilterService
 from src.domain.screener.z_score import ZScoreResult
 from src.infra.event_emitter import (
     EventEmitter,
@@ -64,6 +65,7 @@ class OrchestratorService:
         hurst_filter_service: HurstFilterService,
         primary_pair: str,
         entry_observer_service: Optional["EntryObserverService"] = None,
+        funding_filter_service: Optional[FundingFilterService] = None,
     ):
         """
         Initialize Orchestrator Service.
@@ -76,6 +78,7 @@ class OrchestratorService:
             hurst_filter_service: Service for Hurst exponent calculation.
             primary_pair: Primary trading pair (e.g., "ETH/USDT:USDT").
             entry_observer_service: Optional service for trailing entry monitoring.
+            funding_filter_service: Optional service for funding rate filtering.
         """
         self._logger = logger
         self._screener_service = screener_service
@@ -84,6 +87,7 @@ class OrchestratorService:
         self._hurst_filter = hurst_filter_service
         self._primary_pair = primary_pair
         self._entry_observer = entry_observer_service
+        self._funding_filter = funding_filter_service
 
     async def run(self) -> None:
         """
@@ -395,9 +399,10 @@ class OrchestratorService:
         - |Z| < z_sl (not too extreme)
         - Symbol not already in position
         - Symbol not in cooldown
+        - Funding cost is acceptable (not toxic)
 
         The dynamic_entry_threshold is calculated as:
-        max(z_entry_threshold, percentile_97 of historical |Z|)
+        max(z_entry_threshold, percentile_95 of historical |Z|)
 
         Emits PendingEntrySignalEvent for EntryObserver to monitor.
         The EntryObserver will monitor in real-time and emit EntrySignalEvent
@@ -407,10 +412,12 @@ class OrchestratorService:
             List of emitted PendingEntrySignalEvent.
         """
         entry_signals = []
+        candidates_for_funding_check = []
 
         primary_df = raw_data.get(self._primary_pair)
         primary_price = primary_df["close"].iloc[-1] if primary_df is not None else 0.0
 
+        # First pass: collect candidates that pass basic filters
         for symbol, result in filtered_results.items():
             z = result.current_z_score
 
@@ -436,22 +443,44 @@ class OrchestratorService:
                 )
                 continue
 
+            # Determine spread side based on Z-score sign
+            spread_side = SpreadSide.LONG if z < 0 else SpreadSide.SHORT
+            candidates_for_funding_check.append((symbol, result, spread_side))
+
+        # Second pass: check funding for all candidates
+        if self._funding_filter and candidates_for_funding_check:
+            pairs_with_sides = [
+                (symbol, spread_side.value.upper())
+                for symbol, _, spread_side in candidates_for_funding_check
+            ]
+            funding_results = await self._funding_filter.check_batch(pairs_with_sides)
+        else:
+            funding_results = {}
+
+        # Third pass: emit signals for candidates that pass funding filter
+        for symbol, result, spread_side in candidates_for_funding_check:
+            # Check funding filter
+            if self._funding_filter and symbol in funding_results:
+                funding_check = funding_results[symbol]
+                if not funding_check.is_safe:
+                    self._logger.info(
+                        f"⛔ {symbol} blocked by FUNDING filter | "
+                        f"Net cost: {funding_check.net_cost_pct:.3f}% per 8h"
+                    )
+                    continue
+
+            z = result.current_z_score
+            dynamic_threshold = result.dynamic_entry_threshold
+
             # Get current price
             coin_df = raw_data.get(symbol)
             coin_price = coin_df["close"].iloc[-1] if coin_df is not None else 0.0
 
-            # Determine spread side based on Z-score sign
-            # Negative Z -> LONG spread (buy COIN, sell PRIMARY)
-            # Positive Z -> SHORT spread (sell COIN, buy PRIMARY)
-            spread_side = SpreadSide.LONG if z < 0 else SpreadSide.SHORT
-
             # Get spread mean and std for live Z-score calculation
-            # These are the latest values from the rolling window
             spread_mean = self._get_spread_mean(result)
             spread_std = self._get_spread_std(result)
 
             # Create PendingEntrySignalEvent for trailing entry monitoring
-            # Pass dynamic threshold so EntryObserver uses the same threshold
             event = PendingEntrySignalEvent(
                 coin_symbol=symbol,
                 primary_symbol=self._primary_pair,
@@ -464,7 +493,7 @@ class OrchestratorService:
                 spread_std=spread_std,
                 coin_price=coin_price,
                 primary_price=primary_price,
-                z_entry_threshold=dynamic_threshold,  # Use dynamic threshold
+                z_entry_threshold=dynamic_threshold,
                 z_tp_threshold=z_tp,
                 z_sl_threshold=z_sl,
             )
