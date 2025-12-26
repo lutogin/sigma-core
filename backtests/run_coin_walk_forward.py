@@ -379,6 +379,46 @@ class CoinWalkForwardRunner:
                 f"Total PnL: ${result.total_pnl:+.2f}"
             )
 
+        # Quality filter: Sharpe > 1.5, Win Rate > 60%, Trades > 10, Profitable
+        print("\n" + "=" * 120)
+        print("💎 QUALITY COINS (Sharpe > 1.5, WR > 60%, Trades > 10, Profitable)")
+        print("-" * 120)
+
+        quality_coins = [
+            r for r in successful
+            if r.avg_sharpe > 1.5
+            and r.overall_win_rate > 0.6
+            and r.total_trades > 10
+            and r.total_pnl > 0
+        ]
+
+        if quality_coins:
+            # Sort by Sharpe ratio descending
+            quality_coins.sort(key=lambda r: r.avg_sharpe, reverse=True)
+
+            print(
+                f"{'Rank':<5} | {'Symbol':<20} | {'Sharpe':>8} | {'WR %':>7} | "
+                f"{'Trades':>7} | {'Total PnL':>12} | {'PnL %':>8} | {'Max DD %':>9}"
+            )
+            print("-" * 120)
+
+            for i, result in enumerate(quality_coins, 1):
+                print(
+                    f"{i:<5} | {result.symbol:<20} | "
+                    f"{result.avg_sharpe:>8.2f} | {result.overall_win_rate*100:>6.1f}% | "
+                    f"{result.total_trades:>7} | ${result.total_pnl:>11.2f} | "
+                    f"{result.total_pnl_pct:>7.2f}% | {result.max_drawdown_pct:>8.2f}%"
+                )
+
+            print("-" * 120)
+            print(f"  Total quality coins: {len(quality_coins)} / {len(successful)}")
+
+            # Print as comma-separated list for easy copy
+            quality_symbols = [r.coin for r in quality_coins]
+            print(f"\n  📋 Copy-paste list: {', '.join(quality_symbols)}")
+        else:
+            print("  No coins meet all quality criteria.")
+
     def _save_results(self):
         """Save results to JSON file."""
         output_file = f"backtests/results/coin_walk_forward_{self.start_date}-{self.end_date}.json"
