@@ -309,8 +309,8 @@ class BacktestConfig:
     use_dynamic_tp: bool = True  # Use dynamic take profit
 
     # Trailing Entry settings (simulation of live EntryObserverService)
-    use_trailing_entry: bool = True  # Enable trailing entry simulation
-    trailing_pullback: float = 0.05  # Z-score pullback for reversal confirmation
+    use_trailing_entry: bool = False  # Enable trailing entry simulation
+    trailing_pullback: float = 0.03  # Z-score pullback for reversal confirmation
     trailing_timeout_minutes: int = 180  # Max watch duration before cancellation
 
 
@@ -340,6 +340,11 @@ class Position:
     primary_entry_price: float
     primary_size: float  # = coin_size * beta, in USDT terms
 
+    # Peak Z-score during trailing entry (for dynamic TP calculation)
+    # If trailing entry was used, this is the max |Z| before pullback
+    # Otherwise equals abs(entry_z_score)
+    peak_z_score: float = 0.0
+
 
 @dataclass
 class BacktestWatchCandidate:
@@ -357,6 +362,7 @@ class BacktestWatchCandidate:
     start_bar_idx: int
     start_time: datetime
     beta: float
+    spread_mean: float
     spread_mean: float
     spread_std: float
     z_entry_threshold: float
@@ -843,26 +849,33 @@ class StatArbBacktest:
         """
         Calculate time-based coefficient for dynamic TP threshold.
 
-        As position ages, we become more aggressive with TP (lower threshold).
-        This matches the live bot's ExitObserverService.get_time_based_coefficient().
+        As position ages, we accept less reversion (higher coefficient = easier TP).
+        The coefficient is multiplied by peak_z_score to get the TP threshold.
+
+        Example with peak_z = 3.0:
+        - 0-4h:   coef=0.1 -> TP at Z=0.3 (wait for ideal ~90% reversion)
+        - 4-12h:  coef=0.3 -> TP at Z=0.9 (accept ~70% reversion)
+        - 12-24h: coef=0.5 -> TP at Z=1.5 (accept ~50% reversion)
+        - 24h+:   TIME_STOP -> close at market (handled separately)
 
         Args:
             bars_held: Number of bars the position has been held.
 
         Returns:
-            Coefficient to multiply z_tp_threshold by.
+            Coefficient to multiply peak_z_score by.
+            Returns None (via special value) for time stop after 24h.
         """
-        # Convert bars to hours (assuming 15m timeframe)
+        # Convert bars to hours
         hours = bars_held * self._timeframe_minutes / 60
 
         if hours <= 4:
-            return 1.0  # Normal TP threshold
+            return 0.1  # Wait for ideal (~90% reversion)
         elif hours < 12:
-            return 3.0  # More aggressive after 4h
+            return 0.3  # Accept ~70% reversion after 4h
         elif hours < 24:
-            return 5.0  # Even more aggressive after 12h
+            return 0.5  # Accept ~50% reversion after 12h
         else:
-            return 8.0  # Most aggressive after 24h
+            return 1.0  # Time stop - will be handled by TIMEOUT check
 
     async def _check_exits(
         self,
@@ -894,14 +907,21 @@ class StatArbBacktest:
                 z = z_result.current_z_score
 
                 if self.config.use_dynamic_tp:
-                    # Dynamic TP threshold based on time in position
+                    # Dynamic TP based on time in position
+                    # TP threshold = max(peak_z * time_coef, z_tp_threshold)
+                    # 0-4h:   coef=0.1 -> wait for ~90% reversion
+                    # 4-12h:  coef=0.3 -> accept ~70% reversion
+                    # 12-24h: coef=0.5 -> accept ~50% reversion
+                    # 24h+:   handled by TIMEOUT
+                    # Minimum TP level is always z_tp_threshold
                     time_coef = self._get_time_based_tp_coefficient(bars_held)
-                    dynamic_tp = self.config.z_tp_threshold * time_coef
+                    reference_z = position.peak_z_score if position.peak_z_score > 0 else abs(position.entry_z_score)
+                    dynamic_tp = max(reference_z * time_coef, self.config.z_tp_threshold)
                 else:
                     dynamic_tp = self.config.z_tp_threshold
 
                 if position.side == "long":
-                    # Long: entered at Z <= -entry, exit at Z >= tp or Z <= -sl
+                    # Long: entered at Z <= -entry, exit at Z >= -tp or Z <= -sl
                     if z >= -dynamic_tp:  # Z moving toward 0 from negative
                         exit_reason = "TP"
                     elif z <= -self.config.z_sl_threshold:
@@ -1113,10 +1133,10 @@ class StatArbBacktest:
                     )
                     watches_to_remove.append((symbol, None))
                 elif abs_z < watch.z_entry_threshold:
-                    print(f"❌ WATCH FALSE_ALARM {symbol} | Z={live_z:.2f}")
+                    print(f"❌ WATCH FALSE_ALARM on 15m {symbol} | Z={live_z:.2f}")
                     watches_to_remove.append((symbol, "FALSE_ALARM"))
                 elif abs_z >= watch.z_sl_threshold:
-                    print(f"🛑 WATCH SL_HIT {symbol} | Z={live_z:.2f}")
+                    print(f"🛑 WATCH SL_HIT on 15m {symbol} | Z={live_z:.2f}")
                     watches_to_remove.append((symbol, "SL_HIT"))
                 elif abs_z > watch.max_z:
                     watch.max_z = abs_z
@@ -1271,7 +1291,7 @@ class StatArbBacktest:
         coin_size = position_size
         primary_size = position_size * beta
 
-        # Create position
+        # Create position with peak_z from trailing watch
         position = Position(
             symbol=symbol,
             side=watch.side,
@@ -1284,6 +1304,7 @@ class StatArbBacktest:
             coin_size=coin_size,
             primary_entry_price=primary_price,
             primary_size=primary_size,
+            peak_z_score=watch.max_z,  # Store peak Z from trailing
         )
 
         self.positions[symbol] = position
@@ -1333,7 +1354,7 @@ class StatArbBacktest:
         coin_size = position_size
         primary_size = position_size * beta
 
-        # Create position
+        # Create position (peak_z = entry_z for immediate entry)
         position = Position(
             symbol=symbol,
             side=side,
@@ -1346,6 +1367,7 @@ class StatArbBacktest:
             coin_size=coin_size,
             primary_entry_price=primary_price,
             primary_size=primary_size,
+            peak_z_score=abs(z_result.current_z_score),  # No trailing, peak = entry
         )
 
         self.positions[symbol] = position

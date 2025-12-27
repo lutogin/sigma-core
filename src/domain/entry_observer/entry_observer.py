@@ -188,6 +188,9 @@ class EntryObserverService:
         """
         Handle PendingEntrySignalEvent - start monitoring for reversal.
 
+        If already watching this symbol, update the watch parameters
+        (beta, spread_mean, spread_std, thresholds) but keep max_z progress.
+
         Args:
             event: Pending entry signal with initial Z-score and spread stats.
         """
@@ -196,7 +199,38 @@ class EntryObserverService:
         async with self._lock:
             # Check if already watching this symbol
             if coin in self._watches:
-                self._logger.debug(f"Already watching {coin}, skipping")
+                # Update existing watch with fresh parameters from new scan
+                watch = self._watches[coin]
+                old_beta = watch.beta
+                old_mean = watch.spread_mean
+                old_std = watch.spread_std
+
+                # Update calculation parameters (these change with new data)
+                watch.beta = event.beta
+                watch.spread_mean = event.spread_mean
+                watch.spread_std = event.spread_std
+                watch.correlation = event.correlation
+                watch.hurst = event.hurst
+                watch.z_entry_threshold = event.z_entry_threshold
+                watch.z_tp_threshold = event.z_tp_threshold
+                watch.z_sl_threshold = event.z_sl_threshold
+
+                # Keep max_z - don't reset pullback progress
+                # But recalculate current Z with new parameters
+                new_z = watch.current_z_score
+                abs_new_z = abs(new_z)
+
+                # If new Z is higher than max_z, update it
+                if abs_new_z > watch.max_z:
+                    watch.max_z = abs_new_z
+
+                self._logger.info(
+                    f"🔄 Updated watch {coin} | "
+                    f"β: {old_beta:.3f}→{event.beta:.3f} | "
+                    f"mean: {old_mean:.4f}→{event.spread_mean:.4f} | "
+                    f"std: {old_std:.4f}→{event.spread_std:.4f} | "
+                    f"Z={new_z:.2f} | max_z={watch.max_z:.2f}"
+                )
                 return
 
             # Check max watches limit
