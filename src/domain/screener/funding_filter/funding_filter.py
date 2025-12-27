@@ -200,16 +200,21 @@ class FundingFilterService:
         Args:
             coin_rate: Funding rate for coin (e.g., 0.0001 = 0.01%)
             eth_rate: Funding rate for ETH
-            spread_side: "LONG_SPREAD" or "SHORT_SPREAD"
+            spread_side: "LONG_SPREAD", "SHORT_SPREAD", "LONG", or "SHORT"
 
         Returns:
             Net funding as decimal (e.g., -0.0005 = -0.05%)
         """
-        if spread_side == "LONG_SPREAD":
+        # Normalize spread_side to handle both formats
+        side_upper = spread_side.upper()
+        is_long = side_upper in ("LONG_SPREAD", "LONG")
+        is_short = side_upper in ("SHORT_SPREAD", "SHORT")
+
+        if is_long:
             # Long COIN (pay if rate > 0), Short ETH (receive if rate > 0)
             # Net = what we receive from ETH short - what we pay for COIN long
             return eth_rate - coin_rate
-        elif spread_side == "SHORT_SPREAD":
+        elif is_short:
             # Short COIN (receive if rate > 0), Long ETH (pay if rate > 0)
             # Net = what we receive from COIN short - what we pay for ETH long
             return coin_rate - eth_rate

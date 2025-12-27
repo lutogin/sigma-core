@@ -450,7 +450,7 @@ class OrchestratorService:
         # Second pass: check funding for all candidates
         if self._funding_filter and candidates_for_funding_check:
             pairs_with_sides = [
-                (symbol, spread_side.value.upper())
+                (symbol, f"{spread_side.value.upper()}_SPREAD")
                 for symbol, _, spread_side in candidates_for_funding_check
             ]
             funding_results = await self._funding_filter.check_batch(pairs_with_sides)
