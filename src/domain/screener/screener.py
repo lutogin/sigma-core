@@ -10,6 +10,7 @@ Responsible for:
 - Logging and returning structured results
 """
 
+import asyncio
 from dataclasses import dataclass
 from typing import Dict, Optional
 from datetime import datetime, timedelta, timezone
@@ -208,21 +209,27 @@ class ScreenerService:
             self._logger.warning("No data loaded. Aborting scan.")
             return None
 
-        # 4. Calculate Correlation
-        correlation_results = self._correlation_service.calculate(
-            primary_symbol=self._primary_pair,
-            ohlcv=raw_data,
+        # 4. Calculate Correlation (CPU-bound, run in thread pool to not block event loop)
+        correlation_results = await asyncio.get_event_loop().run_in_executor(
+            None,  # Use default ThreadPoolExecutor
+            lambda: self._correlation_service.calculate(
+                primary_symbol=self._primary_pair,
+                ohlcv=raw_data,
+            )
         )
 
         if not correlation_results:
             self._logger.warning("No correlation results. Aborting scan.")
             return None
 
-        # 5. Calculate Z-Score for spread signals
-        z_score_results = self._z_score_service.calculate(
-            primary_symbol=self._primary_pair,
-            correlation_results=correlation_results,
-            ohlcv=raw_data,
+        # 5. Calculate Z-Score for spread signals (CPU-bound, run in thread pool)
+        z_score_results = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self._z_score_service.calculate(
+                primary_symbol=self._primary_pair,
+                correlation_results=correlation_results,
+                ohlcv=raw_data,
+            )
         )
 
         symbols_scanned = len(z_score_results)
@@ -231,9 +238,12 @@ class ScreenerService:
         filtered_results = self._filter_by_correlation(z_score_results)
         symbols_after_corr = len(filtered_results)
 
-        # 7. Filter by Hurst exponent (ONLY for entry candidates with valid Z-score signal)
-        filtered_results, hurst_values = self._filter_by_hurst(
-            filtered_results, raw_data, correlation_results
+        # 7. Filter by Hurst exponent (CPU-bound, run in thread pool)
+        filtered_results, hurst_values = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self._filter_by_hurst(
+                filtered_results, raw_data, correlation_results
+            )
         )
 
         # 8. Log results
