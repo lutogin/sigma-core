@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import math
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -307,6 +308,11 @@ class BacktestConfig:
 
     use_dynamic_tp: bool = True  # Use dynamic take profit
 
+    # Trailing Entry settings (simulation of live EntryObserverService)
+    use_trailing_entry: bool = True  # Enable trailing entry simulation
+    trailing_pullback: float = 0.05  # Z-score pullback for reversal confirmation
+    trailing_timeout_minutes: int = 180  # Max watch duration before cancellation
+
 
 @dataclass
 class Position:
@@ -333,6 +339,29 @@ class Position:
     # Leg 2: PRIMARY (hedge)
     primary_entry_price: float
     primary_size: float  # = coin_size * beta, in USDT terms
+
+
+@dataclass
+class BacktestWatchCandidate:
+    """
+    Watch candidate for trailing entry simulation.
+
+    Tracks a symbol after Z-score crosses entry threshold,
+    waiting for pullback confirmation before actual entry.
+    """
+
+    symbol: str
+    side: str  # "long" or "short"
+    initial_z: float
+    max_z: float  # Maximum |Z| reached during watch
+    start_bar_idx: int
+    start_time: datetime
+    beta: float
+    spread_mean: float
+    spread_std: float
+    z_entry_threshold: float
+    z_sl_threshold: float
+    correlation: float
 
 
 @dataclass
@@ -414,6 +443,9 @@ class BacktestResult:
     funding_blocked_entries: int = 0
     total_funding_pnl: float = 0.0  # Total funding PnL across all trades
 
+    # Trailing entry stats
+    trailing_cancelled_entries: int = 0  # Watches cancelled (timeout, false_alarm, SL)
+
 
 class StatArbBacktest:
     """
@@ -467,6 +499,10 @@ class StatArbBacktest:
 
         # Funding filter stats
         self.funding_blocked_count: int = 0
+
+        # Trailing entry state
+        self.watch_candidates: Dict[str, BacktestWatchCandidate] = {}
+        self.trailing_cancelled_count: int = 0  # Stats: cancelled watches
 
     async def run(
         self,
@@ -901,12 +937,21 @@ class StatArbBacktest:
         if len(self.positions) >= self.config.max_spreads:
             return  # Max positions reached
 
+        # Process existing watches first (trailing entry logic)
+        if self.config.use_trailing_entry:
+            await self._process_watches(
+                current_time, current_bar_idx, window_data, correlation_results
+            )
+
         # entry_candidates list of (z_abs, symbol, side, z_result, dyn_threshold)
         entry_candidates = []
 
         for symbol, z_result in filtered_results.items():
             if symbol in self.positions:
                 continue  # Already have position in this symbol
+
+            if symbol in self.watch_candidates:
+                continue  # Already watching this symbol
 
             if symbol == self.primary_pair:
                 continue  # Don't trade primary pair directly
@@ -964,15 +1009,293 @@ class StatArbBacktest:
                     )
                     continue  # Toxic funding, skip entry
 
-            await self._open_position(
-                symbol=symbol,
-                side=side,
-                z_result=z_result,
-                current_time=current_time,
-                current_bar_idx=current_bar_idx,
-                window_data=window_data,
-                dynamic_threshold=dyn_threshold,
+            if self.config.use_trailing_entry:
+                # Start watch instead of immediate entry
+                self._start_watch(
+                    symbol=symbol,
+                    side=side,
+                    z_result=z_result,
+                    current_time=current_time,
+                    current_bar_idx=current_bar_idx,
+                )
+            else:
+                # Immediate entry (original behavior)
+                await self._open_position(
+                    symbol=symbol,
+                    side=side,
+                    z_result=z_result,
+                    current_time=current_time,
+                    current_bar_idx=current_bar_idx,
+                    window_data=window_data,
+                    dynamic_threshold=dyn_threshold,
+                )
+
+    # =========================================================================
+    # Trailing Entry Methods
+    # =========================================================================
+
+    def _start_watch(
+        self,
+        symbol: str,
+        side: str,
+        z_result: ZScoreResult,
+        current_time: datetime,
+        current_bar_idx: int,
+    ) -> None:
+        """Start watching a symbol for trailing entry."""
+        # Calculate spread_mean and spread_std from the spread_series
+        # Use the lookback window for consistency with z-score calculation
+        lookback = min(len(z_result.spread_series), 288)  # ~3 days of 15m candles
+        recent_spread = z_result.spread_series.tail(lookback).dropna()
+        spread_mean = float(recent_spread.mean()) if len(recent_spread) > 0 else 0.0
+        spread_std = float(recent_spread.std()) if len(recent_spread) > 1 else 1.0
+
+        watch = BacktestWatchCandidate(
+            symbol=symbol,
+            side=side,
+            initial_z=z_result.current_z_score,
+            max_z=abs(z_result.current_z_score),
+            start_bar_idx=current_bar_idx,
+            start_time=current_time,
+            beta=z_result.current_beta,
+            spread_mean=spread_mean,
+            spread_std=spread_std,
+            z_entry_threshold=z_result.dynamic_entry_threshold,
+            z_sl_threshold=self.config.z_sl_threshold,
+            correlation=z_result.current_correlation,
+        )
+        self.watch_candidates[symbol] = watch
+        print(
+            f"👀 WATCH START {symbol} | Z={z_result.current_z_score:.2f} | "
+            f"side={side} | pullback_target={watch.max_z - self.config.trailing_pullback:.2f}"
+        )
+
+    async def _process_watches(
+        self,
+        current_time: datetime,
+        current_bar_idx: int,
+        window_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict,
+    ) -> None:
+        """Process trailing entry logic for all watches using 1m candles."""
+        watches_to_remove = []
+
+        for symbol, watch in list(self.watch_candidates.items()):
+            # Check timeout
+            watch_duration_minutes = (current_time - watch.start_time).total_seconds() / 60
+            if watch_duration_minutes >= self.config.trailing_timeout_minutes:
+                print(
+                    f"⏰ WATCH TIMEOUT {symbol} after {watch_duration_minutes:.0f}min | "
+                    f"max_z={watch.max_z:.2f}"
+                )
+                watches_to_remove.append((symbol, "TIMEOUT"))
+                continue
+
+            # Load 1m candles for this symbol since watch started
+            coin_1m = await self._load_minute_candles_for_watch(
+                symbol, watch.start_time, current_time
             )
+
+            if coin_1m is None or coin_1m.empty:
+                # If can't load 1m data, use 15m data for rough trailing
+                coin_price = window_data[symbol]["close"].iloc[-1]
+                primary_price = window_data[self.primary_pair]["close"].iloc[-1]
+                live_z = self._calculate_live_z(
+                    coin_price, primary_price,
+                    watch.beta, watch.spread_mean, watch.spread_std
+                )
+                abs_z = abs(live_z)
+
+                # Check pullback on 15m
+                if abs_z <= watch.max_z - self.config.trailing_pullback:
+                    await self._execute_watch_entry(
+                        watch, current_time, live_z, current_bar_idx, window_data
+                    )
+                    watches_to_remove.append((symbol, None))
+                elif abs_z < watch.z_entry_threshold:
+                    print(f"❌ WATCH FALSE_ALARM {symbol} | Z={live_z:.2f}")
+                    watches_to_remove.append((symbol, "FALSE_ALARM"))
+                elif abs_z >= watch.z_sl_threshold:
+                    print(f"🛑 WATCH SL_HIT {symbol} | Z={live_z:.2f}")
+                    watches_to_remove.append((symbol, "SL_HIT"))
+                elif abs_z > watch.max_z:
+                    watch.max_z = abs_z
+                continue
+
+            # Get primary 1m data for same period
+            primary_1m = await self._load_minute_candles_for_watch(
+                self.primary_pair, watch.start_time, current_time
+            )
+
+            if primary_1m is None or primary_1m.empty:
+                continue
+
+            # Simulate trailing entry on 1m data
+            entry_result = self._simulate_trailing_on_minute_data(
+                watch, coin_1m, primary_1m
+            )
+
+            if entry_result is not None:
+                action, entry_time, entry_z = entry_result
+                if action == "ENTER":
+                    # Execute entry at the minute-level entry point
+                    await self._execute_watch_entry(
+                        watch, entry_time, entry_z, current_bar_idx, window_data
+                    )
+                    watches_to_remove.append((symbol, None))
+                else:
+                    # Watch cancelled (FALSE_ALARM, SL_HIT)
+                    print(f"❌ WATCH CANCEL {symbol} | reason={action} | Z={entry_z:.2f}")
+                    watches_to_remove.append((symbol, action))
+
+        # Remove processed watches
+        for symbol, reason in watches_to_remove:
+            if symbol in self.watch_candidates:
+                del self.watch_candidates[symbol]
+            if reason and reason in ("FALSE_ALARM", "SL_HIT", "TIMEOUT"):
+                self.trailing_cancelled_count += 1
+                # Add cooldown for cancelled watches
+                if self.config.cooldown_bars > 0:
+                    cooldown_minutes = self.config.cooldown_bars * self._timeframe_minutes
+                    self.symbol_cooldowns[symbol] = current_time + timedelta(minutes=cooldown_minutes)
+
+    def _simulate_trailing_on_minute_data(
+        self,
+        watch: BacktestWatchCandidate,
+        coin_1m: pd.DataFrame,
+        primary_1m: pd.DataFrame,
+    ) -> Optional[Tuple[str, datetime, float]]:
+        """
+        Simulate trailing entry on 1m candles.
+
+        Returns:
+            Tuple of (action, timestamp, z_score) where action is:
+            - "ENTER": Entry confirmed after pullback
+            - "FALSE_ALARM": Z returned below entry threshold
+            - "SL_HIT": Z exceeded stop-loss
+            - None: Still watching
+        """
+        max_z = watch.max_z
+
+        # Align data
+        common_index = coin_1m.index.intersection(primary_1m.index)
+
+        for ts in common_index:
+            coin_price = coin_1m.loc[ts, "close"]
+            primary_price = primary_1m.loc[ts, "close"]
+
+            # Calculate live Z-score
+            live_z = self._calculate_live_z(
+                coin_price, primary_price,
+                watch.beta, watch.spread_mean, watch.spread_std
+            )
+            abs_z = abs(live_z)
+
+            # 1. Check pullback (ENTRY) - FIRST priority
+            if abs_z <= max_z - self.config.trailing_pullback:
+                return ("ENTER", ts, live_z)
+
+            # 2. Check false alarm (Z returned below entry threshold)
+            if abs_z < watch.z_entry_threshold:
+                return ("FALSE_ALARM", ts, live_z)
+
+            # 3. Check SL hit
+            if abs_z >= watch.z_sl_threshold:
+                return ("SL_HIT", ts, live_z)
+
+            # 4. Update max_z if still widening
+            if abs_z > max_z:
+                max_z = abs_z
+
+        # Update max_z in watch for next iteration
+        watch.max_z = max_z
+        return None
+
+    def _calculate_live_z(
+        self,
+        coin_price: float,
+        primary_price: float,
+        beta: float,
+        spread_mean: float,
+        spread_std: float,
+    ) -> float:
+        """Calculate Z-score from prices (same as WatchCandidate.current_z_score)."""
+        if coin_price <= 0 or primary_price <= 0 or spread_std == 0:
+            return 0.0
+        current_spread = math.log(coin_price) - beta * math.log(primary_price)
+        return (current_spread - spread_mean) / spread_std
+
+    async def _load_minute_candles_for_watch(
+        self,
+        symbol: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> Optional[pd.DataFrame]:
+        """Load 1m candles for a symbol during watch period."""
+        try:
+            # Calculate number of bars needed
+            duration_minutes = int((end_time - start_time).total_seconds() / 60) + 5
+
+            # Use data_loader to fetch 1m data with caching
+            df = await self.data_loader.load_ohlcv_with_cache(
+                symbol=symbol,
+                num_bars=duration_minutes,
+                timeframe="1m",
+                start_time=start_time,
+                end_time=end_time,
+            )
+            return df if not df.empty else None
+        except Exception as e:
+            return None
+
+    async def _execute_watch_entry(
+        self,
+        watch: BacktestWatchCandidate,
+        entry_time: datetime,
+        entry_z: float,
+        current_bar_idx: int,
+        window_data: Dict[str, pd.DataFrame],
+    ) -> None:
+        """Execute entry after trailing pullback confirmation."""
+        symbol = watch.symbol
+
+        # Get current prices from window_data (15m)
+        coin_price = window_data[symbol]["close"].iloc[-1]
+        primary_price = window_data[self.primary_pair]["close"].iloc[-1]
+
+        # Calculate position size
+        position_size = self.balance * self.config.position_size_pct
+
+        # Position sizing
+        beta = abs(watch.beta)
+        coin_size = position_size
+        primary_size = position_size * beta
+
+        # Create position
+        position = Position(
+            symbol=symbol,
+            side=watch.side,
+            entry_z_score=entry_z,
+            entry_beta=watch.beta,
+            size_usdt=position_size,
+            entry_time=entry_time,
+            entry_bar_idx=current_bar_idx,
+            coin_entry_price=coin_price,
+            coin_size=coin_size,
+            primary_entry_price=primary_price,
+            primary_size=primary_size,
+        )
+
+        self.positions[symbol] = position
+
+        watch_duration = (entry_time - watch.start_time).total_seconds() / 60
+        print(
+            f"✅ WATCH ENTRY {symbol} | Z={entry_z:.2f} (peak={watch.max_z:.2f}) | "
+            f"pullback={watch.max_z - abs(entry_z):.2f} | "
+            f"watch_duration={watch_duration:.0f}min | "
+            f"β={beta:.3f}"
+        )
+        self._print_portfolio_state()
 
     async def _open_position(
         self,
@@ -1311,6 +1634,7 @@ class StatArbBacktest:
             symbol_stats=symbol_stats,
             funding_blocked_entries=self.funding_blocked_count,
             total_funding_pnl=sum(t.funding_pnl for t in self.trades),
+            trailing_cancelled_entries=self.trailing_cancelled_count,
         )
 
     def _calculate_symbol_stats(self) -> List[SymbolStats]:

@@ -318,7 +318,7 @@ class ScreenerService:
                 skipped.append(f"{symbol} (corr={result.current_correlation:.4f})")
 
         if skipped:
-            self._logger.warning(
+            self._logger.info(
                 f"Skipped {len(skipped)} symbols with low correlation "
                 f"(< {self._correlation_threshold}): {', '.join(skipped)}"
             )
