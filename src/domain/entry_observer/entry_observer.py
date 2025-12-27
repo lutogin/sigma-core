@@ -60,6 +60,7 @@ class EntryObserverService:
         watch_timeout_seconds: int = 2700,  # 45 minutes
         debounce_seconds: float = 1.0,
         max_watches: int = 10,
+        false_alarm_hysteresis: float = 0.2,  # Cancel only if Z drops this much below threshold
     ):
         """
         Initialize Entry Observer Service.
@@ -75,6 +76,8 @@ class EntryObserverService:
             watch_timeout_seconds: Maximum watch duration before cancellation.
             debounce_seconds: Minimum time between Z-score recalculations.
             max_watches: Maximum concurrent watches (limit WebSocket connections).
+            false_alarm_hysteresis: Cancel watch only if |Z| drops this much below entry threshold.
+                                    Prevents premature cancellation during pullback to entry target.
         """
         self._emitter = event_emitter
         self._exchange = exchange_client
@@ -87,6 +90,7 @@ class EntryObserverService:
         self._timeout = watch_timeout_seconds
         self._debounce = debounce_seconds
         self._max_watches = max_watches
+        self._false_alarm_hysteresis = false_alarm_hysteresis
 
         # Active watches: coin_symbol -> WatchCandidate
         self._watches: Dict[str, WatchCandidate] = {}
@@ -476,9 +480,16 @@ class EntryObserverService:
         3. Check conditions in order:
            a. FIRST: Check for reversal (pullback from max) - ENTRY
            b. Check timeout
-           c. Check false alarm (Z returned below entry threshold)
+           c. Check false alarm (Z dropped significantly below threshold with hysteresis)
            d. Check SL hit
            e. Update max_z if still widening
+
+        False Alarm Logic (with hysteresis):
+        - We only cancel if |Z| drops SIGNIFICANTLY below entry threshold
+        - This prevents cancellation when Z passes through threshold zone on way to pullback target
+        - Example: threshold=2.6, max_z=2.8, pullback=0.3 → target=2.5
+          If Z drops to 2.55, it's below threshold but still valid for entry at 2.5
+        - With hysteresis=0.3, we only cancel if |Z| < (threshold - 0.3) = 2.3
         """
         now = time.time()
 
@@ -501,9 +512,12 @@ class EntryObserverService:
         z_entry = watch.z_entry_threshold
         z_sl = watch.z_sl_threshold
 
+        # Calculate pullback target for this watch
+        pullback_target = watch.max_z - self._pullback
+
         # 1. FIRST: Check for reversal (pullback from max) - ENTRY CONDITION
         # This must be checked first to capture the entry moment
-        if abs_z <= watch.max_z - self._pullback:
+        if abs_z <= pullback_target:
             self._logger.info(
                 f"✅ {coin} reversal confirmed! | "
                 f"peak={watch.max_z:.2f}, current={abs_z:.2f}, "
@@ -512,7 +526,7 @@ class EntryObserverService:
             await self._execute_entry(watch, live_z)
             return
 
-        # 2. Check timeout (60 minutes)
+        # 2. Check timeout
         if watch.watch_duration_seconds > self._timeout:
             self._logger.info(
                 f"⏰ {coin} watch timeout after {watch.watch_duration_minutes:.1f}min | "
@@ -531,11 +545,16 @@ class EntryObserverService:
             await self._cancel_watch(coin, WatchCancelReason.TIMEOUT, live_z)
             return
 
-        # 3. Check false alarm - Z returned below dynamic entry threshold
-        if abs_z < z_entry:
+        # 3. Check false alarm with HYSTERESIS
+        # Only cancel if Z dropped SIGNIFICANTLY below threshold (not just slightly)
+        # This prevents cancellation when Z is on its way to pullback target
+        # Also skip if pullback_target is still reachable (below current threshold)
+        false_alarm_level = z_entry - self._false_alarm_hysteresis
+        if abs_z < false_alarm_level:
             self._logger.info(
-                f"❌ {coin} false alarm - Z returned to normal | "
-                f"max_z={watch.max_z:.2f}, final_z={live_z:.2f}, threshold={z_entry:.2f}"
+                f"❌ {coin} false alarm - Z dropped significantly | "
+                f"max_z={watch.max_z:.2f}, final_z={live_z:.2f}, "
+                f"threshold={z_entry:.2f}, hysteresis_level={false_alarm_level:.2f}"
             )
             await self._cancel_watch(coin, WatchCancelReason.FALSE_ALARM, live_z)
             return

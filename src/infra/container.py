@@ -286,6 +286,7 @@ class Container:
                 watch_timeout_seconds=self._settings.TRAILING_ENTRY_TIMEOUT_MINUTES
                 * 60,
                 max_watches=self._settings.MAX_OPEN_SPREADS,
+                false_alarm_hysteresis=self._settings.FALSE_ALARM_HYSTERESIS,
             )
         return self._instances["entry_observer_service"]
 

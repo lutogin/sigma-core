@@ -89,6 +89,7 @@ class Settings:
     # Trailing Entry settings (Smart Entry)
     TRAILING_ENTRY_PULLBACK: float = 0.2  # Z-score pullback for reversal confirmation
     TRAILING_ENTRY_TIMEOUT_MINUTES: int = 45  # Max watch duration before cancellation
+    FALSE_ALARM_HYSTERESIS: float = 0.2  # Cancel watch only if Z drops this much below threshold
 
     # Position sizing
     POSITION_SIZE_USDT: float = 100.0  # USDT размер позиции на COIN ногу
@@ -189,6 +190,9 @@ class Settings:
         )
         self.TRAILING_ENTRY_TIMEOUT_MINUTES = int(
             os.getenv("TRAILING_ENTRY_TIMEOUT_MINUTES", "60")
+        )
+        self.FALSE_ALARM_HYSTERESIS = float(
+            os.getenv("FALSE_ALARM_HYSTERESIS", "0.3")
         )
 
         # Position sizing
