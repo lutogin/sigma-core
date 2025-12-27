@@ -501,9 +501,11 @@ class ScreenerService:
             if not primary_df.empty:
                 first_ts = primary_df.index[0]
                 last_ts = primary_df.index[-1]
+                last_close = primary_df["close"].iloc[-1]
                 self._logger.info(
                     f"📊 Data range: {first_ts.isoformat()} → {last_ts.isoformat()} "
-                    f"({len(primary_df)} candles for {self._primary_pair})"
+                    f"({len(primary_df)} candles for {self._primary_pair}) | "
+                    f"last_close=${last_close:.2f}"
                 )
 
         return aligned_data
