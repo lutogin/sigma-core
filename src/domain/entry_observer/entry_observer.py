@@ -35,6 +35,7 @@ from src.infra.event_emitter import (
     WatchCancelReason,
     WatchTimeoutCooldownEvent,
     SpreadSide,
+    MarketUnsafeEvent,
 )
 from src.integrations.exchange import BinanceClient
 
@@ -122,6 +123,9 @@ class EntryObserverService:
         # Subscribe to pending entry signals
         self._emitter.on(EventType.PENDING_ENTRY_SIGNAL, self._on_pending_signal)
 
+        # Subscribe to market unsafe events to clear watches on volatility
+        self._emitter.on(EventType.MARKET_UNSAFE, self._on_market_unsafe)
+
         self._is_running = True
 
         self._logger.info(
@@ -139,6 +143,7 @@ class EntryObserverService:
 
         # Unsubscribe from events
         self._emitter.off(EventType.PENDING_ENTRY_SIGNAL, self._on_pending_signal)
+        self._emitter.off(EventType.MARKET_UNSAFE, self._on_market_unsafe)
 
         # Cancel all WebSocket tasks
         for task in self._ws_tasks.values():
@@ -246,6 +251,54 @@ class EntryObserverService:
         # Subscribe to primary if not already
         if self._primary_ws_task is None:
             await self._subscribe_primary()
+
+    async def _on_market_unsafe(self, event: MarketUnsafeEvent) -> None:
+        """
+        Handle MarketUnsafeEvent - cancel all active watches on volatility trigger.
+
+        When market becomes unsafe (high volatility), we should stop watching
+        all pending entries as the spread behavior is unpredictable.
+        """
+        if not self._watches:
+            return  # No watches to cancel
+
+        cancelled_count = len(self._watches)
+
+        self._logger.warning(
+            f"⚠️ VOLATILITY UNSAFE: Cancelling {cancelled_count} active watches | "
+            f"reason={event.reason}"
+        )
+
+        async with self._lock:
+            # Cancel all watches
+            for coin, watch in list(self._watches.items()):
+                # Emit cancellation event
+                await self._emitter.emit(
+                    WatchCancelledEvent(
+                        coin_symbol=coin,
+                        primary_symbol=watch.primary_symbol,
+                        reason=WatchCancelReason.FALSE_ALARM,  # Use FALSE_ALARM as closest reason
+                        max_z_reached=watch.max_z,
+                        final_z=watch.current_z_score,
+                        watch_duration_seconds=watch.watch_duration_seconds,
+                    )
+                )
+
+                # Cancel WebSocket task for this coin
+                if coin in self._ws_tasks:
+                    self._ws_tasks[coin].cancel()
+                    del self._ws_tasks[coin]
+
+                self._logger.info(
+                    f"❌ Watch cancelled (VOLATILITY): {coin} | "
+                    f"max_z={watch.max_z:.2f} | duration={watch.watch_duration_seconds/60:.1f}min"
+                )
+
+            # Clear all watches
+            self._watches.clear()
+            self._last_check.clear()
+
+        self._logger.info(f"🧹 Cleared {cancelled_count} watches due to volatility filter")
 
     # =========================================================================
     # WebSocket Management
