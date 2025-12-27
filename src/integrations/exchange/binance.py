@@ -474,6 +474,7 @@ class BinanceClient:
         all_data = []
         current_since = int(start_date_utc.timestamp() * 1000)
         end_timestamp = int((end_date_utc + timedelta(days=1)).timestamp() * 1000)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         while current_since < end_timestamp:
             try:
@@ -488,8 +489,14 @@ class BinanceClient:
                 if not candles:
                     break
 
-                # Filter data outside range
-                filtered = [k for k in candles if k[0] < end_timestamp]
+                # Filter data:
+                # 1. Only candles that started before end_timestamp
+                # 2. Only CLOSED candles (close_time <= now)
+                #    k[6] is close_time in ms - candle is closed when close_time is in the past
+                filtered = [
+                    k for k in candles
+                    if k[0] < end_timestamp and k[6] <= now_ms
+                ]
                 all_data.extend(filtered)
 
                 if len(candles) < limit or not filtered:

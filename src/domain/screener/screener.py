@@ -485,10 +485,26 @@ class ScreenerService:
                 aligned_df = aligned_df.dropna()
                 aligned_data[symbol] = aligned_df
 
+        # Log per-symbol candle count for debugging
+        candle_counts = {s: len(df) for s, df in aligned_data.items()}
+        min_candles = min(candle_counts.values()) if candle_counts else 0
+        max_candles = max(candle_counts.values()) if candle_counts else 0
+
         self._logger.info(
             f"Aligned {len(aligned_data)} symbols to common time index "
-            f"({len(common_index)} candles)"
+            f"({len(common_index)} candles, per-symbol: {min_candles}-{max_candles})"
         )
+
+        # Log first/last timestamp for primary pair (for debugging timezone issues)
+        if self._primary_pair in aligned_data:
+            primary_df = aligned_data[self._primary_pair]
+            if not primary_df.empty:
+                first_ts = primary_df.index[0]
+                last_ts = primary_df.index[-1]
+                self._logger.info(
+                    f"📊 Data range: {first_ts.isoformat()} → {last_ts.isoformat()} "
+                    f"({len(primary_df)} candles for {self._primary_pair})"
+                )
 
         return aligned_data
 
