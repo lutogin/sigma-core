@@ -204,6 +204,7 @@ class OrchestratorService:
         A watched pair should be removed if:
         1. CORRELATION_DROP: symbol not in filtered_results (correlation < threshold)
         2. HURST_TRENDING: Hurst >= hurst_threshold (spread became trending)
+        3. FALSE_ALARM: |Z| < dynamic_entry_threshold (signal disappeared)
 
         This prevents entering positions on pairs that no longer meet criteria.
         """
@@ -217,12 +218,12 @@ class OrchestratorService:
 
         primary_df = raw_data.get(self._primary_pair)
 
-        for coin_symbol in list(watched.keys()):
+        for coin_symbol, watch_info in list(watched.items()):
             remove_reason = None
+            z_result = z_score_results.get(coin_symbol)
 
             # Check if symbol dropped from correlation filter
             if coin_symbol not in filtered_results:
-                z_result = z_score_results.get(coin_symbol)
                 current_corr = z_result.current_correlation if z_result else 0.0
 
                 self._logger.info(
@@ -230,13 +231,24 @@ class OrchestratorService:
                     f"corr={current_corr:.3f} < {min_correlation}"
                 )
                 remove_reason = WatchCancelReason.CORRELATION_DROP
-            else:
-                # Check Hurst filter
-                if self._hurst_filter is not None:
-                    z_result = z_score_results.get(coin_symbol)
+
+            elif z_result is not None:
+                # Check if Z-score dropped below entry threshold (signal disappeared)
+                current_z = z_result.current_z_score
+                dynamic_threshold = z_result.dynamic_entry_threshold
+
+                if abs(current_z) < dynamic_threshold:
+                    self._logger.info(
+                        f"❌ Watch {coin_symbol} signal DISAPPEARED | "
+                        f"|Z|={abs(current_z):.2f} < threshold={dynamic_threshold:.2f}"
+                    )
+                    remove_reason = WatchCancelReason.FALSE_ALARM
+
+                # Check Hurst filter (only if no other reason yet)
+                elif self._hurst_filter is not None:
                     coin_df = raw_data.get(coin_symbol)
 
-                    if z_result and coin_df is not None and primary_df is not None:
+                    if coin_df is not None and primary_df is not None:
                         hurst = self._hurst_filter.calculate_for_spread(
                             coin_log_prices=coin_df["close"].apply(np.log),
                             primary_log_prices=primary_df["close"].apply(np.log),

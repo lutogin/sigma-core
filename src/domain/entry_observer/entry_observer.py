@@ -188,8 +188,12 @@ class EntryObserverService:
         """
         Handle PendingEntrySignalEvent - start monitoring for reversal.
 
-        If already watching this symbol, update the watch parameters
-        (beta, spread_mean, spread_std, thresholds) but keep max_z progress.
+        If already watching this symbol, validate and update the watch parameters.
+        Uses "Re-Validate & Reset" algorithm to avoid Parameter Jump trap:
+        1. Update calculation parameters (beta, spread_mean, spread_std)
+        2. Recalculate Z-score with new parameters
+        3. If new |Z| < entry_threshold → cancel watch (signal disappeared)
+        4. If new |Z| >= entry_threshold → reset max_z to new |Z| (avoid false pullback)
 
         Args:
             event: Pending entry signal with initial Z-score and spread stats.
@@ -199,11 +203,11 @@ class EntryObserverService:
         async with self._lock:
             # Check if already watching this symbol
             if coin in self._watches:
-                # Update existing watch with fresh parameters from new scan
                 watch = self._watches[coin]
                 old_beta = watch.beta
                 old_mean = watch.spread_mean
                 old_std = watch.spread_std
+                old_max_z = watch.max_z
 
                 # Update calculation parameters (these change with new data)
                 watch.beta = event.beta
@@ -215,21 +219,35 @@ class EntryObserverService:
                 watch.z_tp_threshold = event.z_tp_threshold
                 watch.z_sl_threshold = event.z_sl_threshold
 
-                # Keep max_z - don't reset pullback progress
-                # But recalculate current Z with new parameters
+                # Recalculate Z-score with NEW parameters
                 new_z = watch.current_z_score
                 abs_new_z = abs(new_z)
 
-                # If new Z is higher than max_z, update it
-                if abs_new_z > watch.max_z:
-                    watch.max_z = abs_new_z
+                # RE-VALIDATE: Check if signal still valid with new parameters
+                if abs_new_z < event.z_entry_threshold:
+                    # Signal disappeared after parameter update - cancel watch
+                    self._logger.info(
+                        f"🔄❌ Watch {coin} INVALIDATED after param update | "
+                        f"new_Z={new_z:.2f} < threshold={event.z_entry_threshold:.2f} | "
+                        f"std: {old_std:.4f}→{event.spread_std:.4f}"
+                    )
+                    # Release lock before cancelling
+                    self._watches.pop(coin, None)
+                    # Cancel outside lock
+                    asyncio.create_task(
+                        self._cancel_watch_after_param_update(coin, watch, new_z)
+                    )
+                    return
+
+                # RESET: Signal still valid - reset max_z to avoid Parameter Jump
+                # This prevents false pullback detection when std changes
+                watch.max_z = abs_new_z
 
                 self._logger.info(
                     f"🔄 Updated watch {coin} | "
                     f"β: {old_beta:.3f}→{event.beta:.3f} | "
-                    f"mean: {old_mean:.4f}→{event.spread_mean:.4f} | "
                     f"std: {old_std:.4f}→{event.spread_std:.4f} | "
-                    f"Z={new_z:.2f} | max_z={watch.max_z:.2f}"
+                    f"Z={new_z:.2f} | max_z: {old_max_z:.2f}→{watch.max_z:.2f} (RESET)"
                 )
                 return
 
@@ -285,6 +303,24 @@ class EntryObserverService:
         # Subscribe to primary if not already
         if self._primary_ws_task is None:
             await self._subscribe_primary()
+
+    async def _cancel_watch_after_param_update(
+        self, coin: str, watch: WatchCandidate, final_z: float
+    ) -> None:
+        """Cancel watch after parameter update invalidated the signal."""
+        # Emit cancellation event
+        await self._emitter.emit(
+            WatchCancelledEvent(
+                coin_symbol=coin,
+                primary_symbol=watch.primary_symbol,
+                reason=WatchCancelReason.FALSE_ALARM,
+                max_z_reached=watch.max_z,
+                final_z=final_z,
+                watch_duration_seconds=watch.watch_duration_seconds,
+            )
+        )
+        # Unsubscribe from WebSocket
+        await self._unsubscribe_coin(coin)
 
     async def _on_market_unsafe(self, event: MarketUnsafeEvent) -> None:
         """
