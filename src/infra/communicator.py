@@ -92,7 +92,9 @@ class CommunicatorService:
             return
 
         # Subscribe to trade lifecycle events
-        self._event_emitter.on(EventType.PENDING_ENTRY_SIGNAL, self._on_pending_entry_signal)
+        self._event_emitter.on(
+            EventType.PENDING_ENTRY_SIGNAL, self._on_pending_entry_signal
+        )
         self._event_emitter.on(EventType.ENTRY_SIGNAL, self._on_entry_signal)
         self._event_emitter.on(EventType.EXIT_SIGNAL, self._on_exit_signal)
         self._event_emitter.on(EventType.WATCH_CANCELLED, self._on_watch_cancelled)
@@ -102,7 +104,9 @@ class CommunicatorService:
         self._event_emitter.on(EventType.TRADE_CLOSE_ERROR, self._on_trade_close_error)
 
         self._started = True
-        self._logger.info("📡 CommunicatorService started - listening to all trade events")
+        self._logger.info(
+            "📡 CommunicatorService started - listening to all trade events"
+        )
 
     def stop(self) -> None:
         """Stop listening to events."""
@@ -110,7 +114,9 @@ class CommunicatorService:
             return
 
         # Unsubscribe from trade lifecycle events
-        self._event_emitter.off(EventType.PENDING_ENTRY_SIGNAL, self._on_pending_entry_signal)
+        self._event_emitter.off(
+            EventType.PENDING_ENTRY_SIGNAL, self._on_pending_entry_signal
+        )
         self._event_emitter.off(EventType.ENTRY_SIGNAL, self._on_entry_signal)
         self._event_emitter.off(EventType.EXIT_SIGNAL, self._on_exit_signal)
         self._event_emitter.off(EventType.WATCH_CANCELLED, self._on_watch_cancelled)
@@ -170,8 +176,7 @@ class CommunicatorService:
 
             if not positions:
                 await self._telegram.send_message_markdown(
-                    "✅ *No open positions*\n\n"
-                    "_All positions are closed._"
+                    "✅ *No open positions*\n\n" "_All positions are closed._"
                 )
                 return
 
@@ -201,7 +206,8 @@ class CommunicatorService:
 
             # Filter non-zero balances (excluding USDT which we show separately)
             other_balances = [
-                b for b in all_balances
+                b
+                for b in all_balances
                 if b.asset != "USDT" and (b.free > 0 or b.used > 0)
             ]
 
@@ -259,8 +265,7 @@ class CommunicatorService:
         try:
             if self._entry_observer is None:
                 await self._telegram.send_message_markdown(
-                    "❌ *Entry Observer not available*\n\n"
-                    "_Service not initialized._"
+                    "❌ *Entry Observer not available*\n\n" "_Service not initialized._"
                 )
                 return
 
@@ -307,23 +312,31 @@ class CommunicatorService:
             current_z = watch.current_z_score
             abs_z = abs(current_z)
             pullback_done = watch.max_z - abs_z
-            pullback_target = self._entry_observer.pullback  # Default pullback threshold
+            pullback_target = (
+                self._entry_observer.pullback
+            )  # Default pullback threshold
 
             # Progress bar for pullback
-            progress_pct = min(pullback_done / pullback_target * 100, 100) if pullback_target > 0 else 0
+            progress_pct = (
+                min(pullback_done / pullback_target * 100, 100)
+                if pullback_target > 0
+                else 0
+            )
             progress_bar = self._make_progress_bar(progress_pct)
 
             symbol_short = coin.replace("/USDT:USDT", "")
 
-            lines.extend([
-                f"{side_emoji} *{symbol_short}* ({side_text})",
-                f"├ Z: `{current_z:.3f}` | Max: `{watch.max_z:.3f}`",
-                f"├ Pullback: `{pullback_done:.3f}` / `{pullback_target:.2f}` {progress_bar}",
-                f"├ β: `{watch.beta:.3f}` | ρ: `{watch.correlation:.3f}` | H: `{watch.hurst:.3f}`",
-                f"├ Prices: COIN `{watch.coin_price:.4f}` | ETH `{watch.primary_price:.4f}`",
-                f"└ Duration: `{watch.watch_duration_minutes:.1f}` min",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"{side_emoji} *{symbol_short}* ({side_text})",
+                    f"├ Z: `{current_z:.3f}` | Max: `{watch.max_z:.3f}`",
+                    f"├ Pullback: `{pullback_done:.3f}` / `{pullback_target:.2f}` {progress_bar}",
+                    f"├ β: `{watch.beta:.3f}` | ρ: `{watch.correlation:.3f}` | H: `{watch.hurst:.3f}`",
+                    f"├ Prices: COIN `{watch.coin_price:.4f}` | ETH `{watch.primary_price:.4f}`",
+                    f"└ Duration: `{watch.watch_duration_minutes:.1f}` min",
+                    "",
+                ]
+            )
 
         lines.append("_Watching for pullback confirmation..._")
 
@@ -342,8 +355,7 @@ class CommunicatorService:
         try:
             if self._exit_observer is None:
                 await self._telegram.send_message_markdown(
-                    "❌ *Exit Observer not available*\n\n"
-                    "_Service not initialized._"
+                    "❌ *Exit Observer not available*\n\n" "_Service not initialized._"
                 )
                 return
 
@@ -397,7 +409,9 @@ class CommunicatorService:
             if entry_abs_z > watch.z_tp_threshold:
                 distance_to_tp = entry_abs_z - watch.z_tp_threshold
                 current_distance = abs_z - watch.z_tp_threshold
-                tp_progress = max(0, min(100, (1 - current_distance / distance_to_tp) * 100))
+                tp_progress = max(
+                    0, min(100, (1 - current_distance / distance_to_tp) * 100)
+                )
 
             tp_bar = self._make_progress_bar(tp_progress)
 
@@ -406,16 +420,18 @@ class CommunicatorService:
 
             symbol_short = coin.replace("/USDT:USDT", "")
 
-            lines.extend([
-                f"{side_emoji} *{symbol_short}* ({side_text}) {sl_warning}",
-                f"├ Entry Z: `{watch.entry_z_score:.3f}` → Current: `{current_z:.3f}`",
-                f"├ TP: `{watch.z_tp_threshold:.2f}` | SL: `{watch.z_sl_threshold:.2f}`",
-                f"├ Progress to TP: {tp_bar} `{tp_progress:.0f}%`",
-                f"├ β: `{watch.beta:.3f}` | ρ: `{watch.correlation:.3f}`",
-                f"├ Prices: COIN `{watch.coin_price:.4f}` | ETH `{watch.primary_price:.4f}`",
-                f"└ Duration: `{watch.watch_duration_minutes:.1f}` min",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"{side_emoji} *{symbol_short}* ({side_text}) {sl_warning}",
+                    f"├ Entry Z: `{watch.entry_z_score:.3f}` → Current: `{current_z:.3f}`",
+                    f"├ TP: `{watch.z_tp_threshold:.2f}` | SL: `{watch.z_sl_threshold:.2f}`",
+                    f"├ Progress to TP: {tp_bar} `{tp_progress:.0f}%`",
+                    f"├ β: `{watch.beta:.3f}` | ρ: `{watch.correlation:.3f}`",
+                    f"├ Prices: COIN `{watch.coin_price:.4f}` | ETH `{watch.primary_price:.4f}`",
+                    f"└ Duration: `{watch.watch_duration_minutes:.1f}` min",
+                    "",
+                ]
+            )
 
         lines.append("_Monitoring for TP/SL conditions..._")
 
@@ -447,9 +463,11 @@ class CommunicatorService:
         z_sl = self._screener.z_score_service.z_sl_threshold
 
         # Check market safety
-        market_status = "🟢 Safe" if (
-            result.volatility_result and result.volatility_result.is_safe
-        ) else "🔴 Unsafe"
+        market_status = (
+            "🟢 Safe"
+            if (result.volatility_result and result.volatility_result.is_safe)
+            else "🔴 Unsafe"
+        )
 
         # Header
         lines = [
@@ -483,18 +501,22 @@ class CommunicatorService:
             else:
                 signal = "—"
 
-            data.append({
-                "symbol": symbol.replace("/USDT:USDT", ""),
-                "z": z,
-                "corr": res.current_correlation,
-                "beta": res.current_beta,
-                "hurst": hurst,
-                "dyn_th": dyn_threshold,
-                "signal": signal,
-            })
+            data.append(
+                {
+                    "symbol": symbol.replace("/USDT:USDT", ""),
+                    "z": z,
+                    "corr": res.current_correlation,
+                    "beta": res.current_beta,
+                    "hurst": hurst,
+                    "dyn_th": dyn_threshold,
+                    "signal": signal,
+                }
+            )
 
         # Sort by absolute z-score
-        data.sort(key=lambda x: abs(x["z"]) if not np.isnan(x["z"]) else 0, reverse=True)
+        data.sort(
+            key=lambda x: abs(x["z"]) if not np.isnan(x["z"]) else 0, reverse=True
+        )
 
         # Format as compact table (Telegram has message limits)
         lines.append("```")
@@ -502,12 +524,12 @@ class CommunicatorService:
         lines.append("-" * 30)
 
         for row in data[:15]:  # Limit to 15 rows for space
-            z_str = f"{row['z']:.2f}" if not np.isnan(row['z']) else "N/A"
+            z_str = f"{row['z']:.2f}" if not np.isnan(row["z"]) else "N/A"
             th_str = f"{row['dyn_th']:.1f}"
-            beta_str = f"{row['beta']:.1f}" if not np.isnan(row['beta']) else "—"
-            h_str = f"{row['hurst']:.2f}" if row['hurst'] is not None else "—"
+            beta_str = f"{row['beta']:.1f}" if not np.isnan(row["beta"]) else "—"
+            h_str = f"{row['hurst']:.2f}" if row["hurst"] is not None else "—"
             # Signal as emoji only
-            sig = row['signal'].split()[0] if row['signal'] != "—" else "—"
+            sig = row["signal"].split()[0] if row["signal"] != "—" else "—"
 
             lines.append(
                 f"{row['symbol']:<6} {z_str:>5} {th_str:>4} {beta_str:>4} {h_str:>4} {sig:>2}"
@@ -538,16 +560,22 @@ class CommunicatorService:
 
         # Calculate totals
         total_unrealized = sum(pos.unrealized_pnl for pos in positions)
-        total_margin = sum(abs(pos.contracts * pos.mark_price / pos.leverage) for pos in positions)
+        total_margin = sum(
+            abs(pos.contracts * pos.mark_price / pos.leverage) for pos in positions
+        )
 
-        lines.extend([
-            f"💰 Total PnL: `{total_unrealized:+.2f}` USDT",
-            f"💳 Total Margin: `{total_margin:.2f}` USDT",
-            "",
-        ])
+        lines.extend(
+            [
+                f"💰 Total PnL: `{total_unrealized:+.2f}` USDT",
+                f"💳 Total Margin: `{total_margin:.2f}` USDT",
+                "",
+            ]
+        )
 
         # Sort by absolute PnL (biggest losses/gains first)
-        positions_sorted = sorted(positions, key=lambda p: abs(p.unrealized_pnl), reverse=True)
+        positions_sorted = sorted(
+            positions, key=lambda p: abs(p.unrealized_pnl), reverse=True
+        )
 
         # Format as compact table
         lines.append("```")
@@ -557,7 +585,11 @@ class CommunicatorService:
         for pos in positions_sorted[:20]:  # Limit to 20 positions
             symbol_short = pos.symbol.replace("USDT", "")
             side_short = pos.side.upper()[:4]
-            size_str = f"{pos.contracts:.2f}" if pos.contracts < 1000 else f"{pos.contracts:.0f}"
+            size_str = (
+                f"{pos.contracts:.2f}"
+                if pos.contracts < 1000
+                else f"{pos.contracts:.0f}"
+            )
             pnl_str = f"{pos.unrealized_pnl:+.2f}"
 
             lines.append(
@@ -595,19 +627,23 @@ class CommunicatorService:
         ]
 
         # USDT (main trading asset)
-        lines.extend([
-            "🏦 *USDT Balance:*",
-            f"• Available: `{usdt_balance.free:.2f}` USDT",
-            f"• In Orders: `{usdt_balance.used:.2f}` USDT",
-            f"• **Total: `{usdt_balance.total:.2f}` USDT**",
-            "",
-        ])
+        lines.extend(
+            [
+                "🏦 *USDT Balance:*",
+                f"• Available: `{usdt_balance.free:.2f}` USDT",
+                f"• In Orders: `{usdt_balance.used:.2f}` USDT",
+                f"• **Total: `{usdt_balance.total:.2f}` USDT**",
+                "",
+            ]
+        )
 
         # Other assets (if any)
         if other_balances:
-            lines.extend([
-                "🪙 *Other Assets:*",
-            ])
+            lines.extend(
+                [
+                    "🪙 *Other Assets:*",
+                ]
+            )
 
             for balance in other_balances[:10]:  # Limit to 10 assets
                 if balance.total > 0:
@@ -624,21 +660,25 @@ class CommunicatorService:
         # Account summary
         total_value_usdt = usdt_balance.total
         if other_balances:
-            lines.extend([
-                "📊 *Summary:*",
-                f"• Primary Asset (USDT): `{usdt_balance.total:.2f}`",
-                f"• Other Assets: `{len(other_balances)}` types",
-                f"• **Account Value: ~`{total_value_usdt:.2f}` USDT**",
-                "",
-                "_Note: Other assets not converted to USDT value_"
-            ])
+            lines.extend(
+                [
+                    "📊 *Summary:*",
+                    f"• Primary Asset (USDT): `{usdt_balance.total:.2f}`",
+                    f"• Other Assets: `{len(other_balances)}` types",
+                    f"• **Account Value: ~`{total_value_usdt:.2f}` USDT**",
+                    "",
+                    "_Note: Other assets not converted to USDT value_",
+                ]
+            )
         else:
-            lines.extend([
-                "📊 *Summary:*",
-                f"• **Account Value: `{total_value_usdt:.2f}` USDT**",
-                "",
-                "_All funds in USDT - ready for trading_"
-            ])
+            lines.extend(
+                [
+                    "📊 *Summary:*",
+                    f"• **Account Value: `{total_value_usdt:.2f}` USDT**",
+                    "",
+                    "_All funds in USDT - ready for trading_",
+                ]
+            )
 
         return "\n".join(lines)
 
@@ -688,9 +728,11 @@ class CommunicatorService:
 
             # Show successful closes
             if successful:
-                lines.extend([
-                    "✅ *Successfully Closed:*",
-                ])
+                lines.extend(
+                    [
+                        "✅ *Successfully Closed:*",
+                    ]
+                )
                 for result_item in successful[:10]:  # Limit to 10 for space
                     symbol_short = result_item["symbol"].replace("/USDT:USDT", "")
                     side_short = result_item["side"].upper()
@@ -707,9 +749,11 @@ class CommunicatorService:
 
             # Show failed closes
             if failed_results:
-                lines.extend([
-                    "❌ *Failed to Close:*",
-                ])
+                lines.extend(
+                    [
+                        "❌ *Failed to Close:*",
+                    ]
+                )
                 for result_item in failed_results[:5]:  # Limit to 5 for space
                     symbol_short = result_item["symbol"].replace("/USDT:USDT", "")
                     side_short = result_item["side"].upper()
@@ -725,11 +769,13 @@ class CommunicatorService:
 
         # Footer
         if failed > 0:
-            lines.extend([
-                "⚠️ *Manual intervention may be required for failed positions!*",
-                "",
-                "_Check your exchange account to verify position status._"
-            ])
+            lines.extend(
+                [
+                    "⚠️ *Manual intervention may be required for failed positions!*",
+                    "",
+                    "_Check your exchange account to verify position status._",
+                ]
+            )
         else:
             lines.append("🎉 _All positions successfully closed!_")
 
@@ -875,9 +921,7 @@ _Sending to TradingService for execution..._
 _Sending to TradingService for position closure..._
 """
             await self._telegram.send_message_markdown(message)
-            self._logger.debug(
-                f"Sent exit signal notification for {event.coin_symbol}"
-            )
+            self._logger.debug(f"Sent exit signal notification for {event.coin_symbol}")
 
         except Exception as e:
             self._logger.error(f"Failed to send exit signal notification: {e}")

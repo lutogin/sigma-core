@@ -70,7 +70,9 @@ class HistoricalFundingCache:
             start_date: Start date for funding data
             end_date: End date for funding data
         """
-        self._logger.info(f"Loading historical funding rates for {len(symbols)} symbols...")
+        self._logger.info(
+            f"Loading historical funding rates for {len(symbols)} symbols..."
+        )
 
         for symbol in symbols:
             try:
@@ -87,7 +89,9 @@ class HistoricalFundingCache:
                     # Normalize all rates to 8h and store
                     normalized = []
                     for r in rates:
-                        rate_8h = self._normalize_to_8h(r.funding_rate, r.funding_interval_hours)
+                        rate_8h = self._normalize_to_8h(
+                            r.funding_rate, r.funding_interval_hours
+                        )
                         normalized.append((r.funding_time, rate_8h))
 
                     # Sort by time
@@ -309,9 +313,12 @@ class BacktestConfig:
     use_dynamic_tp: bool = True  # Use dynamic take profit
 
     # Trailing Entry settings (simulation of live EntryObserverService)
-    use_trailing_entry: bool = False  # Enable trailing entry simulation
-    trailing_pullback: float = 0.03  # Z-score pullback for reversal confirmation
+    use_trailing_entry: bool = True  # Enable trailing entry simulation
+    trailing_pullback: float = 0.1  # Z-score pullback for reversal confirmation
     trailing_timeout_minutes: int = 180  # Max watch duration before cancellation
+    false_alarm_hysteresis: float = (
+        0.2  # Cancel watch only if Z drops this much below threshold
+    )
 
 
 @dataclass
@@ -707,6 +714,7 @@ class StatArbBacktest:
             window_data,
             filtered_results,
             correlation_results,
+            all_z_score_results=z_score_results,  # Pass for Re-Validate & Reset
         )
 
     def _filter_by_correlation(
@@ -915,8 +923,14 @@ class StatArbBacktest:
                     # 24h+:   handled by TIMEOUT
                     # Minimum TP level is always z_tp_threshold
                     time_coef = self._get_time_based_tp_coefficient(bars_held)
-                    reference_z = position.peak_z_score if position.peak_z_score > 0 else abs(position.entry_z_score)
-                    dynamic_tp = max(reference_z * time_coef, self.config.z_tp_threshold)
+                    reference_z = (
+                        position.peak_z_score
+                        if position.peak_z_score > 0
+                        else abs(position.entry_z_score)
+                    )
+                    dynamic_tp = max(
+                        reference_z * time_coef, self.config.z_tp_threshold
+                    )
                 else:
                     dynamic_tp = self.config.z_tp_threshold
 
@@ -952,15 +966,21 @@ class StatArbBacktest:
         window_data: Dict[str, pd.DataFrame],
         filtered_results: Dict[str, ZScoreResult],
         correlation_results: Dict,
+        all_z_score_results: Optional[Dict[str, ZScoreResult]] = None,
     ) -> None:
         """Check for new entry signals using dynamic threshold."""
         if len(self.positions) >= self.config.max_spreads:
             return  # Max positions reached
 
         # Process existing watches first (trailing entry logic)
+        # Pass z_score_results for Re-Validate & Reset
         if self.config.use_trailing_entry:
             await self._process_watches(
-                current_time, current_bar_idx, window_data, correlation_results
+                current_time,
+                current_bar_idx,
+                window_data,
+                correlation_results,
+                z_score_results=all_z_score_results,
             )
 
         # entry_candidates list of (z_abs, symbol, side, z_result, dyn_threshold)
@@ -1021,7 +1041,10 @@ class StatArbBacktest:
                     spread_side=side,
                 )
 
-                if net_funding is not None and net_funding < self.config.max_funding_cost_threshold:
+                if (
+                    net_funding is not None
+                    and net_funding < self.config.max_funding_cost_threshold
+                ):
                     self.funding_blocked_count += 1
                     print(
                         f"⛔ FUNDING FILTER: {symbol} ({side.upper()}) blocked | "
@@ -1096,13 +1119,86 @@ class StatArbBacktest:
         current_bar_idx: int,
         window_data: Dict[str, pd.DataFrame],
         correlation_results: Dict,
+        z_score_results: Optional[Dict[str, ZScoreResult]] = None,
     ) -> None:
-        """Process trailing entry logic for all watches using 1m candles."""
+        """
+        Process trailing entry logic for all watches using 1m candles.
+
+        Also handles Re-Validate & Reset when new scan data is available:
+        - Updates watch parameters (beta, spread_mean, spread_std)
+        - Validates signal still exists with new parameters
+        - Resets max_z to avoid Parameter Jump trap
+        """
         watches_to_remove = []
 
         for symbol, watch in list(self.watch_candidates.items()):
+            # =====================================================================
+            # Re-Validate & Reset: Update parameters from new scan if available
+            # =====================================================================
+            if z_score_results and symbol in z_score_results:
+                z_result = z_score_results[symbol]
+
+                # Store old values for logging
+                old_beta = watch.beta
+                old_std = watch.spread_std
+                old_max_z = watch.max_z
+
+                # Update calculation parameters
+                watch.beta = z_result.current_beta
+                watch.correlation = z_result.current_correlation
+                watch.z_entry_threshold = z_result.dynamic_entry_threshold
+
+                # Recalculate spread_mean and spread_std
+                lookback = min(len(z_result.spread_series), 288)
+                recent_spread = z_result.spread_series.tail(lookback).dropna()
+                if len(recent_spread) > 0:
+                    watch.spread_mean = float(recent_spread.mean())
+                if len(recent_spread) > 1:
+                    watch.spread_std = float(recent_spread.std())
+
+                # Recalculate Z with new parameters
+                coin_price = window_data[symbol]["close"].iloc[-1]
+                primary_price = window_data[self.primary_pair]["close"].iloc[-1]
+                new_z = self._calculate_live_z(
+                    coin_price,
+                    primary_price,
+                    watch.beta,
+                    watch.spread_mean,
+                    watch.spread_std,
+                )
+                abs_new_z = abs(new_z)
+
+                # RE-VALIDATE: Check if signal still valid
+                if abs_new_z < watch.z_entry_threshold:
+                    print(
+                        f"🔄❌ WATCH {symbol} INVALIDATED after param update | "
+                        f"new_Z={new_z:.2f} < threshold={watch.z_entry_threshold:.2f} | "
+                        f"std: {old_std:.4f}→{watch.spread_std:.4f}"
+                    )
+                    watches_to_remove.append((symbol, "PARAM_INVALIDATED"))
+                    continue
+
+                # RESET: Signal still valid - reset max_z to avoid Parameter Jump
+                watch.max_z = abs_new_z
+
+                # Log significant parameter changes
+                if (
+                    abs(old_beta - watch.beta) > 0.01
+                    or abs(old_std - watch.spread_std) > 0.0001
+                ):
+                    print(
+                        f"🔄 Updated watch {symbol} | "
+                        f"β: {old_beta:.3f}→{watch.beta:.3f} | "
+                        f"std: {old_std:.4f}→{watch.spread_std:.4f} | "
+                        f"Z={new_z:.2f} | max_z: {old_max_z:.2f}→{watch.max_z:.2f} (RESET)"
+                    )
+
+            # =====================================================================
             # Check timeout
-            watch_duration_minutes = (current_time - watch.start_time).total_seconds() / 60
+            # =====================================================================
+            watch_duration_minutes = (
+                current_time - watch.start_time
+            ).total_seconds() / 60
             if watch_duration_minutes >= self.config.trailing_timeout_minutes:
                 print(
                     f"⏰ WATCH TIMEOUT {symbol} after {watch_duration_minutes:.0f}min | "
@@ -1111,7 +1207,9 @@ class StatArbBacktest:
                 watches_to_remove.append((symbol, "TIMEOUT"))
                 continue
 
-            # Load 1m candles for this symbol since watch started
+            # =====================================================================
+            # Load 1m candles and simulate trailing entry
+            # =====================================================================
             coin_1m = await self._load_minute_candles_for_watch(
                 symbol, watch.start_time, current_time
             )
@@ -1121,19 +1219,29 @@ class StatArbBacktest:
                 coin_price = window_data[symbol]["close"].iloc[-1]
                 primary_price = window_data[self.primary_pair]["close"].iloc[-1]
                 live_z = self._calculate_live_z(
-                    coin_price, primary_price,
-                    watch.beta, watch.spread_mean, watch.spread_std
+                    coin_price,
+                    primary_price,
+                    watch.beta,
+                    watch.spread_mean,
+                    watch.spread_std,
                 )
                 abs_z = abs(live_z)
 
-                # Check pullback on 15m
+                # Check pullback on 15m (ENTRY - first priority)
                 if abs_z <= watch.max_z - self.config.trailing_pullback:
                     await self._execute_watch_entry(
                         watch, current_time, live_z, current_bar_idx, window_data
                     )
                     watches_to_remove.append((symbol, None))
-                elif abs_z < watch.z_entry_threshold:
-                    print(f"❌ WATCH FALSE_ALARM on 15m {symbol} | Z={live_z:.2f}")
+                # Check false alarm with HYSTERESIS
+                elif (
+                    abs_z < watch.z_entry_threshold - self.config.false_alarm_hysteresis
+                ):
+                    print(
+                        f"❌ WATCH FALSE_ALARM on 15m {symbol} | Z={live_z:.2f} | "
+                        f"threshold={watch.z_entry_threshold:.2f} | "
+                        f"hysteresis_level={watch.z_entry_threshold - self.config.false_alarm_hysteresis:.2f}"
+                    )
                     watches_to_remove.append((symbol, "FALSE_ALARM"))
                 elif abs_z >= watch.z_sl_threshold:
                     print(f"🛑 WATCH SL_HIT on 15m {symbol} | Z={live_z:.2f}")
@@ -1165,19 +1273,30 @@ class StatArbBacktest:
                     watches_to_remove.append((symbol, None))
                 else:
                     # Watch cancelled (FALSE_ALARM, SL_HIT)
-                    print(f"❌ WATCH CANCEL {symbol} | reason={action} | Z={entry_z:.2f}")
+                    print(
+                        f"❌ WATCH CANCEL {symbol} | reason={action} | Z={entry_z:.2f}"
+                    )
                     watches_to_remove.append((symbol, action))
 
         # Remove processed watches
         for symbol, reason in watches_to_remove:
             if symbol in self.watch_candidates:
                 del self.watch_candidates[symbol]
-            if reason and reason in ("FALSE_ALARM", "SL_HIT", "TIMEOUT"):
+            if reason and reason in (
+                "FALSE_ALARM",
+                "SL_HIT",
+                "TIMEOUT",
+                "PARAM_INVALIDATED",
+            ):
                 self.trailing_cancelled_count += 1
                 # Add cooldown for cancelled watches
                 if self.config.cooldown_bars > 0:
-                    cooldown_minutes = self.config.cooldown_bars * self._timeframe_minutes
-                    self.symbol_cooldowns[symbol] = current_time + timedelta(minutes=cooldown_minutes)
+                    cooldown_minutes = (
+                        self.config.cooldown_bars * self._timeframe_minutes
+                    )
+                    self.symbol_cooldowns[symbol] = current_time + timedelta(
+                        minutes=cooldown_minutes
+                    )
 
     def _simulate_trailing_on_minute_data(
         self,
@@ -1188,14 +1307,23 @@ class StatArbBacktest:
         """
         Simulate trailing entry on 1m candles.
 
+        Uses same logic as EntryObserverService._process_price_update():
+        1. Check pullback (ENTRY) - FIRST priority
+        2. Check false alarm with HYSTERESIS
+        3. Check SL hit
+        4. Update max_z if still widening
+
         Returns:
             Tuple of (action, timestamp, z_score) where action is:
             - "ENTER": Entry confirmed after pullback
-            - "FALSE_ALARM": Z returned below entry threshold
+            - "FALSE_ALARM": Z dropped significantly below entry threshold
             - "SL_HIT": Z exceeded stop-loss
             - None: Still watching
         """
         max_z = watch.max_z
+
+        # Calculate false alarm level with hysteresis
+        false_alarm_level = watch.z_entry_threshold - self.config.false_alarm_hysteresis
 
         # Align data
         common_index = coin_1m.index.intersection(primary_1m.index)
@@ -1206,8 +1334,11 @@ class StatArbBacktest:
 
             # Calculate live Z-score
             live_z = self._calculate_live_z(
-                coin_price, primary_price,
-                watch.beta, watch.spread_mean, watch.spread_std
+                coin_price,
+                primary_price,
+                watch.beta,
+                watch.spread_mean,
+                watch.spread_std,
             )
             abs_z = abs(live_z)
 
@@ -1215,8 +1346,9 @@ class StatArbBacktest:
             if abs_z <= max_z - self.config.trailing_pullback:
                 return ("ENTER", ts, live_z)
 
-            # 2. Check false alarm (Z returned below entry threshold)
-            if abs_z < watch.z_entry_threshold:
+            # 2. Check false alarm with HYSTERESIS
+            # Only cancel if Z dropped SIGNIFICANTLY below threshold
+            if abs_z < false_alarm_level:
                 return ("FALSE_ALARM", ts, live_z)
 
             # 3. Check SL hit
@@ -1490,10 +1622,10 @@ class StatArbBacktest:
                 f"(until {unlock_time.strftime('%H:%M')})"
             )
 
-        emoji = "✅" if pnl >= 0 else "❌"
+        emoji = "🔺" if pnl >= 0 else "🔻"
         funding_str = f" | Funding: ${funding_pnl:+.2f}" if funding_pnl != 0 else ""
 
-        print(f"Reason: {exit_reason} | Duration: {duration:.1f}h{funding_str}")
+        print(f"{emoji} Reason: {exit_reason} | Duration: {duration:.1f}h{funding_str}")
         self._print_portfolio_state()
 
     async def _close_all_positions(
@@ -1820,7 +1952,9 @@ def print_results(result: BacktestResult) -> None:
             print(f"  Entries blocked:     {result.funding_blocked_entries}")
         if result.total_funding_pnl != 0:
             funding_emoji = "🟢" if result.total_funding_pnl >= 0 else "🔴"
-            print(f"  Total Funding PnL:   {funding_emoji} ${result.total_funding_pnl:+,.2f}")
+            print(
+                f"  Total Funding PnL:   {funding_emoji} ${result.total_funding_pnl:+,.2f}"
+            )
 
     # Print per-symbol statistics
     if result.symbol_stats:
@@ -2068,7 +2202,9 @@ Examples:
         print(f"    • {pair}")
     print(f"\n  Funding Filter:      {'ON' if config.use_funding_filter else 'OFF'}")
     if config.use_funding_filter:
-        print(f"  Max Funding Cost:    {config.max_funding_cost_threshold * 100:.3f}% per 8h")
+        print(
+            f"  Max Funding Cost:    {config.max_funding_cost_threshold * 100:.3f}% per 8h"
+        )
     print("=" * 70 + "\n")
 
     # Connect to exchange for data loading
@@ -2134,7 +2270,9 @@ Examples:
                 start_date=funding_start,
                 end_date=end_date,
             )
-            print(f"  Funding filter threshold: {config.max_funding_cost_threshold * 100:.3f}% per 8h")
+            print(
+                f"  Funding filter threshold: {config.max_funding_cost_threshold * 100:.3f}% per 8h"
+            )
         else:
             print("\n💸 Funding filter: DISABLED")
 

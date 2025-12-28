@@ -379,16 +379,16 @@ class CoinWalkForwardRunner:
                 f"Total PnL: ${result.total_pnl:+.2f}"
             )
 
-        # Quality filter: Sharpe > 1.5, Win Rate > 60%, Trades > 10, Profitable
+        # Quality filter: Sharpe >= 1.5, Win Rate >= 60%, Trades >= 10, Profitable
         print("\n" + "=" * 120)
-        print("💎 QUALITY COINS (Sharpe > 1.5, WR > 60%, Trades > 10, Profitable)")
+        print("💎 QUALITY COINS (Sharpe >= 1.5, WR >= 60%, Trades >= 10, Profitable)")
         print("-" * 120)
 
         quality_coins = [
             r for r in successful
-            if r.avg_sharpe > 1.5
-            and r.overall_win_rate > 0.6
-            and r.total_trades > 10
+            if r.avg_sharpe >= 1.5
+            and r.overall_win_rate >= 0.6
+            and r.total_trades >= 10
             and r.total_pnl > 0
         ]
 
