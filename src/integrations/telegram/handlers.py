@@ -241,7 +241,7 @@ class TelegramHandlers:
 
         await self._invoke_callback("get_positions")
         # Stub response
-        self.logger.info("Positions button clicked (stub)")
+        self.logger.debug("Positions button clicked (stub)")
 
     async def handle_entry_observer(self, message: Message) -> None:
         """Handle Entry Observer button click."""
@@ -249,7 +249,7 @@ class TelegramHandlers:
             return
 
         await self._invoke_callback("get_entry_observer")
-        self.logger.info("Entry Observer button clicked")
+        self.logger.debug("Entry Observer button clicked")
 
     async def handle_exit_observer(self, message: Message) -> None:
         """Handle Exit Observer button click."""
@@ -257,7 +257,7 @@ class TelegramHandlers:
             return
 
         await self._invoke_callback("get_exit_observer")
-        self.logger.info("Exit Observer button clicked")
+        self.logger.debug("Exit Observer button clicked")
 
     async def handle_opportunities(self, message: Message) -> None:
         """Handle Opportunities button click."""
@@ -265,7 +265,7 @@ class TelegramHandlers:
             return
 
         await self._invoke_callback("get_opportunities")
-        self.logger.info("Opportunities button clicked (stub)")
+        self.logger.debug("Opportunities button clicked (stub)")
 
     async def handle_close_all(self, message: Message) -> None:
         """Handle Close All button - show confirmation."""
@@ -318,7 +318,7 @@ class TelegramHandlers:
             return
 
         await self._invoke_callback("get_balances")
-        self.logger.info("Get balances button clicked (stub)")
+        self.logger.debug("Get balances button clicked (stub)")
 
     async def handle_symbol_input(self, message: Message) -> None:
         """Handle symbol input for close symbol action."""
