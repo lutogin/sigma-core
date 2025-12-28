@@ -313,9 +313,9 @@ class BacktestConfig:
     use_dynamic_tp: bool = True  # Use dynamic take profit
 
     # Trailing Entry settings (simulation of live EntryObserverService)
-    use_trailing_entry: bool = True  # Enable trailing entry simulation
-    trailing_pullback: float = 0.1  # Z-score pullback for reversal confirmation
-    trailing_timeout_minutes: int = 180  # Max watch duration before cancellation
+    use_trailing_entry: bool = False  # Enable trailing entry simulation
+    trailing_pullback: float = 0.05  # Z-score pullback for reversal confirmation
+    trailing_timeout_minutes: int = 240  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
         0.2  # Cancel watch only if Z drops this much below threshold
     )
@@ -1271,6 +1271,21 @@ class StatArbBacktest:
                         watch, entry_time, entry_z, current_bar_idx, window_data
                     )
                     watches_to_remove.append((symbol, None))
+
+                    # =========================================================
+                    # FIX: Check intraday exit on remaining 1m candles
+                    # This prevents "intraday blindness" - missing TP/SL that
+                    # occurs in the same 15m candle after entry
+                    # =========================================================
+                    await self._check_intraday_exit_after_entry(
+                        symbol=symbol,
+                        entry_time=entry_time,
+                        candle_end_time=current_time,
+                        coin_1m=coin_1m,
+                        primary_1m=primary_1m,
+                        watch=watch,
+                        window_data=window_data,
+                    )
                 else:
                     # Watch cancelled (FALSE_ALARM, SL_HIT)
                     print(
@@ -1450,6 +1465,196 @@ class StatArbBacktest:
         )
         self._print_portfolio_state()
 
+    async def _check_intraday_exit_after_entry(
+        self,
+        symbol: str,
+        entry_time: datetime,
+        candle_end_time: datetime,
+        coin_1m: pd.DataFrame,
+        primary_1m: pd.DataFrame,
+        watch: BacktestWatchCandidate,
+        window_data: Dict[str, pd.DataFrame],
+    ) -> None:
+        """
+        Check for TP/SL on remaining 1m candles after entry within same 15m bar.
+
+        This fixes "intraday blindness" - in production, if we enter at 12:05
+        and price hits TP at 12:10, we exit immediately. But in backtest,
+        _check_exits only runs at 12:15 (next 15m bar), missing the intraday TP.
+
+        This method simulates the remaining 1m candles after entry_time
+        and closes the position if TP/SL is hit.
+        """
+        position = self.positions.get(symbol)
+        if position is None:
+            return
+
+        # Get remaining 1m candles after entry
+        remaining_coin = coin_1m.loc[coin_1m.index > entry_time]
+        remaining_primary = primary_1m.loc[primary_1m.index > entry_time]
+
+        if remaining_coin.empty or remaining_primary.empty:
+            return
+
+        # Align indices
+        common_index = remaining_coin.index.intersection(remaining_primary.index)
+        if common_index.empty:
+            return
+
+        # Calculate dynamic TP threshold (bars_held = 0 for same-candle exit)
+        if self.config.use_dynamic_tp:
+            time_coef = self._get_time_based_tp_coefficient(0)
+            reference_z = (
+                position.peak_z_score
+                if position.peak_z_score > 0
+                else abs(position.entry_z_score)
+            )
+            dynamic_tp = max(reference_z * time_coef, self.config.z_tp_threshold)
+        else:
+            dynamic_tp = self.config.z_tp_threshold
+
+        z_sl = self.config.z_sl_threshold
+
+        for ts in common_index:
+            coin_price = remaining_coin.loc[ts, "close"]
+            primary_price = remaining_primary.loc[ts, "close"]
+
+            # Calculate live Z-score
+            live_z = self._calculate_live_z(
+                coin_price,
+                primary_price,
+                watch.beta,
+                watch.spread_mean,
+                watch.spread_std,
+            )
+
+            exit_reason = None
+
+            if position.side == "long":
+                # Long: entered at Z <= -entry, exit at Z >= -tp or Z <= -sl
+                if live_z >= -dynamic_tp:
+                    exit_reason = "TP"
+                elif live_z <= -z_sl:
+                    exit_reason = "SL"
+            else:
+                # Short: entered at Z >= entry, exit at Z <= tp or Z >= sl
+                if live_z <= dynamic_tp:
+                    exit_reason = "TP"
+                elif live_z >= z_sl:
+                    exit_reason = "SL"
+
+            if exit_reason:
+                # Close position at this 1m timestamp
+                print(
+                    f"⚡ INTRADAY {exit_reason} {symbol} | "
+                    f"entry_time={entry_time.strftime('%H:%M')} | "
+                    f"exit_time={ts.strftime('%H:%M')} | "
+                    f"Z={live_z:.2f} | tp_threshold={dynamic_tp:.2f}"
+                )
+                await self._close_position_at_time(
+                    symbol=symbol,
+                    exit_time=ts,
+                    coin_price=coin_price,
+                    primary_price=primary_price,
+                    exit_reason=exit_reason,
+                    exit_z=live_z,
+                )
+                return
+
+    async def _close_position_at_time(
+        self,
+        symbol: str,
+        exit_time: datetime,
+        coin_price: float,
+        primary_price: float,
+        exit_reason: str,
+        exit_z: float,
+    ) -> None:
+        """
+        Close position at a specific time with given prices.
+
+        Used for intraday exits where we have exact 1m prices.
+        """
+        position = self.positions.pop(symbol)
+
+        # Calculate PnL for each leg
+        coin_pct_change = (
+            coin_price - position.coin_entry_price
+        ) / position.coin_entry_price
+        primary_pct_change = (
+            primary_price - position.primary_entry_price
+        ) / position.primary_entry_price
+
+        coin_pnl = position.coin_size * coin_pct_change * self.config.leverage
+        primary_pnl = position.primary_size * primary_pct_change * self.config.leverage
+
+        # Calculate spread PnL based on position side
+        if position.side == "long":
+            raw_pnl = coin_pnl - primary_pnl
+        else:
+            raw_pnl = -coin_pnl + primary_pnl
+
+        # Subtract fees
+        fee_rate = (
+            self.config.maker_fee
+            if self.config.use_limit_orders
+            else self.config.taker_fee
+        )
+        total_fees = (position.coin_size + position.primary_size) * fee_rate * 2
+
+        # Calculate funding PnL (usually 0 for intraday exits)
+        funding_pnl = 0.0
+        if self.funding_cache is not None:
+            funding_pnl = self.funding_cache.calculate_funding_pnl(
+                coin_symbol=symbol,
+                primary_symbol=self.primary_pair,
+                entry_time=position.entry_time,
+                exit_time=exit_time,
+                spread_side=position.side,
+                coin_size_usdt=position.coin_size,
+                primary_size_usdt=position.primary_size,
+                leverage=self.config.leverage,
+            )
+
+        pnl = raw_pnl - total_fees + funding_pnl
+        self.balance += pnl
+
+        duration = (exit_time - position.entry_time).total_seconds() / 3600
+
+        trade = Trade(
+            symbol=symbol,
+            side=position.side,
+            entry_time=position.entry_time,
+            exit_time=exit_time,
+            entry_z_score=position.entry_z_score,
+            exit_z_score=exit_z,
+            entry_price=position.coin_entry_price,
+            exit_price=coin_price,
+            size_usdt=position.size_usdt,
+            pnl=pnl,
+            pnl_pct=pnl / position.size_usdt * 100,
+            exit_reason=exit_reason,
+            duration_hours=duration,
+            funding_pnl=funding_pnl,
+        )
+
+        self.trades.append(trade)
+
+        # Add cooldown for adverse exits
+        cooldown_reasons = ("SL", "CORRELATION_DROP", "TIMEOUT", "HURST_TRENDING")
+        if exit_reason in cooldown_reasons and self.config.cooldown_bars > 0:
+            cooldown_minutes = self.config.cooldown_bars * get_timeframe_minutes(
+                self.timeframe
+            )
+            unlock_time = exit_time + timedelta(minutes=cooldown_minutes)
+            self.symbol_cooldowns[symbol] = unlock_time
+
+        emoji = "🔺" if pnl >= 0 else "🔻"
+        print(
+            f"{emoji} {pnl:.2f} | Reason: {exit_reason} | Duration: {duration:.2f}h"
+        )
+        self._print_portfolio_state()
+
     async def _open_position(
         self,
         symbol: str,
@@ -1625,7 +1830,9 @@ class StatArbBacktest:
         emoji = "🔺" if pnl >= 0 else "🔻"
         funding_str = f" | Funding: ${funding_pnl:+.2f}" if funding_pnl != 0 else ""
 
-        print(f"{emoji} Reason: {exit_reason} | Duration: {duration:.1f}h{funding_str}")
+        print(
+            f"{emoji} {pnl:.2f} | Reason: {exit_reason} | Duration: {duration:.1f}h{funding_str}"
+        )
         self._print_portfolio_state()
 
     async def _close_all_positions(
