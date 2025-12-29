@@ -279,8 +279,18 @@ class ZScoreService:
         Returns:
             Smoothed dynamic threshold = EMA(max(z_entry_threshold, percentile))
         """
+        # Log input series size before any processing
+        total_z_scores = len(z_score_series)
+        non_nan_z_scores = len(z_score_series.dropna())
+
         # Use the dynamic threshold window (440+ candles by default)
         recent_z = z_score_series.tail(self._dynamic_threshold_window).dropna()
+
+        self._logger.debug(
+            f"[DynThreshold] {symbol}: input_series={total_z_scores}, "
+            f"non_nan={non_nan_z_scores}, window={self._dynamic_threshold_window}, "
+            f"after_tail_dropna={len(recent_z)}"
+        )
 
         if len(recent_z) < 50:
             self._logger.warning(
@@ -291,8 +301,12 @@ class ZScoreService:
 
         # Check if we need to warm up EMA for this symbol
         if symbol not in self._smoothed_thresholds:
-            smoothed_threshold = self._warmup_ema_threshold(recent_z)
+            smoothed_threshold = self._warmup_ema_threshold(symbol, recent_z)
             self._smoothed_thresholds[symbol] = smoothed_threshold
+            self._logger.debug(
+                f"[DynThreshold] {symbol}: EMA warmup complete, "
+                f"initial_threshold={smoothed_threshold:.4f}"
+            )
             return smoothed_threshold
 
         # Step 1: Calculate raw percentile threshold
@@ -313,9 +327,14 @@ class ZScoreService:
         # Store for next iteration
         self._smoothed_thresholds[symbol] = smoothed_threshold
 
+        self._logger.debug(
+            f"[DynThreshold] {symbol}: raw_p{self._adaptive_percentile}={raw_threshold:.4f}, "
+            f"prev_ema={previous_threshold:.4f}, new_ema={smoothed_threshold:.4f}"
+        )
+
         return smoothed_threshold
 
-    def _warmup_ema_threshold(self, z_series: pd.Series) -> float:
+    def _warmup_ema_threshold(self, symbol: str, z_series: pd.Series) -> float:
         """
         Warm up EMA threshold using historical rolling windows.
 
@@ -323,6 +342,7 @@ class ZScoreService:
         to get a "settled" threshold value on first call.
 
         Args:
+            symbol: Symbol name for logging.
             z_series: Z-score series (already trimmed to window size).
 
         Returns:
@@ -331,6 +351,12 @@ class ZScoreService:
         window_size = self._dynamic_threshold_window
         warmup_steps = 20  # Number of historical points to simulate
         step_size = window_size // warmup_steps
+
+        self._logger.debug(
+            f"[DynThreshold] {symbol}: warmup starting, "
+            f"z_series_len={len(z_series)}, window_size={window_size}, "
+            f"warmup_steps={warmup_steps}"
+        )
 
         if len(z_series) < window_size:
             # Not enough data, return simple percentile
