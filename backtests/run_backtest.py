@@ -540,12 +540,17 @@ class StatArbBacktest:
         """
         print(f"Starting backtest: {start_date.date()} to {end_date.date()}")
 
-        # Calculate how much data we need
-        # We need lookback_window_days * 2 + 1 before start_date for calculations
-        warmup_days = self.lookback_window_days * 2 + 1
+        # Calculate how much data we need:
+        # - DYNAMIC_THRESHOLD_WINDOW_BARS (440) for dynamic threshold calculation
+        # - LOOKBACK_WINDOW for rolling z-score calculation (288 for 3 days @ 15m)
+        # - LOOKBACK_WINDOW for rolling beta calculation (288 for 3 days @ 15m)
+        # Total: 440 + 288 + 288 = 1016 candles minimum
+        # For 15m: 1016 candles = ~10.6 days
+        # We use 3x lookback + 2 days buffer to be safe
+        warmup_days = self.lookback_window_days * 3 + 2
         data_start = start_date - timedelta(days=warmup_days)
 
-        print(f"Loading data from {data_start.date()} (warmup: {warmup_days} days)")
+        print(f"Loading data from {data_start.date()} (warmup: {warmup_days} days for rolling calculations)")
 
         # Load all data upfront
         all_symbols = [self.primary_pair] + self.consistent_pairs
@@ -577,10 +582,15 @@ class StatArbBacktest:
         if start_idx is None:
             raise ValueError(f"No data found after {start_date}")
 
-        # Calculate minimum candles needed for calculations
+        # Calculate minimum candles needed for calculations:
+        # - rolling beta needs LOOKBACK_WINDOW candles
+        # - rolling z-score needs another LOOKBACK_WINDOW candles
+        # - dynamic threshold needs DYNAMIC_THRESHOLD_WINDOW_BARS (440) candles
+        # Total: 440 + 288 + 288 = 1016 candles for 15m timeframe
         timeframe_minutes = get_timeframe_minutes(self.timeframe)
         candles_per_day = 24 * 60 // timeframe_minutes
-        min_candles = candles_per_day * self.lookback_window_days * 2
+        # Use 3x lookback to ensure enough data for all rolling calculations
+        min_candles = candles_per_day * self.lookback_window_days * 3
 
         if start_idx < min_candles:
             print(
@@ -2640,7 +2650,8 @@ Examples:
             all_funding_symbols = [settings.PRIMARY_PAIR] + consistent_pairs
 
             # Calculate data range (need funding from warmup period too)
-            warmup_days = settings.LOOKBACK_WINDOW_DAYS * 2 + 1
+            # Use same warmup as main data: 3x lookback + 2 days
+            warmup_days = settings.LOOKBACK_WINDOW_DAYS * 3 + 2
             funding_start = start_date - timedelta(days=warmup_days)
 
             await funding_cache.load(
