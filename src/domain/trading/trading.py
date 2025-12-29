@@ -57,7 +57,7 @@ class TradingService:
         logger: Any,
         allow_trading: bool = False,
         position_size_usdt: float = 100.0,
-        leverage: int = 1,
+        leverage: int = 3,
         max_open_spreads: int = 3,
         primary_symbol: str = "ETH/USDT:USDT",
     ):

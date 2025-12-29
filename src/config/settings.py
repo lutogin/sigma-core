@@ -116,7 +116,7 @@ class Settings:
     EXCHANGE_API_KEY: str = ""
     EXCHANGE_API_SECRET: str = ""
     EXCHANGE_TESTNET: bool = False
-    EXCHANGE_DEFAULT_LEVERAGE: int = 1
+    EXCHANGE_DEFAULT_LEVERAGE: int = 5
     EXCHANGE_MARGIN_TYPE: str = "cross"  # "cross" or "isolated"
     EXCHANGE_QUOTE_CURRENCY: str = "USDT"
 
@@ -224,7 +224,7 @@ class Settings:
         self.EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
         self.EXCHANGE_TESTNET = os.getenv("EXCHANGE_TESTNET", "false").lower() == "true"
         self.EXCHANGE_DEFAULT_LEVERAGE = int(
-            os.getenv("EXCHANGE_DEFAULT_LEVERAGE", "1")
+            os.getenv("EXCHANGE_DEFAULT_LEVERAGE", "5")
         )
         self.EXCHANGE_MARGIN_TYPE = os.getenv("EXCHANGE_MARGIN_TYPE", "cross")
         self.EXCHANGE_QUOTE_CURRENCY = os.getenv("EXCHANGE_QUOTE_CURRENCY", "USDT")
