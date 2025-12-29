@@ -139,6 +139,21 @@ class TradingService:
         """Check if service is running."""
         return self._is_running
 
+    @property
+    def is_trading_allowed(self) -> bool:
+        """Check if trading is currently allowed."""
+        return self._allow_trading
+
+    def enable_trading(self) -> None:
+        """Enable trading at runtime."""
+        self._allow_trading = True
+        self._logger.info("✅ Trading ENABLED via runtime control")
+
+    def disable_trading(self) -> None:
+        """Disable trading at runtime."""
+        self._allow_trading = False
+        self._logger.info("🛑 Trading DISABLED via runtime control")
+
     # =========================================================================
     # Timeout Check (called by Orchestrator before scan)
     # =========================================================================

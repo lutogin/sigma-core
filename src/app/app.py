@@ -58,6 +58,16 @@ class Application:
         logger.info("Application initialized successfully")
         return self
 
+    async def _stop_trading_callback(self) -> None:
+        """Callback for stopping trading via Telegram."""
+        if self._container and self._container.has_instance("trading_service"):
+            self._container.trading_service.disable_trading()
+
+    async def _start_trading_callback(self) -> None:
+        """Callback for starting trading via Telegram."""
+        if self._container and self._container.has_instance("trading_service"):
+            self._container.trading_service.enable_trading()
+
     def run(self) -> None:
         """
         Run the trading bot.
@@ -137,6 +147,14 @@ class Application:
                     telegram_service.register_callback(
                         "close_all_positions",
                         communicator_service.close_all_positions
+                    )
+                    telegram_service.register_callback(
+                        "stop_trading",
+                        self._stop_trading_callback
+                    )
+                    telegram_service.register_callback(
+                        "start_trading",
+                        self._start_trading_callback
                     )
 
                 # Run planner (blocks until shutdown)
