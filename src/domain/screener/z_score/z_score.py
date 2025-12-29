@@ -52,7 +52,7 @@ class ZScoreService:
         timeframe: str = "15m",
         z_entry_threshold: float = 2.0,
         z_tp_threshold: float = 0.0,
-        z_sl_threshold: float = 4.5,
+        z_sl_threshold: float = 4.0,
         adaptive_percentile: int = 95,
         dynamic_threshold_window: int = 440,
         threshold_ema_alpha: float = 0.1,

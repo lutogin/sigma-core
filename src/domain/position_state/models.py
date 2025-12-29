@@ -63,7 +63,7 @@ class SpreadPosition:
 
     # Thresholds (stored for exit logic)
     z_tp_threshold: float = 0.0
-    z_sl_threshold: float = 4.5
+    z_sl_threshold: float = 4.0
 
     # Timestamps
     opened_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

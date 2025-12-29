@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.domain.data_loader import AsyncDataLoaderService
 from src.domain.screener.correlation import CorrelationService
 from src.domain.screener.hurst_filter import HurstFilterService
+from src.domain.screener.adf_filter import ADFFilterService
+from src.domain.screener.halflife_filter import HalfLifeFilterService
 from src.domain.screener.volatility_filter import VolatilityFilterService
 from src.domain.screener.z_score import ZScoreService, ZScoreResult
 from src.infra.container import Container
@@ -481,6 +483,8 @@ class StatArbBacktest:
         z_score_service: ZScoreService,
         volatility_filter_service: VolatilityFilterService,
         hurst_filter_service: HurstFilterService,
+        adf_filter_service: Optional[ADFFilterService] = None,
+        halflife_filter_service: Optional[HalfLifeFilterService] = None,
         funding_cache: Optional[HistoricalFundingCache] = None,
     ):
         self.config = config
@@ -490,6 +494,8 @@ class StatArbBacktest:
         self.z_score_service = z_score_service
         self.volatility_filter_service = volatility_filter_service
         self.hurst_filter_service = hurst_filter_service
+        self.adf_filter_service = adf_filter_service
+        self.halflife_filter_service = halflife_filter_service
         self.funding_cache = funding_cache
 
         self.primary_pair = settings.PRIMARY_PAIR
@@ -794,6 +800,142 @@ class StatArbBacktest:
 
         return is_mean_reverting
 
+    def _check_adf_for_symbol(
+        self,
+        symbol: str,
+        window_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict,
+    ) -> bool:
+        """
+        Check if a single symbol's spread is stationary (ADF test).
+
+        This is an additional filter after Hurst - only called when:
+        1. Symbol passed Hurst filter (is mean-reverting)
+        2. ADF p-value < threshold indicates stationarity
+
+        Args:
+            symbol: Symbol to check
+            window_data: OHLCV data
+            correlation_results: Correlation results with beta values
+
+        Returns:
+            True if spread is stationary (p-value < threshold), False otherwise
+        """
+        if not self.adf_filter_service or not self.adf_filter_service.is_available:
+            return True  # No filter = allow all
+
+        primary_df = window_data.get(self.primary_pair)
+        coin_df = window_data.get(symbol)
+
+        if primary_df is None or coin_df is None:
+            return False
+
+        if primary_df.empty or coin_df.empty:
+            return False
+
+        # Get beta from correlation results
+        corr_result = correlation_results.get(symbol)
+        if corr_result is None:
+            return False
+
+        beta = corr_result.latest_beta
+
+        # Calculate ADF p-value for spread
+        pvalue = self.adf_filter_service.calculate_for_spread(
+            coin_log_prices=coin_df["close"].apply(np.log),
+            primary_log_prices=primary_df["close"].apply(np.log),
+            beta=beta,
+        )
+
+        is_stationary = self.adf_filter_service.is_stationary(pvalue)
+
+        if is_stationary:
+            print(
+                f"▶️ {symbol} ADF p={pvalue:.4f} < {self.adf_filter_service.threshold} "
+                f"(stationary, allow entry)"
+            )
+        else:
+            print(
+                f"  ⚠️  {symbol} ADF p={pvalue:.4f} >= {self.adf_filter_service.threshold} "
+                f"(non-stationary, skip entry)"
+            )
+
+        return is_stationary
+
+    def _check_halflife_for_symbol(
+        self,
+        symbol: str,
+        window_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict,
+    ) -> bool:
+        """
+        Check if a single symbol's spread has acceptable Half-Life.
+
+        This is an additional filter after Hurst - only called when:
+        1. Symbol passed Hurst filter (is mean-reverting)
+        2. Half-Life <= threshold indicates fast enough mean reversion
+
+        Args:
+            symbol: Symbol to check
+            window_data: OHLCV data
+            correlation_results: Correlation results with beta values
+
+        Returns:
+            True if spread has acceptable Half-Life (<= threshold), False otherwise
+        """
+        if not self.halflife_filter_service:
+            print(f"  ℹ️  {symbol} Half-Life filter not configured, skipping check")
+            return True  # No filter = allow all
+
+        if not self.halflife_filter_service.is_available:
+            print(f"  ℹ️  {symbol} Half-Life filter unavailable (statsmodels not installed)")
+            return True  # No filter = allow all
+
+        primary_df = window_data.get(self.primary_pair)
+        coin_df = window_data.get(symbol)
+
+        if primary_df is None or coin_df is None:
+            print(f"  ⚠️  {symbol} Half-Life: no data available")
+            return False
+
+        if primary_df.empty or coin_df.empty:
+            print(f"  ⚠️  {symbol} Half-Life: empty dataframes")
+            return False
+
+        # Get beta from correlation results
+        corr_result = correlation_results.get(symbol)
+        if corr_result is None:
+            print(f"  ⚠️  {symbol} Half-Life: no correlation result")
+            return False
+
+        beta = corr_result.latest_beta
+
+        # Debug: check data sizes
+        coin_log_prices = coin_df["close"].apply(np.log)
+        primary_log_prices = primary_df["close"].apply(np.log)
+
+        # Calculate Half-Life for spread
+        halflife = self.halflife_filter_service.calculate_for_spread(
+            coin_log_prices=coin_log_prices,
+            primary_log_prices=primary_log_prices,
+            beta=beta,
+        )
+
+        is_acceptable = self.halflife_filter_service.is_acceptable(halflife)
+
+        if is_acceptable:
+            print(
+                f"▶️ {symbol} HL={halflife:.1f} bars <= {self.halflife_filter_service.threshold} "
+                f"(fast reversion, allow entry) [data: {len(coin_log_prices)} candles, β={beta:.3f}]"
+            )
+        else:
+            print(
+                f"  ⚠️  {symbol} HL={halflife:.1f} bars > {self.halflife_filter_service.threshold} "
+                f"(slow reversion, skip entry) [data: {len(coin_log_prices)} candles, β={beta:.3f}]"
+            )
+
+        return is_acceptable
+
     def _check_hurst_exit(
         self,
         symbol: str,
@@ -1031,6 +1173,18 @@ class StatArbBacktest:
                 symbol, window_data, correlation_results
             ):
                 continue  # Spread is trending, skip entry
+
+            # Additional filter: Check Half-Life (after Hurst passes)
+            if not self._check_halflife_for_symbol(
+                symbol, window_data, correlation_results
+            ):
+                continue  # Spread reverts too slowly, skip entry
+
+            # Additional filter: Check ADF stationarity (after Half-Life passes)
+            if not self._check_adf_for_symbol(
+                symbol, window_data, correlation_results
+            ):
+                continue  # Spread is non-stationary, skip entry
 
             # Funding filter: Check if funding cost is acceptable
             if self.config.use_funding_filter and self.funding_cache is not None:
@@ -2412,6 +2566,9 @@ Examples:
         print(
             f"  Max Funding Cost:    {config.max_funding_cost_threshold * 100:.3f}% per 8h"
         )
+    print(f"\n  Half-Life Filter:    ON")
+    print(f"  HL Max Bars:         {settings.HALFLIFE_MAX_BARS} bars")
+    print(f"  HL Lookback:         {settings.HALFLIFE_LOOKBACK_CANDLES} candles")
     print("=" * 70 + "\n")
 
     # Connect to exchange for data loading
@@ -2458,6 +2615,21 @@ Examples:
             logger=logger,
         )
 
+        # Create ADF filter service
+        adf_filter_service = ADFFilterService(
+            logger=logger,
+            pvalue_threshold=settings.ADF_PVALUE_THRESHOLD,
+            lookback_candles=settings.ADF_LOOKBACK_CANDLES,
+        )
+
+        # Create Half-Life filter service
+        halflife_filter_service = HalfLifeFilterService(
+            logger=logger,
+            max_bars=settings.HALFLIFE_MAX_BARS,
+            lookback_candles=settings.HALFLIFE_LOOKBACK_CANDLES,
+        )
+        print(f"\n⏱️ Half-Life filter: max_bars={settings.HALFLIFE_MAX_BARS}, available={halflife_filter_service.is_available}")
+
         # Load historical funding rates if funding filter is enabled
         funding_cache = None
         if config.use_funding_filter:
@@ -2492,6 +2664,8 @@ Examples:
             z_score_service=z_score_service,
             volatility_filter_service=volatility_filter_service,
             hurst_filter_service=hurst_filter_service,
+            adf_filter_service=adf_filter_service,
+            halflife_filter_service=halflife_filter_service,
             funding_cache=funding_cache,
         )
 

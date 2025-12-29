@@ -57,7 +57,7 @@ class ExitWatch:
 
     # Thresholds
     z_tp_threshold: float = 0.0  # Take profit when |Z| <= this
-    z_sl_threshold: float = 4.5  # Stop loss when |Z| >= this
+    z_sl_threshold: float = 4.0  # Stop loss when |Z| >= this
 
     # Live prices (updated via WebSocket)
     coin_price: float = 0.0

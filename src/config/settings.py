@@ -60,14 +60,20 @@ class Settings:
     MIN_CORRELATION: float = 0.8  # Если корреляция упала ниже, пару не торгуем!
     # Z-Score settings
     Z_ENTRY_THRESHOLD: float = 0  # Воход в мониторинг PendingEntrySignalEvent
-    Z_TP_THRESHOLD: float = 0.0  # Выход
-    Z_SL_THRESHOLD: float = 4.5  # Стоп-лосс ExitSignalEvent
+    Z_TP_THRESHOLD: float = 0.25  # Выход
+    Z_SL_THRESHOLD: float = 4.0  # Стоп-лосс ExitSignalEvent
     # Beta settings
     MAX_BETA: float = 2.0
     MIN_BETA: float = 0.5
     # Hurst settings
     HURST_THRESHOLD: float = 0.45  # Максимальный Hurst для спрэдов
     HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
+    # ADF settings
+    ADF_PVALUE_THRESHOLD: float = 0.08  # Максимальный p-value для стационарности
+    ADF_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета ADF
+    # Half-Life settings
+    HALFLIFE_MAX_BARS: float = 48.0  # 0.5 * MAX_POSITION_BARS (96) = 48 bars = 12h
+    HALFLIFE_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Half-Life
 
     # Volatility filter
     VOLATILITY_WINDOW: int = 24  # 6 hours (24 x 15min candles)
@@ -155,14 +161,20 @@ class Settings:
         self.LOOKBACK_WINDOW_DAYS = int(os.getenv("LOOKBACK_WINDOW_DAYS", "3"))
         self.MIN_CORRELATION = float(os.getenv("MIN_CORRELATION", "0.8"))
         self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.0"))
-        self.Z_TP_THRESHOLD = float(os.getenv("Z_TP_THRESHOLD", "0.0"))
-        self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "4.5"))
+        self.Z_TP_THRESHOLD = float(os.getenv("Z_TP_THRESHOLD", "0.25"))
+        self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "0"))
         # Beta
         self.MIN_BETA = float(os.getenv("MIN_BETA", "0.5"))
         self.MAX_BETA = float(os.getenv("MAX_BETA", "2"))
         # Hurst
         self.HURST_THRESHOLD = float(os.getenv("HURST_THRESHOLD", "0.45"))
         self.HURST_LOOKBACK_CANDLES = int(os.getenv("HURST_LOOKBACK_CANDLES", "300"))
+        # ADF
+        self.ADF_PVALUE_THRESHOLD = float(os.getenv("ADF_PVALUE_THRESHOLD", "0.05"))
+        self.ADF_LOOKBACK_CANDLES = int(os.getenv("ADF_LOOKBACK_CANDLES", "300"))
+        # Half-Life
+        self.HALFLIFE_MAX_BARS = float(os.getenv("HALFLIFE_MAX_BARS", "48.0"))
+        self.HALFLIFE_LOOKBACK_CANDLES = int(os.getenv("HALFLIFE_LOOKBACK_CANDLES", "300"))
         # Volatility filter
         self.VOLATILITY_WINDOW = int(os.getenv("VOLATILITY_WINDOW", "24"))
         self.VOLATILITY_THRESHOLD = float(os.getenv("VOLATILITY_THRESHOLD", "0.008"))
@@ -283,6 +295,14 @@ class Settings:
         logger.info("🔬 Hurst Settings:")
         logger.info(f"  HURST_THRESHOLD: {self.HURST_THRESHOLD}")
         logger.info(f"  HURST_LOOKBACK_CANDLES: {self.HURST_LOOKBACK_CANDLES}")
+        logger.info("-" * 40)
+        logger.info("📊 ADF Settings:")
+        logger.info(f"  ADF_PVALUE_THRESHOLD: {self.ADF_PVALUE_THRESHOLD}")
+        logger.info(f"  ADF_LOOKBACK_CANDLES: {self.ADF_LOOKBACK_CANDLES}")
+        logger.info("-" * 40)
+        logger.info("⏱️ Half-Life Settings:")
+        logger.info(f"  HALFLIFE_MAX_BARS: {self.HALFLIFE_MAX_BARS}")
+        logger.info(f"  HALFLIFE_LOOKBACK_CANDLES: {self.HALFLIFE_LOOKBACK_CANDLES}")
         logger.info("-" * 40)
         logger.info("💸 Funding Filter Settings:")
         logger.info(

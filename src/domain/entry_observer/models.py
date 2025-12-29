@@ -58,7 +58,7 @@ class WatchCandidate:
     # Thresholds
     z_entry_threshold: float = 2.0
     z_tp_threshold: float = 0.25
-    z_sl_threshold: float = 4.5
+    z_sl_threshold: float = 4.0
 
     # Live prices (updated via WebSocket)
     coin_price: float = 0.0
@@ -150,7 +150,7 @@ class WatchCandidate:
             hurst=data.get("hurst", 0.0),
             z_entry_threshold=data.get("z_entry_threshold", 2.0),
             z_tp_threshold=data.get("z_tp_threshold", 0.0),
-            z_sl_threshold=data.get("z_sl_threshold", 4.5),
+            z_sl_threshold=data.get("z_sl_threshold", 4.0),
             coin_price=data.get("coin_price", 0.0),
             primary_price=data.get("primary_price", 0.0),
             created_at=datetime.fromisoformat(data["created_at"]),

@@ -126,8 +126,8 @@ class PendingEntrySignalEvent(BaseEvent):
 
     # Thresholds
     z_entry_threshold: float = 2.0
-    z_tp_threshold: float = 0.0
-    z_sl_threshold: float = 4.5
+    z_tp_threshold: float = 0.25
+    z_sl_threshold: float = 4.0
 
 
 @dataclass
@@ -222,7 +222,7 @@ class EntryObserverService:
         redis_cache: RedisCache,
         logger,
         z_entry_threshold: float = 2.0,
-        z_sl_threshold: float = 4.5,
+        z_sl_threshold: float = 4.0,
         pullback: float = 0.3,
         watch_timeout_seconds: int = 2700,  # 45 min
     ):

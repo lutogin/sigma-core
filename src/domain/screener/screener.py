@@ -22,6 +22,8 @@ from src.domain.screener.correlation.correlation import (
     CorrelationResult,
 )
 from src.domain.screener.hurst_filter import HurstFilterService
+from src.domain.screener.adf_filter import ADFFilterService
+from src.domain.screener.halflife_filter import HalfLifeFilterService
 from src.domain.screener.volatility_filter import (
     VolatilityFilterService,
     VolatilityCheckResult,
@@ -37,6 +39,8 @@ class ScanResult:
     filtered_results: Dict[str, ZScoreResult]
     all_z_score_results: Dict[str, ZScoreResult]
     hurst_values: Dict[str, float]
+    adf_pvalues: Dict[str, float]
+    halflife_values: Dict[str, float]
     raw_data: Dict[str, pd.DataFrame]
     correlation_results: Dict[str, CorrelationResult]
     volatility_result: Optional[VolatilityCheckResult]
@@ -55,6 +59,8 @@ class LastScanState:
     scan_result: Optional[ScanResult] = None
     scan_time: Optional[datetime] = None
     hurst_values: Optional[Dict[str, float]] = None
+    adf_pvalues: Optional[Dict[str, float]] = None
+    halflife_values: Optional[Dict[str, float]] = None
     dynamic_thresholds: Optional[Dict[str, float]] = None  # symbol -> dynamic_entry_threshold
 
     def is_empty(self) -> bool:
@@ -91,6 +97,8 @@ class ScreenerService:
         z_score_service: ZScoreService,
         volatility_filter_service: VolatilityFilterService,
         hurst_filter_service: HurstFilterService,
+        adf_filter_service: Optional[ADFFilterService],
+        halflife_filter_service: Optional[HalfLifeFilterService],
         lookback_window_days: int,
         correlation_threshold: float,
         min_beta: float,
@@ -109,6 +117,8 @@ class ScreenerService:
         self._z_score_service = z_score_service
         self._volatility_filter_service = volatility_filter_service
         self._hurst_filter_service = hurst_filter_service
+        self._adf_filter_service = adf_filter_service
+        self._halflife_filter_service = halflife_filter_service
         self._lookback_window_days = lookback_window_days
         self._correlation_threshold = correlation_threshold
         self._min_beta = min_beta
@@ -195,6 +205,8 @@ class ScreenerService:
                 filtered_results={},
                 all_z_score_results={},
                 hurst_values={},
+                adf_pvalues={},
+                halflife_values={},
                 raw_data={},
                 correlation_results={},
                 volatility_result=volatility_result,
@@ -246,11 +258,29 @@ class ScreenerService:
             )
         )
 
-        # 8. Log results
+        # 8. Filter by Half-Life mean-reversion speed (CPU-bound, run in thread pool)
+        filtered_results, halflife_values = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self._filter_by_halflife(
+                filtered_results, raw_data, correlation_results, hurst_values
+            )
+        )
+
+        # 9. Filter by ADF stationarity (CPU-bound, run in thread pool)
+        filtered_results, adf_pvalues = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self._filter_by_adf(
+                filtered_results, raw_data, correlation_results, halflife_values
+            )
+        )
+
+        # 10. Log results
         formatted_table = self._format_results(
             filtered_results,
             sort_by="z_score",
             hurst_values=hurst_values,
+            adf_pvalues=adf_pvalues,
+            halflife_values=halflife_values,
         )
         self._logger.info(f"Z-Score Results:{formatted_table}")
 
@@ -263,6 +293,8 @@ class ScreenerService:
             filtered_results=filtered_results,
             all_z_score_results=z_score_results,
             hurst_values=hurst_values,
+            adf_pvalues=adf_pvalues,
+            halflife_values=halflife_values,
             raw_data=raw_data,
             correlation_results=correlation_results,
             volatility_result=volatility_result,
@@ -281,6 +313,8 @@ class ScreenerService:
             scan_result=scan_result,
             scan_time=datetime.now(timezone.utc),
             hurst_values=hurst_values,
+            adf_pvalues=adf_pvalues,
+            halflife_values=halflife_values,
             dynamic_thresholds=dynamic_thresholds,
         )
 
@@ -427,6 +461,196 @@ class ScreenerService:
 
         return filtered, hurst_values
 
+    def _filter_by_adf(
+        self,
+        z_score_results: Dict[str, ZScoreResult],
+        raw_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict,
+        halflife_values: Dict[str, float],
+    ) -> tuple[Dict[str, ZScoreResult], Dict[str, float]]:
+        """
+        Filter z-score results by ADF stationarity test.
+
+        ONLY checks ADF for entry candidates that passed Half-Life filter:
+        - Symbol must be in halflife_values (was checked by Half-Life)
+        - p-value < threshold indicates stationarity
+
+        This is a complementary filter to Half-Life:
+        - Half-Life measures mean-reversion speed
+        - ADF tests for stationarity (no unit root)
+
+        Args:
+            z_score_results: Dictionary mapping symbol -> ZScoreResult.
+            raw_data: Dictionary mapping symbol -> OHLCV DataFrame.
+            correlation_results: Dictionary with beta values per symbol.
+            halflife_values: Dictionary of symbols that passed Half-Life filter.
+
+        Returns:
+            Tuple of:
+            - Filtered dictionary with only stationary spreads
+            - ADF p-values dict for all checked symbols (for logging)
+        """
+        adf_pvalues: Dict[str, float] = {}
+
+        if not self._adf_filter_service or not self._adf_filter_service.is_available:
+            return z_score_results, adf_pvalues
+
+        filtered = {}
+        skipped = []
+
+        primary_df = raw_data.get(self._primary_pair)
+        if primary_df is None or primary_df.empty:
+            self._logger.warning("No primary pair data for ADF calculation")
+            return z_score_results, adf_pvalues
+
+        for symbol, result in z_score_results.items():
+            # Only check ADF for symbols that passed Half-Life filter
+            # (i.e., symbols that are in halflife_values)
+            if symbol not in halflife_values:
+                # Not an entry candidate or didn't pass Half-Life - keep without ADF check
+                filtered[symbol] = result
+                continue
+
+            # This symbol passed Half-Life - now check ADF
+            coin_df = raw_data.get(symbol)
+            if coin_df is None or coin_df.empty:
+                skipped.append(f"{symbol} (no data)")
+                continue
+
+            # Get beta from correlation results
+            corr_result = correlation_results.get(symbol)
+            if corr_result is None:
+                skipped.append(f"{symbol} (no correlation)")
+                continue
+
+            beta = corr_result.latest_beta
+
+            # Calculate ADF p-value for spread
+            pvalue = self._adf_filter_service.calculate_for_spread(
+                coin_log_prices=coin_df["close"].apply(np.log),
+                primary_log_prices=primary_df["close"].apply(np.log),
+                beta=beta,
+            )
+
+            adf_pvalues[symbol] = pvalue
+
+            z = result.current_z_score
+            halflife = halflife_values.get(symbol, float("inf"))
+
+            if self._adf_filter_service.is_stationary(pvalue):
+                filtered[symbol] = result
+                self._logger.info(
+                    f"✅ {symbol}: Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f} < {self._adf_filter_service.threshold} (stationary)"
+                )
+            else:
+                skipped.append(f"{symbol} (Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f})")
+                self._logger.warning(
+                    f"⚠️ {symbol}: Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f} >= {self._adf_filter_service.threshold} (non-stationary, skip)"
+                )
+
+        if skipped:
+            self._logger.warning(
+                f"Skipped {len(skipped)} entry candidates with high ADF p-value: {', '.join(skipped)}"
+            )
+
+        return filtered, adf_pvalues
+
+    def _filter_by_halflife(
+        self,
+        z_score_results: Dict[str, ZScoreResult],
+        raw_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict,
+        hurst_values: Dict[str, float],
+    ) -> tuple[Dict[str, ZScoreResult], Dict[str, float]]:
+        """
+        Filter z-score results by Half-Life mean-reversion speed.
+
+        ONLY checks Half-Life for entry candidates that passed Hurst filter:
+        - Symbol must be in hurst_values (was checked by Hurst)
+        - Half-Life <= threshold indicates fast enough mean reversion
+
+        This is a complementary filter to Hurst:
+        - Hurst measures mean-reversion tendency (H < 0.45)
+        - Half-Life measures mean-reversion speed
+
+        Args:
+            z_score_results: Dictionary mapping symbol -> ZScoreResult.
+            raw_data: Dictionary mapping symbol -> OHLCV DataFrame.
+            correlation_results: Dictionary with beta values per symbol.
+            hurst_values: Dictionary of symbols that passed Hurst filter.
+
+        Returns:
+            Tuple of:
+            - Filtered dictionary with only fast-reverting spreads
+            - Half-Life values dict for all checked symbols (for logging)
+        """
+        halflife_values: Dict[str, float] = {}
+
+        if not self._halflife_filter_service or not self._halflife_filter_service.is_available:
+            return z_score_results, halflife_values
+
+        filtered = {}
+        skipped = []
+
+        primary_df = raw_data.get(self._primary_pair)
+        if primary_df is None or primary_df.empty:
+            self._logger.warning("No primary pair data for Half-Life calculation")
+            return z_score_results, halflife_values
+
+        for symbol, result in z_score_results.items():
+            # Only check Half-Life for symbols that passed Hurst filter
+            # (i.e., symbols that are in hurst_values)
+            if symbol not in hurst_values:
+                # Not an entry candidate or didn't pass Hurst - keep without Half-Life check
+                filtered[symbol] = result
+                continue
+
+            # This symbol passed Hurst - now check Half-Life
+            coin_df = raw_data.get(symbol)
+            if coin_df is None or coin_df.empty:
+                skipped.append(f"{symbol} (no data)")
+                continue
+
+            # Get beta from correlation results
+            corr_result = correlation_results.get(symbol)
+            if corr_result is None:
+                skipped.append(f"{symbol} (no correlation)")
+                continue
+
+            beta = corr_result.latest_beta
+
+            # Calculate Half-Life for spread
+            halflife = self._halflife_filter_service.calculate_for_spread(
+                coin_log_prices=coin_df["close"].apply(np.log),
+                primary_log_prices=primary_df["close"].apply(np.log),
+                beta=beta,
+            )
+
+            halflife_values[symbol] = halflife
+
+            z = result.current_z_score
+            hurst = hurst_values.get(symbol, 0.5)
+
+            if self._halflife_filter_service.is_acceptable(halflife):
+                filtered[symbol] = result
+                self._logger.info(
+                    f"✅ {symbol}: Z={z:.2f}, Hurst={hurst:.3f}, HL={halflife:.1f} bars "
+                    f"<= {self._halflife_filter_service.threshold} (fast reversion)"
+                )
+            else:
+                skipped.append(f"{symbol} (Z={z:.2f}, H={hurst:.3f}, HL={halflife:.1f})")
+                self._logger.warning(
+                    f"⚠️ {symbol}: Z={z:.2f}, Hurst={hurst:.3f}, HL={halflife:.1f} bars "
+                    f"> {self._halflife_filter_service.threshold} (slow reversion, skip)"
+                )
+
+        if skipped:
+            self._logger.warning(
+                f"Skipped {len(skipped)} entry candidates with high Half-Life: {', '.join(skipped)}"
+            )
+
+        return filtered, halflife_values
+
     async def _connect_and_fetch_symbols(self) -> None:
         if not self._exchange.is_connected:
             await self._exchange.connect()
@@ -516,6 +740,8 @@ class ScreenerService:
         sort_by: str = "z_score",
         top_n: int | None = None,
         hurst_values: Dict[str, float] | None = None,
+        adf_pvalues: Dict[str, float] | None = None,
+        halflife_values: Dict[str, float] | None = None,
     ) -> str:
         """
         Format z-score results as a pretty table for logging.
@@ -525,6 +751,8 @@ class ScreenerService:
             sort_by: Sort key - "z_score", "beta", "correlation", or "symbol".
             top_n: Limit output to top N results (by absolute z-score). None for all.
             hurst_values: Optional dict of symbol -> Hurst exponent (only for entry candidates).
+            adf_pvalues: Optional dict of symbol -> ADF p-value (only for entry candidates).
+            halflife_values: Optional dict of symbol -> Half-Life in bars (only for entry candidates).
 
         Returns:
             Formatted string with table of results.
@@ -533,6 +761,8 @@ class ScreenerService:
             return "No z-score results to display."
 
         hurst_values = hurst_values or {}
+        adf_pvalues = adf_pvalues or {}
+        halflife_values = halflife_values or {}
         z_sl = self._z_score_service.z_sl_threshold
 
         # Build list of tuples for sorting
@@ -547,6 +777,8 @@ class ScreenerService:
                     "correlation": res.current_correlation,
                     "spread": res.current_spread,
                     "hurst": hurst_values.get(symbol),  # None if not calculated
+                    "adf": adf_pvalues.get(symbol),  # None if not calculated
+                    "halflife": halflife_values.get(symbol),  # None if not calculated
                 }
             )
 
@@ -575,7 +807,7 @@ class ScreenerService:
 
         # Build table
         lines = []
-        header = f"{'Symbol':<20} {'Z-Score':>10} {'DynThr':>8} {'β (hedge)':>12} {'Corr':>8} {'Hurst':>8} {'Signal':>12}"
+        header = f"{'Symbol':<20} {'Z-Score':>10} {'DynThr':>8} {'β (hedge)':>12} {'Corr':>8} {'Hurst':>8} {'ADF p':>8} {'HL':>6} {'Signal':>12}"
         separator = "-" * len(header)
 
         lines.append("")
@@ -589,6 +821,8 @@ class ScreenerService:
             beta = row["beta"]
             corr = row["correlation"]
             hurst = row["hurst"]
+            adf = row["adf"]
+            halflife = row["halflife"]
 
             # Determine signal based on z-score and dynamic threshold
             if np.isnan(z):
@@ -608,9 +842,13 @@ class ScreenerService:
             corr_str = f"{corr:>8.4f}" if not np.isnan(corr) else f"{'N/A':>8}"
             # Hurst: show value only for entry candidates, "-" otherwise
             hurst_str = f"{hurst:>8.4f}" if hurst is not None else f"{'—':>8}"
+            # ADF: show value only for entry candidates, "-" otherwise
+            adf_str = f"{adf:>8.4f}" if adf is not None else f"{'—':>8}"
+            # Half-Life: show value only for entry candidates, "-" otherwise
+            hl_str = f"{halflife:>6.1f}" if halflife is not None and halflife != float("inf") else f"{'—':>6}"
 
             lines.append(
-                f"{row['symbol']:<20} {z_str} {dyn_thr_str} {beta_str} {corr_str} {hurst_str} {signal:>12}"
+                f"{row['symbol']:<20} {z_str} {dyn_thr_str} {beta_str} {corr_str} {hurst_str} {adf_str} {hl_str} {signal:>12}"
             )
 
         lines.append(separator)

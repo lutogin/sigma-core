@@ -174,7 +174,7 @@ class EntrySignalEvent(BaseEvent):
 
     # Thresholds for exit (for executor to know)
     z_tp_threshold: float = 0.0  # Take profit when |Z| <= this
-    z_sl_threshold: float = 4.5  # Stop loss when |Z| >= this
+    z_sl_threshold: float = 4.0  # Stop loss when |Z| >= this
 
     def to_dict(self) -> dict:
         base = super().to_dict()
@@ -267,8 +267,8 @@ class PendingEntrySignalEvent(BaseEvent):
 
     # Thresholds
     z_entry_threshold: float = 2.0  # Entry threshold
-    z_tp_threshold: float = 0.0  # Take profit when |Z| <= this
-    z_sl_threshold: float = 4.5  # Stop loss when |Z| >= this
+    z_tp_threshold: float = 0.25  # Take profit when |Z| <= this
+    z_sl_threshold: float = 4.0  # Stop loss when |Z| >= this
 
     def to_dict(self) -> dict:
         base = super().to_dict()
@@ -567,8 +567,8 @@ class TradeOpenedEvent(BaseEvent):
     primary_order_id: str = ""
 
     # Thresholds
-    z_tp_threshold: float = 0.0
-    z_sl_threshold: float = 4.5
+    z_tp_threshold: float = 0.25
+    z_sl_threshold: float = 4.0
 
     def to_dict(self) -> dict:
         base = super().to_dict()

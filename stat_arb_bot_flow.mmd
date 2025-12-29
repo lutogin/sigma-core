@@ -3,7 +3,7 @@
 flowchart TB
     subgraph SCHEDULER["⏰ SCHEDULER (PlannerService)"]
         CRON["Cron: */15 * * * *<br/>Every 15 minutes"]
-        TIMEOUT_CHECK["Check Position Timeouts<br/>MAX_POSITION_BARS=144 (~32h)"]
+        TIMEOUT_CHECK["Check Position Timeouts<br/>MAX_POSITION_BARS=96 (~24h)"]
     end
 
     subgraph ORCHESTRATOR["🎯 ORCHESTRATOR (OrchestratorService.run)"]
@@ -35,6 +35,32 @@ flowchart TB
                     DYN_RESULT["dynamic_entry_threshold<br/>per symbol"]
                 end
             end
+
+            subgraph ENTRY_FILTERS["🔬 ENTRY CANDIDATE FILTERS (run_in_executor)"]
+                direction TB
+                NOTE_FILTERS["Only for |Z| >= dynamic_threshold"]
+
+                subgraph HURST_SCREEN["1️⃣ HURST FILTER"]
+                    CALC_HURST_S["Calculate Hurst Exponent<br/>HURST_LOOKBACK_CANDLES=300"]
+                    HURST_CHECK_S{"H < 0.45?"}
+                    HURST_PASS["✅ Mean-Reverting"]
+                    HURST_FAIL["❌ Trending → Remove"]
+                end
+
+                subgraph HALFLIFE_SCREEN["2️⃣ HALF-LIFE FILTER"]
+                    CALC_HL["Calculate Half-Life (O-U process)<br/>HL = -ln(2) / λ<br/>HALFLIFE_LOOKBACK=300"]
+                    HL_CHECK{"HL <= 48 bars?<br/>(0.5 × MAX_POSITION_BARS)"}
+                    HL_PASS["✅ Fast Reversion"]
+                    HL_FAIL["❌ Slow Reversion → Remove"]
+                end
+
+                subgraph ADF_SCREEN["3️⃣ ADF FILTER"]
+                    CALC_ADF["Calculate ADF p-value<br/>ADF_LOOKBACK_CANDLES=300"]
+                    ADF_CHECK{"p-value < 0.08?"}
+                    ADF_PASS["✅ Stationary"]
+                    ADF_FAIL["❌ Non-Stationary → Remove"]
+                end
+            end
         end
 
         subgraph EXIT_CHECK["🚪 EXIT CONDITIONS CHECK"]
@@ -46,7 +72,7 @@ flowchart TB
                 EXIT_SL["🛑 STOP_LOSS<br/>|Z| >= Z_SL_THRESHOLD (4.0)"]
                 EXIT_CORR["📉 CORRELATION_DROP<br/>corr < MIN_CORRELATION (0.8)"]
                 EXIT_HURST["📈 HURST_TRENDING<br/>H >= HURST_THRESHOLD (0.45)"]
-                EXIT_TIMEOUT["⏰ TIMEOUT<br/>bars >= MAX_POSITION_BARS (144)"]
+                EXIT_TIMEOUT["⏰ TIMEOUT<br/>bars >= MAX_POSITION_BARS (96)"]
             end
 
             EMIT_EXIT["Emit ExitSignalEvent"]
@@ -54,24 +80,17 @@ flowchart TB
 
         subgraph WATCH_CHECK["👁️ WATCHED PAIRS CHECK"]
             CHECK_WATCHES["Check EntryObserver watches"]
-            REMOVE_WATCH["Remove if failed:<br/>CORRELATION_DROP or HURST_TRENDING"]
+            REMOVE_WATCH["Remove if failed:<br/>CORRELATION_DROP or HURST_TRENDING<br/>or FALSE_ALARM"]
         end
 
-        subgraph ENTRY_CHECK["🚀 ENTRY CONDITIONS CHECK"]
+        subgraph ENTRY_CHECK["🚀 ENTRY CONDITIONS CHECK (Orchestrator)"]
             direction TB
 
             subgraph ENTRY_CONDITIONS["Entry Conditions (all must pass)"]
                 ENTRY_Z["|Z| >= dynamic_entry_threshold<br/>AND |Z| < Z_SL_THRESHOLD (4.0)"]
                 ENTRY_NO_POS["No existing position for symbol"]
                 ENTRY_NO_COOL["Not in cooldown<br/>COOLDOWN_BARS=16 (~4h)"]
-                ENTRY_MAX["Active positions < MAX_OPEN_SPREADS (3)"]
-            end
-
-            subgraph HURST_FILTER["🔬 HURST FILTER (Final Gate)"]
-                CALC_HURST["Calculate Hurst Exponent<br/>HURST_LOOKBACK_CANDLES=300"]
-                HURST_CHECK{"H < HURST_THRESHOLD<br/>(0.45)?"}
-                MEAN_REV["✅ Mean-Reverting<br/>Allow Entry"]
-                TRENDING["❌ Trending<br/>Skip Entry"]
+                ENTRY_MAX["Active positions < MAX_OPEN_SPREADS (5)"]
             end
 
             subgraph FUNDING_FILTER["💸 FUNDING FILTER"]
@@ -98,8 +117,8 @@ flowchart TB
 
         subgraph TRAILING_LOGIC["🎯 Trailing Entry Logic"]
             direction TB
-            CHECK_TIMEOUT_W{"Watch Timeout?<br/>TRAILING_ENTRY_TIMEOUT=60min"}
-            CHECK_FALSE{"|Z| < entry_threshold?<br/>(False Alarm)"}
+            CHECK_TIMEOUT_W{"Watch Timeout?<br/>TRAILING_ENTRY_TIMEOUT=45min"}
+            CHECK_FALSE{"|Z| < threshold - 0.2?<br/>(False Alarm + Hysteresis)"}
             CHECK_SL_W{"|Z| >= Z_SL_THRESHOLD?<br/>(SL Hit)"}
             CHECK_PULLBACK{"|Z| <= max_Z - PULLBACK?<br/>(PULLBACK=0.2)"}
 
@@ -123,7 +142,7 @@ flowchart TB
         end
 
         subgraph EXECUTION["⚡ Atomic Execution (ACID)"]
-            CALC_SIZE["Calculate Position Sizes<br/>COIN: POSITION_SIZE_USDT (300)<br/>PRIMARY: COIN × β"]
+            CALC_SIZE["Calculate Position Sizes<br/>COIN: POSITION_SIZE_USDT (100)<br/>PRIMARY: COIN × β"]
 
             subgraph OPEN_SPREAD["Open Spread (Parallel)"]
                 OPEN_COIN["Open COIN Position<br/>LONG spread → BUY<br/>SHORT spread → SELL"]
@@ -147,8 +166,8 @@ flowchart TB
         end
 
         subgraph DYNAMIC_TP["🎚️ DYNAMIC TP (Time-Based)"]
-            TIME_COEF["Calculate time_based_coefficient:<br/>0-4h: 1.0<br/>4-12h: 3.0<br/>12-24h: 5.0<br/>24h+: 8.0"]
-            DYN_TP_CALC["dynamic_TP = z_tp_threshold × time_coef"]
+            TIME_COEF["Calculate time_based_coefficient:<br/>0-4h: coef=0.1 (wait for ~90%)<br/>4-12h: coef=0.3 (~70%)<br/>12-24h: coef=0.5 (~50%)<br/>24h+: TIME_STOP"]
+            DYN_TP_CALC["dynamic_TP = peak_Z × time_coef<br/>min: Z_TP_THRESHOLD"]
         end
 
         subgraph EXIT_LIVE_CHECK["Exit Conditions"]
@@ -195,7 +214,22 @@ flowchart TB
     EMA_SMOOTH --> FLOOR
     FLOOR --> DYN_RESULT
 
-    DYN_RESULT --> GET_POSITIONS
+    %% Entry Candidate Filters in Screener
+    DYN_RESULT --> NOTE_FILTERS
+    NOTE_FILTERS --> CALC_HURST_S
+    CALC_HURST_S --> HURST_CHECK_S
+    HURST_CHECK_S -->|Yes| HURST_PASS
+    HURST_CHECK_S -->|No| HURST_FAIL
+    HURST_PASS --> CALC_HL
+    CALC_HL --> HL_CHECK
+    HL_CHECK -->|Yes| HL_PASS
+    HL_CHECK -->|No| HL_FAIL
+    HL_PASS --> CALC_ADF
+    CALC_ADF --> ADF_CHECK
+    ADF_CHECK -->|Yes| ADF_PASS
+    ADF_CHECK -->|No| ADF_FAIL
+
+    ADF_PASS --> GET_POSITIONS
     GET_POSITIONS --> EXIT_TP
     EXIT_TP --> EXIT_SL
     EXIT_SL --> EXIT_CORR
@@ -210,11 +244,7 @@ flowchart TB
     ENTRY_Z --> ENTRY_NO_POS
     ENTRY_NO_POS --> ENTRY_NO_COOL
     ENTRY_NO_COOL --> ENTRY_MAX
-    ENTRY_MAX --> CALC_HURST
-    CALC_HURST --> HURST_CHECK
-    HURST_CHECK -->|Yes| MEAN_REV
-    HURST_CHECK -->|No| TRENDING
-    MEAN_REV --> CALC_FUNDING
+    ENTRY_MAX --> CALC_FUNDING
     CALC_FUNDING --> CALC_NET
     CALC_NET --> FUNDING_CHECK
     FUNDING_CHECK -->|Yes| FUNDING_OK
@@ -285,12 +315,13 @@ flowchart TB
     classDef trading fill:#fdcb6e,stroke:#f39c12,stroke-width:2px,color:#000
     classDef observer fill:#e17055,stroke:#fab1a0,stroke-width:2px,color:#fff
     classDef decision fill:#fd79a8,stroke:#e84393,stroke-width:2px,color:#fff
+    classDef newfilter fill:#00cec9,stroke:#81ecec,stroke-width:2px,color:#fff
 
     class CRON,TIMEOUT_CHECK scheduler
     class LOAD_DATA,CALC_CORR,CORR_FILTER,CALC_SPREAD,CALC_Z screener
-    class VOL_CHECK,CALC_HURST,PERCENTILE,EMA_SMOOTH,FLOOR,CALC_FUNDING,CALC_NET filter
-    class ENTRY_Z,ENTRY_NO_POS,ENTRY_NO_COOL,ENTRY_MAX,EMIT_PENDING,EMIT_ENTRY,FUNDING_OK entry
-    class EXIT_TP,EXIT_SL,EXIT_CORR,EXIT_HURST,EXIT_TIMEOUT,EMIT_EXIT,EMIT_EXIT_SIGNAL,FUNDING_TOXIC exit
+    class VOL_CHECK,CALC_HURST_S,PERCENTILE,EMA_SMOOTH,FLOOR,CALC_FUNDING,CALC_NET,CALC_HL,CALC_ADF filter
+    class ENTRY_Z,ENTRY_NO_POS,ENTRY_NO_COOL,ENTRY_MAX,EMIT_PENDING,EMIT_ENTRY,FUNDING_OK,HURST_PASS,HL_PASS,ADF_PASS entry
+    class EXIT_TP,EXIT_SL,EXIT_CORR,EXIT_HURST,EXIT_TIMEOUT,EMIT_EXIT,EMIT_EXIT_SIGNAL,FUNDING_TOXIC,HURST_FAIL,HL_FAIL,ADF_FAIL exit
     class CALC_SIZE,OPEN_COIN,OPEN_PRIMARY,CLOSE_COIN,CLOSE_PRIMARY trading
     class SUBSCRIBE,CALC_LIVE_Z,TRACK_MAX,EXIT_SUBSCRIBE,EXIT_CALC_Z observer
-    class VOL_SAFE,HURST_CHECK,CHECK_TIMEOUT_W,CHECK_FALSE,CHECK_SL_W,CHECK_PULLBACK,LIVE_TP,LIVE_SL,COOLDOWN_CHECK,FUNDING_CHECK decision
+    class VOL_SAFE,HURST_CHECK_S,HL_CHECK,ADF_CHECK,CHECK_TIMEOUT_W,CHECK_FALSE,CHECK_SL_W,CHECK_PULLBACK,LIVE_TP,LIVE_SL,COOLDOWN_CHECK,FUNDING_CHECK decision

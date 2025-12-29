@@ -238,6 +238,8 @@ class Container:
                 z_score_service=self.z_score_service,
                 volatility_filter_service=self.volatility_filter_service,
                 hurst_filter_service=self.hurst_filter_service,
+                adf_filter_service=self.adf_filter_service,
+                halflife_filter_service=self.halflife_filter_service,
                 data_loader=data_loader,
                 lookback_window_days=self._settings.LOOKBACK_WINDOW_DAYS,
                 correlation_threshold=self._settings.MIN_CORRELATION,
@@ -407,6 +409,34 @@ class Container:
                 logger=self.logger,
             )
         return self._instances["hurst_filter_service"]
+
+    @property
+    def adf_filter_service(self):
+        """Get ADF Filter Service for stationarity detection."""
+        self._check_initialized()
+        if "adf_filter_service" not in self._instances:
+            from src.domain.screener.adf_filter import ADFFilterService
+
+            self._instances["adf_filter_service"] = ADFFilterService(
+                logger=self.logger,
+                pvalue_threshold=self._settings.ADF_PVALUE_THRESHOLD,
+                lookback_candles=self._settings.ADF_LOOKBACK_CANDLES,
+            )
+        return self._instances["adf_filter_service"]
+
+    @property
+    def halflife_filter_service(self):
+        """Get Half-Life Filter Service for mean-reversion speed detection."""
+        self._check_initialized()
+        if "halflife_filter_service" not in self._instances:
+            from src.domain.screener.halflife_filter import HalfLifeFilterService
+
+            self._instances["halflife_filter_service"] = HalfLifeFilterService(
+                logger=self.logger,
+                max_bars=self._settings.HALFLIFE_MAX_BARS,
+                lookback_candles=self._settings.HALFLIFE_LOOKBACK_CANDLES,
+            )
+        return self._instances["halflife_filter_service"]
 
     @property
     def funding_filter_service(self):
