@@ -101,7 +101,7 @@ class Settings:
     POSITION_SIZE_USDT: float = 100.0  # USDT размер позиции на COIN ногу
 
     # Trading settings
-    ALLOW_TRADING: bool = False  # Enable/disable real trading
+    ALLOW_TRADING: bool = True  # Enable/disable real trading
     MAX_OPEN_SPREADS: int = 5  # Maximum number of open spread positions
 
     # Position state settings
