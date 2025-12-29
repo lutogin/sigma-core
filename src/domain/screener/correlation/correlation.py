@@ -138,8 +138,9 @@ class CorrelationService:
         log_returns = log_prices.diff().dropna()
 
         self._logger.debug(
-            f"Preprocessed {len(df_close.columns)} symbols, "
-            f"{len(log_returns)} log return observations"
+            f"[Correlation] Preprocessed {len(df_close.columns)} symbols: "
+            f"close_prices={len(df_close)}, log_prices={len(log_prices)}, "
+            f"log_returns={len(log_returns)} (lost {len(log_prices) - len(log_returns)} from diff)"
         )
 
         return log_returns
@@ -195,6 +196,13 @@ class CorrelationService:
 
             latest_beta = valid_beta.iloc[-1] if len(valid_beta) > 0 else np.nan
             latest_corr = valid_corr.iloc[-1] if len(valid_corr) > 0 else np.nan
+
+            self._logger.debug(
+                f"[Correlation] {symbol}: rolling_beta={len(rolling_beta)}, "
+                f"valid_beta={len(valid_beta)}, rolling_corr={len(rolling_corr)}, "
+                f"valid_corr={len(valid_corr)}, latest_beta={latest_beta:.4f}, "
+                f"latest_corr={latest_corr:.4f}"
+            )
 
             results[symbol] = CorrelationResult(
                 symbol=symbol,

@@ -260,6 +260,8 @@ class AsyncDataLoaderService:
         4. Bulk insert all fetched data to cache
         5. Return merged result
 
+        IMPORTANT: Only returns CLOSED candles. No NaN values allowed.
+
         :param symbols: List of symbols to load
         :param start_time: Start time
         :param end_time: End time
@@ -276,6 +278,7 @@ class AsyncDataLoaderService:
         )
 
         result: Dict[str, pd.DataFrame] = {}
+        timeframe_minutes = get_timeframe_minutes(timeframe)
 
         # Step 1: Load cached data for requested symbols in one query
         if self._ohlcv_repo:
@@ -291,61 +294,37 @@ class AsyncDataLoaderService:
                 self._logger.warning(f"Error bulk loading from cache: {e}")
                 result = {}
 
-        # Step 2: Identify symbols that need fetching
-        # A symbol needs fetching if:
-        # - Not in cache at all
-        # - Has incomplete date range (missing start or end)
-        # - Latest data is older than one candle interval
+        # Step 2: Build expected time index (all closed candles in range)
+        expected_index = self._build_expected_index(start_time, end_time, timeframe_minutes)
+        self._logger.debug(f"Expected {len(expected_index)} candles in range")
+
+        # Step 3: Identify symbols that need fetching
         symbols_to_fetch: List[str] = []
-        symbols_need_old_data: Dict[str, datetime] = {}  # symbol -> cached_start
-        expected_start = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        # Dynamic freshness threshold based on timeframe
-        # Data is stale if older than 1 candle interval
-        now = datetime.now(timezone.utc)
-        timeframe_minutes = get_timeframe_minutes(timeframe)
-        freshness_buffer = timedelta(minutes=timeframe_minutes)
-        freshness_threshold = now - freshness_buffer
-
-        self._logger.debug(
-            f"Expected range: {expected_start.date()} to {now.isoformat()}, "
-            f"freshness threshold: {freshness_threshold.isoformat()} "
-            f"(timeframe={timeframe})"
-        )
+        symbols_missing_ranges: Dict[str, List[tuple]] = {}  # symbol -> [(start, end), ...]
 
         for symbol in symbols:
-            if symbol not in result:
+            if symbol not in result or result[symbol].empty:
+                # No data at all - fetch full range
                 symbols_to_fetch.append(symbol)
+                symbols_missing_ranges[symbol] = [(start_time, end_time)]
             else:
                 df = result[symbol]
-                if df.empty:
+                # Find missing candles by comparing with expected index
+                missing_ranges = self._find_missing_ranges(
+                    pd.DatetimeIndex(df.index), expected_index, timeframe_minutes
+                )
+                if missing_ranges:
                     symbols_to_fetch.append(symbol)
-                else:
-                    # Check if data covers the expected range
-                    data_start = df.index.min()
-                    data_end = df.index.max()
-
-                    # Check if missing OLD data (start doesn't cover expected range)
-                    if data_start > expected_start + timedelta(days=1):
-                        self._logger.debug(
-                            f"{symbol}: missing old data (cached_start={data_start.isoformat()}, "
-                            f"expected={expected_start.isoformat()})"
-                        )
-                        symbols_need_old_data[symbol] = data_start
-                        symbols_to_fetch.append(symbol)
-                    # Check if data is stale (older than 1 candle interval)
-                    elif data_end < freshness_threshold:
-                        self._logger.debug(
-                            f"{symbol}: data stale (last={data_end.isoformat()}, "
-                            f"threshold={freshness_threshold.isoformat()})"
-                        )
-                        symbols_to_fetch.append(symbol)
+                    symbols_missing_ranges[symbol] = missing_ranges
+                    self._logger.debug(
+                        f"{symbol}: found {len(missing_ranges)} missing range(s)"
+                    )
 
         self._logger.info(
-            f"Need to fetch {len(symbols_to_fetch)} symbols from exchange"
+            f"Need to fetch data for {len(symbols_to_fetch)} symbols"
         )
 
-        # Step 3: Fetch missing data from exchange in batches with rate limiting
+        # Step 4: Fetch missing data from exchange in batches
         if symbols_to_fetch:
             fetched_data: Dict[str, pd.DataFrame] = {}
 
@@ -357,62 +336,58 @@ class AsyncDataLoaderService:
                     f"({len(batch)} symbols)"
                 )
 
-                # Create fetch tasks for batch
+                # Create fetch tasks for batch - fetch all missing ranges
                 tasks = []
-                for symbol in batch:
-                    # Determine fetch range based on what's missing
-                    if symbol in symbols_need_old_data:
-                        # Missing old data - fetch from start_time to cached_start
-                        fetch_start = start_time
-                        fetch_end = symbols_need_old_data[symbol]
-                        self._logger.debug(
-                            f"{symbol}: fetching old data {fetch_start.date()} to {fetch_end.date()}"
-                        )
-                    elif symbol in result and not result[symbol].empty:
-                        # Only missing new data - fetch from last cached point
-                        fetch_start = result[symbol].index.max()
-                        fetch_end = end_time
-                    else:
-                        # No cached data - fetch full range
-                        fetch_start = start_time
-                        fetch_end = end_time
+                task_info = []  # Track which symbol each task belongs to
 
-                    tasks.append(
-                        self._exchange.fetch_ohlcv(
-                            symbol=symbol,
-                            interval=timeframe,
-                            start_date=fetch_start,
-                            end_date=fetch_end,
+                for symbol in batch:
+                    for range_start, range_end in symbols_missing_ranges.get(symbol, []):
+                        tasks.append(
+                            self._exchange.fetch_ohlcv(
+                                symbol=symbol,
+                                interval=timeframe,
+                                start_date=range_start,
+                                end_date=range_end,
+                            )
                         )
-                    )
+                        task_info.append(symbol)
 
                 # Execute batch concurrently
                 batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                for symbol, fetch_result in zip(batch, batch_results):
+                # Process results
+                symbol_dfs: Dict[str, List[pd.DataFrame]] = {}
+                for symbol, fetch_result in zip(task_info, batch_results):
                     if isinstance(fetch_result, Exception):
                         self._logger.warning(
                             f"Error fetching {symbol}: {repr(fetch_result)}"
                         )
-                    elif (
-                        isinstance(fetch_result, pd.DataFrame)
-                        and not fetch_result.empty
-                    ):
-                        fetched_data[symbol] = fetch_result
-                        # Merge with existing cached data if present
-                        if symbol in result and not result[symbol].empty:
-                            merged = pd.concat([result[symbol], fetch_result])
-                            merged = merged[~merged.index.duplicated(keep="last")]
-                            merged = merged.sort_index()
-                            result[symbol] = merged
-                        else:
-                            result[symbol] = fetch_result
+                    elif isinstance(fetch_result, pd.DataFrame) and not fetch_result.empty:
+                        if symbol not in symbol_dfs:
+                            symbol_dfs[symbol] = []
+                        symbol_dfs[symbol].append(fetch_result)
 
-                # Rate limiting: wait between batches to avoid API ban
+                # Merge fetched data for each symbol
+                for symbol, dfs in symbol_dfs.items():
+                    merged_fetch = pd.concat(dfs).sort_index()
+                    merged_fetch = merged_fetch[~merged_fetch.index.duplicated(keep="last")]
+
+                    fetched_data[symbol] = merged_fetch
+
+                    # Merge with existing cached data
+                    if symbol in result and not result[symbol].empty:
+                        merged = pd.concat([result[symbol], merged_fetch])
+                        merged = merged[~merged.index.duplicated(keep="last")]
+                        merged = merged.sort_index()
+                        result[symbol] = merged
+                    else:
+                        result[symbol] = merged_fetch
+
+                # Rate limiting
                 if i + batch_size < len(symbols_to_fetch):
                     await asyncio.sleep(1.0)
 
-            # Step 4: Bulk insert fetched data to cache
+            # Step 5: Bulk insert fetched data to cache
             if self._ohlcv_repo and fetched_data:
                 try:
                     self._ohlcv_repo.save_data_bulk(timeframe, fetched_data)
@@ -420,14 +395,26 @@ class AsyncDataLoaderService:
                 except Exception as e:
                     self._logger.warning(f"Error bulk saving to cache: {e}")
 
-        # Filter to only requested symbols
+        # Step 6: Final validation - ensure no NaN and proper alignment
         final_result = {}
         for symbol in symbols:
-            if symbol in result:
-                if not result[symbol].empty:
-                    final_result[symbol] = result[symbol]
+            if symbol in result and not result[symbol].empty:
+                df = result[symbol]
+
+                # Filter to expected range
+                df = df[(df.index >= start_time) & (df.index <= end_time)]
+
+                # Drop any rows with NaN values
+                df = df.dropna()
+
+                if not df.empty:
+                    final_result[symbol] = df
+                    self._logger.debug(
+                        f"{symbol}: {len(df)} candles "
+                        f"({df.index.min().isoformat()} to {df.index.max().isoformat()})"
+                    )
                 else:
-                    self._logger.warning(f"{symbol}: DataFrame is empty after loading")
+                    self._logger.warning(f"{symbol}: DataFrame empty after validation")
             else:
                 self._logger.warning(f"{symbol}: Not found in result after loading")
 
@@ -436,3 +423,77 @@ class AsyncDataLoaderService:
         )
 
         return final_result
+
+    def _build_expected_index(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        timeframe_minutes: int,
+    ) -> pd.DatetimeIndex:
+        """
+        Build expected time index for the given range.
+
+        Only includes timestamps for CLOSED candles (candle close time <= now).
+        """
+        now = datetime.now(timezone.utc)
+
+        # Round start_time down to nearest candle boundary
+        start_ts = start_time.replace(second=0, microsecond=0)
+        start_minute = (start_ts.minute // timeframe_minutes) * timeframe_minutes
+        start_ts = start_ts.replace(minute=start_minute)
+
+        # Generate all expected timestamps
+        timestamps = []
+        current = start_ts
+
+        while current <= end_time:
+            # Only include if candle is closed (current + timeframe <= now)
+            candle_close_time = current + timedelta(minutes=timeframe_minutes)
+            if candle_close_time <= now:
+                timestamps.append(current)
+            current += timedelta(minutes=timeframe_minutes)
+
+        return pd.DatetimeIndex(timestamps, tz=timezone.utc)
+
+    def _find_missing_ranges(
+        self,
+        actual_index: pd.DatetimeIndex,
+        expected_index: pd.DatetimeIndex,
+        timeframe_minutes: int,
+    ) -> List[tuple]:
+        """
+        Find missing time ranges by comparing actual vs expected index.
+
+        Returns list of (start, end) tuples for missing ranges.
+        """
+        if len(expected_index) == 0:
+            return []
+
+        # Find missing timestamps
+        missing = expected_index.difference(actual_index)
+
+        if len(missing) == 0:
+            return []
+
+        # Group consecutive missing timestamps into ranges
+        ranges = []
+        missing_sorted = missing.sort_values()
+
+        range_start = missing_sorted[0]
+        prev_ts = range_start
+
+        for ts in missing_sorted[1:]:
+            # Check if consecutive (within 1 candle interval)
+            expected_next = prev_ts + timedelta(minutes=timeframe_minutes)
+            if ts <= expected_next + timedelta(minutes=1):  # Small tolerance
+                prev_ts = ts
+            else:
+                # Gap found - close current range and start new one
+                ranges.append((range_start, prev_ts + timedelta(minutes=timeframe_minutes)))
+                range_start = ts
+                prev_ts = ts
+
+        # Close last range
+        ranges.append((range_start, prev_ts + timedelta(minutes=timeframe_minutes)))
+
+        return ranges

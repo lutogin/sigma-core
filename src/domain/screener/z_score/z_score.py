@@ -31,7 +31,7 @@ class ZScoreResult:
     current_z_score: float
     current_beta: float
     current_correlation: float
-    dynamic_entry_threshold: float  # Adaptive threshold based on 97th percentile
+    dynamic_entry_threshold: float  # Adaptive threshold based on 95th percentile
 
 
 class ZScoreService:
@@ -167,6 +167,16 @@ class ZScoreService:
             mean_spread = spread_series.rolling(window=self._lookback_window).mean()
             std_spread = spread_series.rolling(window=self._lookback_window).std()
             z_score_series = (spread_series - mean_spread) / std_spread
+
+            # Debug: log data quality for z-score calculation
+            spread_valid = len(spread_series.dropna())
+            z_score_valid = len(z_score_series.dropna())
+            self._logger.debug(
+                f"[ZScore] {symbol}: coin_log={len(coin_log_price)}, "
+                f"primary_log={len(primary_log_price)}, beta_aligned={len(rolling_beta_aligned)}, "
+                f"spread_valid={spread_valid}, z_score_valid={z_score_valid}, "
+                f"lookback_window={self._lookback_window}"
+            )
 
             # Calculate dynamic entry threshold based on historical z-score distribution
             dynamic_threshold = self._calculate_dynamic_threshold(symbol, z_score_series)

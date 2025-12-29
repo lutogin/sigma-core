@@ -660,19 +660,26 @@ class ScreenerService:
         Load OHLCV data for all symbols using optimized bulk loading.
 
         Uses single DB query to load cached data, then batch fetches
-        missing data from exchange. Reindexes all DataFrames to a common
-        time index and forward fills missing values.
+        missing data from exchange.
+
+        IMPORTANT: Only uses intersection of timestamps across all symbols.
+        No forward fill - only real closed candles are used.
         """
         end_time = datetime.now(timezone.utc)
-        # Load 2x lookback window + buffer for:
-        # 1) rolling_beta calculation (needs lookback_window candles)
-        # 2) z_score rolling calculation (needs another lookback_window candles)
-        data_window_days = self._lookback_window_days * 2 + 1
+        # Calculate required data window:
+        # - DYNAMIC_THRESHOLD_WINDOW_BARS (440) for dynamic threshold calculation
+        # - LOOKBACK_WINDOW for rolling z-score calculation
+        # - LOOKBACK_WINDOW for rolling beta calculation
+        # Total: 440 + 288 + 288 = 1016 candles minimum for 15m timeframe
+        #
+        # For 15m: 1016 candles = ~10.6 days
+        # We use 3x lookback + buffer to be safe
+        data_window_days = self._lookback_window_days * 3 + 2
         start_time = end_time - timedelta(days=data_window_days)
 
         self._logger.info(
             f"Loading {data_window_days} days of data "
-            f"(2x lookback={self._lookback_window_days} + buffer)"
+            f"(3x lookback={self._lookback_window_days} + buffer for rolling calculations)"
         )
 
         # Use optimized bulk loading
@@ -695,19 +702,38 @@ class ScreenerService:
             )
             return raw_data
 
-        common_index = raw_data[self._primary_pair].index
+        primary_index = raw_data[self._primary_pair].index
 
-        # Reindex all DataFrames to common time index with forward fill
+        # Find common timestamps across ALL symbols (intersection)
+        # This ensures we only use timestamps where ALL symbols have data
+        common_index = primary_index
+        for symbol, df in raw_data.items():
+            if symbol != self._primary_pair:
+                common_index = common_index.intersection(df.index)
+
+        self._logger.info(
+            f"Common timestamps: {len(common_index)} "
+            f"(primary has {len(primary_index)})"
+        )
+
+        if len(common_index) == 0:
+            self._logger.error("No common timestamps found across symbols!")
+            return {}
+
+        # Align all DataFrames to common index (no ffill - only real data)
         aligned_data: Dict[str, pd.DataFrame] = {}
         for symbol, df in raw_data.items():
-            if symbol == self._primary_pair:
-                aligned_data[symbol] = df
-            else:
-                # Reindex to common time index and forward fill missing values
-                aligned_df = df.reindex(common_index, method="ffill")
-                # Drop rows that couldn't be filled (NaN at the beginning)
+            aligned_df = df.loc[common_index].copy()
+
+            # Verify no NaN values
+            nan_count = aligned_df.isna().sum().sum()
+            if nan_count > 0:
+                self._logger.warning(
+                    f"{symbol}: {nan_count} NaN values found after alignment, dropping"
+                )
                 aligned_df = aligned_df.dropna()
-                aligned_data[symbol] = aligned_df
+
+            aligned_data[symbol] = aligned_df
 
         # Log per-symbol candle count for debugging
         candle_counts = {s: len(df) for s, df in aligned_data.items()}
