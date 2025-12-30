@@ -267,6 +267,7 @@ class Container:
                 primary_pair=self._settings.PRIMARY_PAIR,
                 entry_observer_service=self.entry_observer_service,
                 funding_filter_service=self.funding_filter_service,
+                hurst_watch_tolerance=self._settings.HURST_WATCH_TOLERANCE,
             )
         return self._instances["orchestrator_service"]
 

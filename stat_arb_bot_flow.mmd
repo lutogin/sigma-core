@@ -40,9 +40,9 @@ flowchart TB
                 direction TB
                 NOTE_FILTERS["Only for |Z| >= dynamic_threshold"]
 
-                subgraph HURST_SCREEN["1️⃣ HURST FILTER"]
+                subgraph HURST_SCREEN["1️⃣ HURST FILTER (Entry)"]
                     CALC_HURST_S["Calculate Hurst Exponent<br/>HURST_LOOKBACK_CANDLES=300"]
-                    HURST_CHECK_S{"H < 0.45?"}
+                    HURST_CHECK_S{"H < 0.45?<br/>(strict for entry)"}
                     HURST_PASS["✅ Mean-Reverting"]
                     HURST_FAIL["❌ Trending → Remove"]
                 end
@@ -63,15 +63,13 @@ flowchart TB
             end
         end
 
-        subgraph EXIT_CHECK["🚪 EXIT CONDITIONS CHECK"]
+        subgraph EXIT_CHECK["🚪 STRUCTURAL EXIT CHECK (Orchestrator)"]
             direction TB
             GET_POSITIONS["Get Active Positions"]
 
-            subgraph EXIT_CONDITIONS["Exit Conditions (checked in order)"]
-                EXIT_TP["✅ TAKE_PROFIT<br/>|Z| <= Z_TP_THRESHOLD (0.25)"]
-                EXIT_SL["🛑 STOP_LOSS<br/>|Z| >= Z_SL_THRESHOLD (4.0)"]
+            subgraph EXIT_CONDITIONS["Structural Exit Conditions"]
                 EXIT_CORR["📉 CORRELATION_DROP<br/>corr < MIN_CORRELATION (0.8)"]
-                EXIT_HURST["📈 HURST_TRENDING<br/>H >= HURST_THRESHOLD (0.45)"]
+                EXIT_HURST["📈 HURST_TRENDING<br/>H >= 0.45 + 0.07 = 0.52<br/>(threshold + tolerance)"]
                 EXIT_TIMEOUT["⏰ TIMEOUT<br/>bars >= MAX_POSITION_BARS (96)"]
             end
 
@@ -80,7 +78,7 @@ flowchart TB
 
         subgraph WATCH_CHECK["👁️ WATCHED PAIRS CHECK"]
             CHECK_WATCHES["Check EntryObserver watches"]
-            REMOVE_WATCH["Remove if failed:<br/>CORRELATION_DROP or HURST_TRENDING<br/>or FALSE_ALARM"]
+            REMOVE_WATCH["Remove if failed:<br/>CORRELATION_DROP<br/>or HURST >= 0.52 (w/ tolerance)<br/>or FALSE_ALARM"]
         end
 
         subgraph ENTRY_CHECK["🚀 ENTRY CONDITIONS CHECK (Orchestrator)"]
@@ -162,17 +160,17 @@ flowchart TB
 
         subgraph EXIT_WS["📡 WebSocket Monitoring"]
             EXIT_SUBSCRIBE["Subscribe to Book Ticker"]
-            EXIT_CALC_Z["Calculate Live Z-Score"]
+            EXIT_CALC_Z["Calculate Live Z-Score<br/>using FROZEN entry params<br/>(beta, spread_mean, spread_std)"]
         end
 
         subgraph DYNAMIC_TP["🎚️ DYNAMIC TP (Time-Based)"]
             TIME_COEF["Calculate time_based_coefficient:<br/>0-4h: coef=0.1 (wait for ~90%)<br/>4-12h: coef=0.3 (~70%)<br/>12-24h: coef=0.5 (~50%)<br/>24h+: TIME_STOP"]
-            DYN_TP_CALC["dynamic_TP = peak_Z × time_coef<br/>min: Z_TP_THRESHOLD"]
+            DYN_TP_CALC["dynamic_TP = peak_Z × time_coef<br/>min: Z_TP_THRESHOLD (0.25)"]
         end
 
-        subgraph EXIT_LIVE_CHECK["Exit Conditions"]
-            LIVE_TP{"|Z| <= dynamic_TP?"}
-            LIVE_SL{"|Z| >= Z_SL_THRESHOLD?"}
+        subgraph EXIT_LIVE_CHECK["TP/SL Conditions (real-time)"]
+            LIVE_TP{"✅ TAKE_PROFIT<br/>|Z| <= dynamic_TP?"}
+            LIVE_SL{"🛑 STOP_LOSS<br/>|Z| >= Z_SL_THRESHOLD (4.0)?"}
         end
 
         EMIT_EXIT_SIGNAL["Emit ExitSignalEvent"]
@@ -230,9 +228,7 @@ flowchart TB
     ADF_CHECK -->|No| ADF_FAIL
 
     ADF_PASS --> GET_POSITIONS
-    GET_POSITIONS --> EXIT_TP
-    EXIT_TP --> EXIT_SL
-    EXIT_SL --> EXIT_CORR
+    GET_POSITIONS --> EXIT_CORR
     EXIT_CORR --> EXIT_HURST
     EXIT_HURST --> EXIT_TIMEOUT
     EXIT_TIMEOUT --> EMIT_EXIT
