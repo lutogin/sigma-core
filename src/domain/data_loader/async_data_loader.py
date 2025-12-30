@@ -409,9 +409,12 @@ class AsyncDataLoaderService:
 
                 if not df.empty:
                     final_result[symbol] = df
+                    # Calculate close time of last candle (open_time + timeframe)
+                    last_candle_close = df.index.max() + timedelta(minutes=timeframe_minutes)
                     self._logger.debug(
                         f"{symbol}: {len(df)} candles "
-                        f"({df.index.min().isoformat()} to {df.index.max().isoformat()})"
+                        f"(open: {df.index.min().isoformat()} to {df.index.max().isoformat()}, "
+                        f"last_close: {last_candle_close.isoformat()})"
                     )
                 else:
                     self._logger.warning(f"{symbol}: DataFrame empty after validation")
