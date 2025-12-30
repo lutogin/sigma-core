@@ -4,11 +4,14 @@ Orchestrator Service.
 Coordinates the scanning pipeline and emits trading events.
 Responsible for:
 - Running the screener scan cycle
-- Checking exit conditions for open positions (TP, SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
+- Checking STRUCTURAL exit conditions (CORRELATION_DROP, HURST_TRENDING)
 - Checking entry conditions for new positions
 - Removing watched pairs from EntryObserver if they fail filters
 - Emitting PendingEntrySignalEvent for trailing entry (EntryObserver will handle)
-- Emitting ExitSignalEvent for position closes
+- Emitting ExitSignalEvent for structural failures
+
+NOTE: Z-Score TP/SL exits are handled ONLY by ExitObserver using frozen
+entry parameters to avoid the "moving goalposts" problem.
 """
 
 from typing import TYPE_CHECKING, Dict, List, Optional
@@ -43,12 +46,18 @@ class OrchestratorService:
     and emits trading events. It acts as the main entry point for the
     scanning process.
 
-    Exit conditions (checked first):
-    - TAKE_PROFIT: |Z| <= tp_threshold (mean reversion complete)
-    - STOP_LOSS: |Z| >= sl_threshold (extreme divergence)
-    - CORRELATION_DROP: correlation < min_correlation
+    STRUCTURAL Exit conditions (checked by Orchestrator):
+    - CORRELATION_DROP: correlation < min_correlation (spread relationship broken)
     - HURST_TRENDING: Hurst >= hurst_threshold (spread became trending)
     - TIMEOUT: position held longer than max_position_bars (handled by TradingService)
+
+    Z-Score Exit conditions (checked ONLY by ExitObserver):
+    - TAKE_PROFIT: |Z| <= tp_threshold (mean reversion complete)
+    - STOP_LOSS: |Z| >= sl_threshold (extreme divergence)
+
+    NOTE: Z-Score TP/SL are handled by ExitObserver using "frozen" entry parameters
+    (beta, std) to avoid the "moving goalposts" problem where recalculated values
+    would give different Z-scores than the actual position's risk profile.
 
     Entry conditions (checked after exits):
     - |Z| >= entry_threshold AND |Z| < sl_threshold
@@ -147,8 +156,6 @@ class OrchestratorService:
             z_score_results=scan_result.all_z_score_results,
             filtered_results=scan_result.filtered_results,
             raw_data=scan_result.raw_data,
-            z_tp=z_tp,
-            z_sl=z_sl,
             min_correlation=min_correlation,
         )
 
@@ -277,19 +284,21 @@ class OrchestratorService:
         z_score_results: Dict[str, ZScoreResult],
         filtered_results: Dict[str, ZScoreResult],
         raw_data: Dict[str, pd.DataFrame],
-        z_tp: float,
-        z_sl: float,
         min_correlation: float,
     ) -> List[ExitSignalEvent]:
         """
-        Check exit conditions for all open positions.
+        Check STRUCTURAL exit conditions for all open positions.
 
-        Exit conditions:
-        1. TAKE_PROFIT: |Z| <= z_tp (mean reversion complete)
-        2. STOP_LOSS: |Z| >= z_sl (extreme divergence)
-        3. CORRELATION_DROP: symbol not in filtered_results (correlation < threshold)
-        4. HURST_TRENDING: Hurst >= hurst_threshold (spread became trending)
-        5. TIMEOUT: handled by TradingService/PlannerService
+        Orchestrator checks only structural failures that invalidate the spread:
+        1. CORRELATION_DROP: correlation < min_correlation (spread relationship broken)
+        2. HURST_TRENDING: Hurst >= threshold (spread became trending, not mean-reverting)
+
+        Z-Score based exits (TP/SL) are handled ONLY by ExitObserver using
+        the "frozen" parameters from position entry. This prevents the
+        "moving goalposts" problem where recalculated beta/std would give
+        different Z-scores than the actual position's risk profile.
+
+        TIMEOUT is handled by TradingService/PlannerService.
 
         Returns:
             List of emitted ExitSignalEvent.
@@ -305,53 +314,32 @@ class OrchestratorService:
 
         for position in open_positions:
             exit_reason = None
-            current_z = 0.0
-            current_corr = 0.0
-
             coin_symbol = position.coin_symbol
 
             # Get current Z-score result for this symbol
             z_result = z_score_results.get(coin_symbol)
 
             if z_result is None:
-                # No Z-score data - this shouldn't happen, but handle it
                 self._logger.error(f"No Z-score data for open position {coin_symbol}")
                 continue
 
             current_z = z_result.current_z_score
             current_corr = z_result.current_correlation
 
-            # Check if symbol dropped from correlation filter
+            # 1. STRUCTURAL CHECK: Correlation drop
+            # If correlation dropped below threshold, the spread relationship is broken
             if coin_symbol not in filtered_results:
                 exit_reason = ExitReason.CORRELATION_DROP
                 self._logger.info(
                     f"🔻 CORRELATION_DROP detected | {coin_symbol} | "
                     f"corr={current_corr:.3f} < {min_correlation}"
                 )
-            else:
-                # Check Z-score conditions based on position side
-                if position.side.value == "long":
-                    # Long spread: entered at Z <= -entry, expect Z to rise toward 0
-                    # TP when Z >= -tp (close to 0)
-                    # SL when Z <= -sl (diverged more)
-                    if current_z >= -z_tp:
-                        exit_reason = ExitReason.TAKE_PROFIT
-                    elif current_z <= -z_sl:
-                        exit_reason = ExitReason.STOP_LOSS
-                else:
-                    # Short spread: entered at Z >= entry, expect Z to fall toward 0
-                    # TP when Z <= tp (close to 0)
-                    # SL when Z >= sl (diverged more)
-                    if current_z <= z_tp:
-                        exit_reason = ExitReason.TAKE_PROFIT
-                    elif current_z >= z_sl:
-                        exit_reason = ExitReason.STOP_LOSS
 
-            # Check Hurst if no other exit reason yet
+            # 2. STRUCTURAL CHECK: Hurst trending
+            # If spread became trending, mean-reversion assumption is invalid
             if exit_reason is None and self._hurst_filter is not None:
                 coin_df = raw_data.get(coin_symbol)
                 if coin_df is not None and primary_df is not None:
-                    # Calculate current Hurst for the spread
                     hurst = self._hurst_filter.calculate_for_spread(
                         coin_log_prices=coin_df["close"].apply(np.log),
                         primary_log_prices=primary_df["close"].apply(np.log),
@@ -365,8 +353,11 @@ class OrchestratorService:
                             f"H={hurst:.3f} >= {self._hurst_filter.threshold}"
                         )
 
+            # NOTE: Z-Score TP/SL checks are NOT done here!
+            # ExitObserver handles TP/SL using frozen entry parameters (beta, std)
+            # to avoid "moving goalposts" problem with recalculated values.
+
             if exit_reason:
-                # Get current prices
                 coin_df = raw_data.get(coin_symbol)
                 coin_price = coin_df["close"].iloc[-1] if coin_df is not None else 0.0
 

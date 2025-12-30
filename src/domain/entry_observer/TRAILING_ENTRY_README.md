@@ -5,12 +5,15 @@
 Реализована система **Trailing Entry** для стат-арбитражного бота, которая решает проблему "прострелов" при входе в сделки.
 
 ### Проблема
+
 Бот входил сразу при Z-Score >= threshold, но часто попадал в "прострел" (2.1→2.5→3.0→3.5) и шел в минус.
 
 ### Решение
+
 **Trailing Entry** - входить только при развороте от максимума Z-Score.
 
 Пример:
+
 - Свеча 1: Z = 2.2 (Пробили порог, готовимся)
 - Свеча 2: Z = 2.8 (Ждем)
 - Свеча 3: Z = 2.6 (ВХОД! Пик пройден, пошел возврат на 0.2 пунктов)
@@ -58,7 +61,7 @@ def process_trailing_entry(ticker, live_z_score):
 ```bash
 # Trailing Entry параметры
 TRAILING_ENTRY_PULLBACK=0.2              # Откат от максимума Z-score для входа (0.2-0.5)
-TRAILING_ENTRY_TIMEOUT_MINUTES=60        # Таймаут мониторинга (3 свечи по 15 мин)
+TRAILING_ENTRY_TIMEOUT_MINUTES=210        # Таймаут мониторинга (3 часа по 15 мин свечам)
 ```
 
 ### Settings.py
@@ -76,6 +79,7 @@ TRAILING_ENTRY_TIMEOUT_MINUTES: int = 60   # Таймаут мониторинг
 #### 1. События (src/infra/event_emitter/events.py)
 
 **PendingEntrySignalEvent** - сигнал для начала мониторинга:
+
 ```python
 @dataclass
 class PendingEntrySignalEvent(BaseEvent):
@@ -90,6 +94,7 @@ class PendingEntrySignalEvent(BaseEvent):
 ```
 
 **WatchCancelledEvent** - отмена мониторинга:
+
 ```python
 class WatchCancelReason(str, Enum):
     TIMEOUT = "timeout"                    # Таймаут 60 мин
@@ -280,9 +285,11 @@ async def _load_from_redis(self) -> Dict[str, WatchCandidate]:
 ### Сценарии
 
 1. **Успешный вход после разворота**:
+
    - Z = 2.2 → 2.8 → 3.1 → 2.8 (pullback 0.3) → ENTRY
 
 2. **Ложная тревога**:
+
    - Z = 2.2 → 2.5 → 2.0 (< entry_threshold) → CANCEL
 
 3. **Таймаут**:
