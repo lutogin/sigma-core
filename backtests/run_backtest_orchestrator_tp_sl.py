@@ -7,13 +7,6 @@ Usage:
     python run_backtest.py --start 2024-09-01  # end defaults to now
 
 Loads historical data and simulates the stat-arb strategy on each 15m candle.
-
-Architecture mirrors the live bot:
-- Orchestrator: Checks STRUCTURAL exits (CORRELATION_DROP, HURST_TRENDING, TIMEOUT)
-- ExitObserver simulation: Checks TP/SL on 1m candles using "frozen" entry parameters
-
-This avoids the "moving goalposts" problem where recalculated beta/std would
-give different Z-scores than the actual position's risk profile.
 """
 
 import argparse
@@ -338,10 +331,6 @@ class Position:
     For stat-arb we trade the SPREAD:
     - Long spread: Long COIN, Short β×PRIMARY (expect Z to rise toward 0)
     - Short spread: Short COIN, Long β×PRIMARY (expect Z to fall toward 0)
-
-    IMPORTANT: Contains "frozen" parameters (beta, spread_mean, spread_std)
-    captured at entry time. These are used by ExitObserver simulation to
-    calculate Z-score for TP/SL, avoiding the "moving goalposts" problem.
     """
 
     symbol: str
@@ -365,13 +354,6 @@ class Position:
     # Otherwise equals abs(entry_z_score)
     peak_z_score: float = 0.0
 
-    # "Frozen" parameters for ExitObserver Z-score calculation
-    # These are captured at entry and used for TP/SL checks
-    spread_mean: float = 0.0
-    spread_std: float = 1.0
-    z_tp_threshold: float = 0.25
-    z_sl_threshold: float = 4.0
-
 
 @dataclass
 class BacktestWatchCandidate:
@@ -389,6 +371,7 @@ class BacktestWatchCandidate:
     start_bar_idx: int
     start_time: datetime
     beta: float
+    spread_mean: float
     spread_mean: float
     spread_std: float
     z_entry_threshold: float
@@ -540,10 +523,6 @@ class StatArbBacktest:
         self.watch_candidates: Dict[str, BacktestWatchCandidate] = {}
         self.trailing_cancelled_count: int = 0  # Stats: cancelled watches
 
-        # Cache for 1m candles (loaded once at start for ExitObserver simulation)
-        # symbol -> DataFrame with 1m OHLCV
-        self._minute_data_cache: Dict[str, pd.DataFrame] = {}
-
     async def run(
         self,
         start_date: datetime,
@@ -632,14 +611,6 @@ class StatArbBacktest:
         self.equity_history = [(all_timestamps[start_idx], self.balance)]
         self.symbol_cooldowns = {}  # Reset cooldowns
 
-        # Load 1m data for ExitObserver simulation (TP/SL checks)
-        print("\n📊 Loading 1-minute data for ExitObserver simulation...")
-        await self._load_minute_data_for_backtest(
-            symbols=all_symbols,
-            start_time=start_date,
-            end_time=end_date,
-        )
-
         # Main backtest loop
         for i in range(start_idx, len(all_timestamps)):
             current_time = all_timestamps[i]
@@ -707,46 +678,6 @@ class StatArbBacktest:
 
         return aligned
 
-    async def _load_minute_data_for_backtest(
-        self,
-        symbols: List[str],
-        start_time: datetime,
-        end_time: datetime,
-    ) -> None:
-        """
-        Load 1-minute OHLCV data for all symbols for ExitObserver simulation.
-
-        This data is used to check TP/SL conditions with higher precision
-        than 15m candles, using "frozen" entry parameters.
-        """
-        self._minute_data_cache = {}
-
-        for i, symbol in enumerate(symbols):
-            try:
-                print(f"  Loading 1m data for {symbol} ({i+1}/{len(symbols)})...")
-
-                df = await self.data_loader.load_ohlcv_with_cache(
-                    symbol=symbol,
-                    num_bars=0,  # Will be calculated from time range
-                    timeframe="1m",
-                    start_time=start_time,
-                    end_time=end_time,
-                )
-
-                if df is not None and not df.empty:
-                    self._minute_data_cache[symbol] = df
-                    print(f"    ✓ {len(df)} candles loaded")
-                else:
-                    print(f"    ⚠️ No 1m data for {symbol}")
-
-                # Rate limiting
-                await asyncio.sleep(0.1)
-
-            except Exception as e:
-                print(f"    ❌ Failed to load 1m data for {symbol}: {e}")
-
-        print(f"  Loaded 1m data for {len(self._minute_data_cache)}/{len(symbols)} symbols\n")
-
     async def _process_candle(
         self,
         current_time: datetime,
@@ -773,13 +704,8 @@ class StatArbBacktest:
         # Filter by correlation
         filtered_results = self._filter_by_correlation(z_score_results)
 
-        # Step 1: Simulate ExitObserver - check TP/SL on 1m candles FIRST
-        # This mirrors live bot where ExitObserver can exit at any moment
-        # before the 15m Orchestrator scan
-        await self._simulate_exit_observer(current_time, current_bar_idx, window_data)
-
-        # Step 2: Check structural exits for remaining open positions
-        await self._check_structural_exits(
+        # Step 1: Check exits for open positions
+        await self._check_exits(
             current_time,
             current_bar_idx,
             window_data,
@@ -788,7 +714,7 @@ class StatArbBacktest:
             correlation_results,
         )
 
-        # Step 3: Check market volatility (skip entries if market is unsafe)
+        # Step 2: Check market volatility (skip entries if market is unsafe)
         if self.primary_pair in window_data:
             volatility_result = self.volatility_filter_service.check(
                 window_data[self.primary_pair]
@@ -797,7 +723,7 @@ class StatArbBacktest:
                 # Market is unsafe - don't open new positions
                 return
 
-        # Step 4: Check entries for new positions
+        # Step 3: Check entries for new positions
         await self._check_entries(
             current_time,
             current_bar_idx,
@@ -1111,7 +1037,7 @@ class StatArbBacktest:
         else:
             return 1.0  # Time stop - will be handled by TIMEOUT check
 
-    async def _check_structural_exits(
+    async def _check_exits(
         self,
         current_time: datetime,
         current_bar_idx: int,
@@ -1120,43 +1046,63 @@ class StatArbBacktest:
         all_results: Dict[str, ZScoreResult],
         correlation_results: Dict,
     ) -> None:
-        """
-        Check STRUCTURAL exit conditions for open positions.
-
-        Like the live Orchestrator, this only checks:
-        1. TIMEOUT: Position held too long
-        2. CORRELATION_DROP: Correlation dropped below threshold
-        3. HURST_TRENDING: Spread became trending
-
-        Z-Score TP/SL are checked separately via _simulate_exit_observer()
-        using "frozen" entry parameters to avoid "moving goalposts" problem.
-        """
+        """Check if any open positions should be closed."""
         positions_to_close = []
 
         for symbol, position in self.positions.items():
             exit_reason = None
             z_result = all_results.get(symbol)
 
-            # 1. Check position timeout first
+            # Check position timeout first
             bars_held = current_bar_idx - position.entry_bar_idx
             if bars_held >= self.config.max_position_bars:
                 exit_reason = "TIMEOUT"
-
-            # 2. Check for missing data
             elif z_result is None:
+                # No z-score data - shouldn't happen, but close if it does
                 exit_reason = "NO_DATA"
-
-            # 3. STRUCTURAL: Correlation dropped below threshold
             elif symbol not in filtered_results:
+                # Correlation dropped below threshold
                 exit_reason = "CORRELATION_DROP"
+            else:
+                z = z_result.current_z_score
 
-            # 4. STRUCTURAL: Hurst became trending
+                if self.config.use_dynamic_tp:
+                    # Dynamic TP based on time in position
+                    # TP threshold = max(peak_z * time_coef, z_tp_threshold)
+                    # 0-4h:   coef=0.1 -> wait for ~90% reversion
+                    # 4-12h:  coef=0.3 -> accept ~70% reversion
+                    # 12-24h: coef=0.5 -> accept ~50% reversion
+                    # 24h+:   handled by TIMEOUT
+                    # Minimum TP level is always z_tp_threshold
+                    time_coef = self._get_time_based_tp_coefficient(bars_held)
+                    reference_z = (
+                        position.peak_z_score
+                        if position.peak_z_score > 0
+                        else abs(position.entry_z_score)
+                    )
+                    dynamic_tp = max(
+                        reference_z * time_coef, self.config.z_tp_threshold
+                    )
+                else:
+                    dynamic_tp = self.config.z_tp_threshold
+
+                if position.side == "long":
+                    # Long: entered at Z <= -entry, exit at Z >= -tp or Z <= -sl
+                    if z >= -dynamic_tp:  # Z moving toward 0 from negative
+                        exit_reason = "TP"
+                    elif z <= -self.config.z_sl_threshold:
+                        exit_reason = "SL"
+                else:
+                    # Short: entered at Z >= entry, exit at Z <= tp or Z >= sl
+                    if z <= dynamic_tp:  # Z moving toward 0 from positive
+                        exit_reason = "TP"
+                    elif z >= self.config.z_sl_threshold:
+                        exit_reason = "SL"
+
+            # Check Hurst if no other exit reason yet (spread became trending)
             if exit_reason is None and self.hurst_filter_service is not None:
                 if self._check_hurst_exit(symbol, window_data, correlation_results):
                     exit_reason = "HURST_TRENDING"
-
-            # NOTE: Z-Score TP/SL are NOT checked here!
-            # They are handled by _simulate_exit_observer() using frozen parameters
 
             if exit_reason:
                 positions_to_close.append((symbol, exit_reason))
@@ -1164,188 +1110,6 @@ class StatArbBacktest:
         # Close positions
         for symbol, exit_reason in positions_to_close:
             await self._close_position(symbol, current_time, window_data, exit_reason)
-
-    async def _simulate_exit_observer(
-        self,
-        current_time: datetime,
-        current_bar_idx: int,
-        window_data: Dict[str, pd.DataFrame],
-    ) -> None:
-        """
-        Simulate ExitObserver: check TP/SL on 1m candles using frozen parameters.
-
-        Like the live ExitObserverService, this:
-        1. Uses "frozen" beta, spread_mean, spread_std from position entry
-        2. Calculates Z-score on 1m candles within the current 15m bar
-        3. Exits immediately when TP or SL is hit
-
-        Uses pre-loaded 1m data from _minute_data_cache for efficiency.
-        """
-        if not self.positions:
-            return
-
-        if not self._minute_data_cache:
-            print(f"  ⚠️ No 1m data cache available for ExitObserver simulation")
-            return  # No 1m data available
-
-        positions_to_close = []
-
-        for symbol, position in list(self.positions.items()):
-            # Get 1m data from cache
-            coin_1m_full = self._minute_data_cache.get(symbol)
-            primary_1m_full = self._minute_data_cache.get(self.primary_pair)
-
-            if coin_1m_full is None or coin_1m_full.empty:
-                print(f"  ⚠️ No 1m data for {symbol}")
-                continue
-            if primary_1m_full is None or primary_1m_full.empty:
-                print(f"  ⚠️ No 1m data for {self.primary_pair}")
-                continue
-
-            # Filter to current 15m bar only
-            bar_start = current_time - timedelta(minutes=self._timeframe_minutes)
-            bar_end = current_time
-
-            # Slice 1m data for this bar
-            coin_1m = coin_1m_full[
-                (coin_1m_full.index > bar_start) & (coin_1m_full.index <= bar_end)
-            ]
-            primary_1m = primary_1m_full[
-                (primary_1m_full.index > bar_start) & (primary_1m_full.index <= bar_end)
-            ]
-
-            if coin_1m.empty or primary_1m.empty:
-                # Debug: check why no data
-                if coin_1m.empty:
-                    print(f"  ⚠️ No 1m candles for {symbol} in bar {bar_start} - {bar_end}")
-                    print(f"      coin_1m_full range: {coin_1m_full.index.min()} - {coin_1m_full.index.max()}")
-                    print(f"      coin_1m_full timezone: {coin_1m_full.index.tz}")
-                    print(f"      bar_start timezone: {bar_start.tzinfo}")
-                continue
-
-            # Debug: enable for first few checks
-            debug_this = len(self.trades) < 3
-
-            # Check TP/SL on 1m candles using frozen parameters
-            exit_result = self._check_exit_on_minute_data(
-                position=position,
-                coin_1m=coin_1m,
-                primary_1m=primary_1m,
-                current_bar_idx=current_bar_idx,
-                debug=debug_this,
-            )
-
-            if exit_result is not None:
-                exit_time, exit_reason, exit_z, coin_price, primary_price = exit_result
-                positions_to_close.append(
-                    (symbol, exit_time, exit_reason, exit_z, coin_price, primary_price)
-                )
-
-        # Close positions that hit TP/SL
-        for symbol, exit_time, exit_reason, exit_z, coin_price, primary_price in positions_to_close:
-            await self._close_position_at_time(
-                symbol=symbol,
-                exit_time=exit_time,
-                coin_price=coin_price,
-                primary_price=primary_price,
-                exit_reason=exit_reason,
-                exit_z=exit_z,
-            )
-
-    def _check_exit_on_minute_data(
-        self,
-        position: Position,
-        coin_1m: pd.DataFrame,
-        primary_1m: pd.DataFrame,
-        current_bar_idx: int,
-        debug: bool = False,
-    ) -> Optional[Tuple[datetime, str, float, float, float]]:
-        """
-        Check TP/SL conditions on 1m candles using frozen entry parameters.
-
-        Uses the same logic as live ExitObserverService:
-        - Z-score calculated with frozen beta, spread_mean, spread_std
-        - Dynamic TP based on time in position
-        - Returns first exit point found
-
-        Args:
-            position: Position with frozen parameters
-            coin_1m: 1-minute OHLCV for coin
-            primary_1m: 1-minute OHLCV for primary (ETH)
-            current_bar_idx: Current 15m bar index for time-based TP
-            debug: Print debug info
-
-        Returns:
-            Tuple of (exit_time, exit_reason, exit_z, coin_price, primary_price) or None
-        """
-        # Align indices
-        common_index = coin_1m.index.intersection(primary_1m.index)
-        if common_index.empty:
-            return None
-
-        # Calculate bars held for dynamic TP
-        bars_held = current_bar_idx - position.entry_bar_idx
-
-        # Calculate dynamic TP threshold
-        if self.config.use_dynamic_tp:
-            time_coef = self._get_time_based_tp_coefficient(bars_held)
-            reference_z = (
-                position.peak_z_score
-                if position.peak_z_score > 0
-                else abs(position.entry_z_score)
-            )
-            dynamic_tp = max(reference_z * time_coef, position.z_tp_threshold)
-        else:
-            dynamic_tp = position.z_tp_threshold
-
-        z_sl = position.z_sl_threshold
-
-        # Debug: print first check for this position
-        if debug:
-            print(f"    DEBUG {position.symbol}: bars_held={bars_held}, entry_z={position.entry_z_score:.2f}")
-            print(f"    DEBUG frozen: beta={position.entry_beta:.4f}, mean={position.spread_mean:.6f}, std={position.spread_std:.6f}")
-            print(f"    DEBUG thresholds: TP={dynamic_tp:.2f}, SL={z_sl:.2f}")
-            print(f"    DEBUG checking {len(common_index)} 1m candles")
-
-        z_scores_seen = []
-
-        for ts in common_index:
-            coin_price = coin_1m.loc[ts, "close"]
-            primary_price = primary_1m.loc[ts, "close"]
-
-            # Calculate Z-score using FROZEN parameters from entry
-            live_z = self._calculate_live_z(
-                coin_price,
-                primary_price,
-                position.entry_beta,
-                position.spread_mean,
-                position.spread_std,
-            )
-
-            z_scores_seen.append(live_z)
-
-            abs_z = abs(live_z)
-            exit_reason = None
-
-            # TP/SL logic matches live ExitObserver:
-            # - TP: |Z| <= threshold (spread reverted to mean)
-            # - SL: |Z| >= threshold (spread diverged further)
-            if abs_z <= dynamic_tp:
-                exit_reason = "TP"
-            elif abs_z >= z_sl:
-                exit_reason = "SL"
-
-            if exit_reason:
-                return (ts, exit_reason, live_z, coin_price, primary_price)
-
-        # Debug: print Z-score range if no exit found
-        if debug and z_scores_seen:
-            min_z = min(z_scores_seen)
-            max_z = max(z_scores_seen)
-            min_abs_z = min(abs(z) for z in z_scores_seen)
-            print(f"    DEBUG Z-scores: min={min_z:.2f}, max={max_z:.2f}, min_abs={min_abs_z:.2f}")
-
-        return None
 
     async def _check_entries(
         self,
@@ -1838,7 +1602,7 @@ class StatArbBacktest:
         coin_size = position_size
         primary_size = position_size * beta
 
-        # Create position with peak_z from trailing watch and frozen parameters
+        # Create position with peak_z from trailing watch
         position = Position(
             symbol=symbol,
             side=watch.side,
@@ -1852,11 +1616,6 @@ class StatArbBacktest:
             primary_entry_price=primary_price,
             primary_size=primary_size,
             peak_z_score=watch.max_z,  # Store peak Z from trailing
-            # Frozen parameters from watch for ExitObserver
-            spread_mean=watch.spread_mean,
-            spread_std=watch.spread_std,
-            z_tp_threshold=self.config.z_tp_threshold,
-            z_sl_threshold=watch.z_sl_threshold,
         )
 
         self.positions[symbol] = position
@@ -1885,12 +1644,10 @@ class StatArbBacktest:
 
         This fixes "intraday blindness" - in production, if we enter at 12:05
         and price hits TP at 12:10, we exit immediately. But in backtest,
-        _check_structural_exits only runs at 12:15 (next 15m bar), missing the intraday TP.
+        _check_exits only runs at 12:15 (next 15m bar), missing the intraday TP.
 
         This method simulates the remaining 1m candles after entry_time
         and closes the position if TP/SL is hit.
-
-        Uses FROZEN parameters from position (not watch) for consistency.
         """
         position = self.positions.get(symbol)
         if position is None:
@@ -1916,35 +1673,39 @@ class StatArbBacktest:
                 if position.peak_z_score > 0
                 else abs(position.entry_z_score)
             )
-            dynamic_tp = max(reference_z * time_coef, position.z_tp_threshold)
+            dynamic_tp = max(reference_z * time_coef, self.config.z_tp_threshold)
         else:
-            dynamic_tp = position.z_tp_threshold
+            dynamic_tp = self.config.z_tp_threshold
 
-        z_sl = position.z_sl_threshold
+        z_sl = self.config.z_sl_threshold
 
         for ts in common_index:
             coin_price = remaining_coin.loc[ts, "close"]
             primary_price = remaining_primary.loc[ts, "close"]
 
-            # Calculate live Z-score using FROZEN parameters from position
+            # Calculate live Z-score
             live_z = self._calculate_live_z(
                 coin_price,
                 primary_price,
-                position.entry_beta,
-                position.spread_mean,
-                position.spread_std,
+                watch.beta,
+                watch.spread_mean,
+                watch.spread_std,
             )
 
-            abs_z = abs(live_z)
             exit_reason = None
 
-            # TP/SL logic matches live ExitObserver:
-            # - TP: |Z| <= threshold (spread reverted to mean)
-            # - SL: |Z| >= threshold (spread diverged further)
-            if abs_z <= dynamic_tp:
-                exit_reason = "TP"
-            elif abs_z >= z_sl:
-                exit_reason = "SL"
+            if position.side == "long":
+                # Long: entered at Z <= -entry, exit at Z >= -tp or Z <= -sl
+                if live_z >= -dynamic_tp:
+                    exit_reason = "TP"
+                elif live_z <= -z_sl:
+                    exit_reason = "SL"
+            else:
+                # Short: entered at Z >= entry, exit at Z <= tp or Z >= sl
+                if live_z <= dynamic_tp:
+                    exit_reason = "TP"
+                elif live_z >= z_sl:
+                    exit_reason = "SL"
 
             if exit_reason:
                 # Close position at this 1m timestamp
@@ -2076,9 +1837,6 @@ class StatArbBacktest:
         - Short spread (Z >= entry): Short COIN, Long PRIMARY (hedged by beta)
 
         The PnL comes from the spread reverting to mean, not from directional price moves.
-
-        IMPORTANT: Captures "frozen" parameters (beta, spread_mean, spread_std)
-        for ExitObserver simulation to use for TP/SL calculations.
         """
         # Calculate position size
         position_size = self.balance * self.config.position_size_pct
@@ -2097,11 +1855,7 @@ class StatArbBacktest:
         coin_size = position_size
         primary_size = position_size * beta
 
-        # Calculate spread_mean and spread_std for frozen parameters
-        spread_mean = self._get_spread_mean(z_result)
-        spread_std = self._get_spread_std(z_result)
-
-        # Create position with frozen parameters for ExitObserver
+        # Create position (peak_z = entry_z for immediate entry)
         position = Position(
             symbol=symbol,
             side=side,
@@ -2115,11 +1869,6 @@ class StatArbBacktest:
             primary_entry_price=primary_price,
             primary_size=primary_size,
             peak_z_score=abs(z_result.current_z_score),  # No trailing, peak = entry
-            # Frozen parameters for ExitObserver
-            spread_mean=spread_mean,
-            spread_std=spread_std,
-            z_tp_threshold=self.config.z_tp_threshold,
-            z_sl_threshold=self.config.z_sl_threshold,
         )
 
         self.positions[symbol] = position
@@ -2131,38 +1880,6 @@ class StatArbBacktest:
             f"Hedge: ${primary_size:.2f} @ {primary_price:.4f}"
         )
         self._print_portfolio_state()
-
-    def _get_spread_mean(self, result: ZScoreResult) -> float:
-        """Get the latest spread mean from Z-score result."""
-        if result.spread_series is None or result.spread_series.empty:
-            return 0.0
-
-        timeframe_minutes = get_timeframe_minutes(self.timeframe)
-        candles_per_day = 24 * 60 // timeframe_minutes
-        lookback = candles_per_day * self.lookback_window_days
-
-        rolling_mean = result.spread_series.rolling(window=lookback).mean()
-        valid_values = rolling_mean.dropna()
-
-        if len(valid_values) > 0:
-            return float(valid_values.iloc[-1])
-        return 0.0
-
-    def _get_spread_std(self, result: ZScoreResult) -> float:
-        """Get the latest spread std from Z-score result."""
-        if result.spread_series is None or result.spread_series.empty:
-            return 1.0
-
-        timeframe_minutes = get_timeframe_minutes(self.timeframe)
-        candles_per_day = 24 * 60 // timeframe_minutes
-        lookback = candles_per_day * self.lookback_window_days
-
-        rolling_std = result.spread_series.rolling(window=lookback).std()
-        valid_values = rolling_std.dropna()
-
-        if len(valid_values) > 0:
-            return float(valid_values.iloc[-1])
-        return 1.0
 
     async def _close_position(
         self,
