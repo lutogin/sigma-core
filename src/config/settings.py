@@ -66,7 +66,8 @@ class Settings:
     MAX_BETA: float = 2.0
     MIN_BETA: float = 0.5
     # Hurst settings
-    HURST_THRESHOLD: float = 0.45  # Максимальный Hurst для спрэдов
+    HURST_THRESHOLD: float = 0.45  # Максимальный Hurst для спрэдов (вход)
+    HURST_WATCH_TOLERANCE: float = 0  # Tolerance для watches и открытых позиций (0.45 + 0.01 = 0.46)
     HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
     # ADF settings
     ADF_PVALUE_THRESHOLD: float = 0.08  # Максимальный p-value для стационарности
@@ -168,6 +169,7 @@ class Settings:
         self.MAX_BETA = float(os.getenv("MAX_BETA", "2"))
         # Hurst
         self.HURST_THRESHOLD = float(os.getenv("HURST_THRESHOLD", "0.45"))
+        self.HURST_WATCH_TOLERANCE = float(os.getenv("HURST_WATCH_TOLERANCE", "0"))
         self.HURST_LOOKBACK_CANDLES = int(os.getenv("HURST_LOOKBACK_CANDLES", "300"))
         # ADF
         self.ADF_PVALUE_THRESHOLD = float(os.getenv("ADF_PVALUE_THRESHOLD", "0.05"))
@@ -294,6 +296,7 @@ class Settings:
         logger.info("-" * 40)
         logger.info("🔬 Hurst Settings:")
         logger.info(f"  HURST_THRESHOLD: {self.HURST_THRESHOLD}")
+        logger.info(f"  HURST_WATCH_TOLERANCE: {self.HURST_WATCH_TOLERANCE} (hold threshold: {self.HURST_THRESHOLD + self.HURST_WATCH_TOLERANCE})")
         logger.info(f"  HURST_LOOKBACK_CANDLES: {self.HURST_LOOKBACK_CANDLES}")
         logger.info("-" * 40)
         logger.info("📊 ADF Settings:")

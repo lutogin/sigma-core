@@ -314,6 +314,10 @@ class BacktestConfig:
 
     use_dynamic_tp: bool = True  # Use dynamic take profit
 
+    # Hurst tolerance for open positions (hysteresis)
+    # Entry requires H < threshold (0.45), holding allows H < threshold + tolerance (0.50)
+    hurst_watch_tolerance: float = 0
+
     # Trailing Entry settings (simulation of live EntryObserverService)
     use_trailing_entry: bool = False  # Enable trailing entry simulation
     trailing_pullback: float = 0.05  # Z-score pullback for reversal confirmation
@@ -953,10 +957,11 @@ class StatArbBacktest:
         correlation_results: Dict,
     ) -> bool:
         """
-        Check if an open position's spread became trending (Hurst >= threshold).
+        Check if an open position's spread became trending (Hurst >= threshold + tolerance).
 
-        This is checked for open positions to detect when spread regime changes
-        from mean-reverting to trending, which invalidates the stat-arb assumption.
+        Uses relaxed threshold (threshold + tolerance) for open positions to prevent
+        closing good trades due to micro-fluctuations in Hurst calculation.
+        Entry requires H < 0.45 (strict), holding allows H < 0.52 (with tolerance).
 
         Args:
             symbol: Symbol to check
@@ -995,13 +1000,17 @@ class StatArbBacktest:
         if hurst is None:
             return False
 
-        is_trending = not self.hurst_filter_service.is_mean_reverting(hurst)
+        # Use relaxed threshold for open positions (threshold + tolerance)
+        max_allowed_hurst = self.hurst_filter_service.threshold + self.config.hurst_watch_tolerance
+        is_trending = hurst >= max_allowed_hurst
 
         if is_trending:
             print(
-                f"📈 {symbol} Hurst={hurst:.3f} >= {self.hurst_filter_service.threshold} "
+                f"📈 {symbol} Hurst={hurst:.3f} >= {max_allowed_hurst:.2f} "
                 f"(spread became trending, exit position)"
             )
+
+        return is_trending
 
         return is_trending
 

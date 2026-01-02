@@ -75,6 +75,7 @@ class OrchestratorService:
         primary_pair: str,
         entry_observer_service: Optional["EntryObserverService"] = None,
         funding_filter_service: Optional[FundingFilterService] = None,
+        hurst_watch_tolerance: float = 0.02,
     ):
         """
         Initialize Orchestrator Service.
@@ -88,6 +89,9 @@ class OrchestratorService:
             primary_pair: Primary trading pair (e.g., "ETH/USDT:USDT").
             entry_observer_service: Optional service for trailing entry monitoring.
             funding_filter_service: Optional service for funding rate filtering.
+            hurst_watch_tolerance: Tolerance for Hurst threshold on watches/positions.
+                Entry requires H < threshold, but holding allows H < threshold + tolerance.
+                Default 0.02 means entry at 0.45, hold until 0.47.
         """
         self._logger = logger
         self._screener_service = screener_service
@@ -97,6 +101,7 @@ class OrchestratorService:
         self._primary_pair = primary_pair
         self._entry_observer = entry_observer_service
         self._funding_filter = funding_filter_service
+        self._hurst_watch_tolerance = hurst_watch_tolerance
 
     async def run(self) -> None:
         """
@@ -252,6 +257,8 @@ class OrchestratorService:
                     remove_reason = WatchCancelReason.FALSE_ALARM
 
                 # Check Hurst filter (only if no other reason yet)
+                # Use TOLERANCE for watches - we allow Hurst to rise slightly
+                # Entry requires H < threshold, but holding allows H < threshold + tolerance
                 elif self._hurst_filter is not None:
                     coin_df = raw_data.get(coin_symbol)
 
@@ -262,10 +269,14 @@ class OrchestratorService:
                             beta=z_result.current_beta,
                         )
 
-                        if not self._hurst_filter.is_mean_reverting(hurst):
+                        # Use relaxed threshold for watches (threshold + tolerance)
+                        max_allowed_hurst = self._hurst_filter.threshold + self._hurst_watch_tolerance
+
+                        if hurst is not None and hurst >= max_allowed_hurst:
                             self._logger.info(
-                                f"📈 Watch {coin_symbol} failed HURST filter | "
-                                f"H={hurst:.3f} >= {self._hurst_filter.threshold}"
+                                f"📈 Watch {coin_symbol} failed HURST filter (w/ tolerance) | "
+                                f"H={hurst:.3f} >= {max_allowed_hurst:.3f} "
+                                f"(entry_thresh={self._hurst_filter.threshold})"
                             )
                             remove_reason = WatchCancelReason.HURST_TRENDING
 
@@ -337,6 +348,8 @@ class OrchestratorService:
 
             # 2. STRUCTURAL CHECK: Hurst trending
             # If spread became trending, mean-reversion assumption is invalid
+            # Use TOLERANCE for open positions - we allow Hurst to rise slightly
+            # Entry requires H < threshold, but holding allows H < threshold + tolerance
             if exit_reason is None and self._hurst_filter is not None:
                 coin_df = raw_data.get(coin_symbol)
                 if coin_df is not None and primary_df is not None:
@@ -346,11 +359,15 @@ class OrchestratorService:
                         beta=z_result.current_beta,
                     )
 
-                    if not self._hurst_filter.is_mean_reverting(hurst):
+                    # Use relaxed threshold for positions (threshold + tolerance)
+                    max_allowed_hurst = self._hurst_filter.threshold + self._hurst_watch_tolerance
+
+                    if hurst is not None and hurst >= max_allowed_hurst:
                         exit_reason = ExitReason.HURST_TRENDING
                         self._logger.info(
                             f"📈 HURST_TRENDING detected | {coin_symbol} | "
-                            f"H={hurst:.3f} >= {self._hurst_filter.threshold}"
+                            f"H={hurst:.3f} >= {max_allowed_hurst:.3f} "
+                            f"(entry_thresh={self._hurst_filter.threshold})"
                         )
 
             # NOTE: Z-Score TP/SL checks are NOT done here!
