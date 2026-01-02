@@ -151,6 +151,19 @@ class Container:
         return self._instances["position_state_repository"]
 
     @property
+    def trading_pair_repository(self):
+        """Get Trading Pair repository (MongoDB storage for trading pairs config)."""
+        self._check_initialized()
+        if "trading_pair_repository" not in self._instances:
+            from src.domain.trading_pairs import TradingPairRepository
+
+            self._instances["trading_pair_repository"] = TradingPairRepository(
+                mongo_db=self.mongo_db,
+                logger=self.logger,
+            )
+        return self._instances["trading_pair_repository"]
+
+    @property
     def position_state_service(self):
         """Get Position State service for managing positions and cooldowns."""
         self._check_initialized()
@@ -248,6 +261,7 @@ class Container:
                 primary_pair=self._settings.PRIMARY_PAIR,
                 consistent_pairs=self._settings.CONSISTENT_PAIRS,
                 timeframe=self._settings.TIMEFRAME,
+                trading_pair_repository=self.trading_pair_repository,
             )
         return self._instances["screener_service"]
 

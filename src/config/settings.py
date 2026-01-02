@@ -67,7 +67,9 @@ class Settings:
     MIN_BETA: float = 0.5
     # Hurst settings
     HURST_THRESHOLD: float = 0.45  # Максимальный Hurst для спрэдов (вход)
-    HURST_WATCH_TOLERANCE: float = 0  # Tolerance для watches и открытых позиций (0.45 + 0.01 = 0.46)
+    HURST_WATCH_TOLERANCE: float = (
+        0  # Tolerance для watches и открытых позиций (0.45 + 0.01 = 0.46)
+    )
     HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
     # ADF settings
     ADF_PVALUE_THRESHOLD: float = 0.08  # Максимальный p-value для стационарности
@@ -96,7 +98,9 @@ class Settings:
     # Trailing Entry settings (Smart Entry)
     TRAILING_ENTRY_PULLBACK: float = 0.2  # Z-score pullback for reversal confirmation
     TRAILING_ENTRY_TIMEOUT_MINUTES: int = 45  # Max watch duration before cancellation
-    FALSE_ALARM_HYSTERESIS: float = 0.2  # Cancel watch only if Z drops this much below threshold
+    FALSE_ALARM_HYSTERESIS: float = (
+        0.2  # Cancel watch only if Z drops this much below threshold
+    )
 
     # Position sizing
     POSITION_SIZE_USDT: float = 100.0  # USDT размер позиции на COIN ногу
@@ -134,11 +138,11 @@ class Settings:
     LOKI_HOST: str = ""  # e.g., https://logs-prod-012.grafana.net
     LOKI_USER: str = ""  # Grafana Cloud user ID
     LOKI_TOKEN: str = ""  # Grafana Cloud API token
-    LOKI_APP_NAME: str = "sigma-bot"
+    LOKI_APP_NAME: str = "sigma-core"
 
     # MongoDB Settings
     MONGODB_URI: str = "mongodb://localhost:27017"
-    MONGODB_DATABASE: str = "alpha_bot"
+    MONGODB_DATABASE: str = "sigma-core"
 
     # PostgreSQL/TimescaleDB Settings
     TIMESCALE_DB_URL: str = "postgresql://localhost:5432/alpha_bot"
@@ -176,7 +180,9 @@ class Settings:
         self.ADF_LOOKBACK_CANDLES = int(os.getenv("ADF_LOOKBACK_CANDLES", "300"))
         # Half-Life
         self.HALFLIFE_MAX_BARS = float(os.getenv("HALFLIFE_MAX_BARS", "48.0"))
-        self.HALFLIFE_LOOKBACK_CANDLES = int(os.getenv("HALFLIFE_LOOKBACK_CANDLES", "300"))
+        self.HALFLIFE_LOOKBACK_CANDLES = int(
+            os.getenv("HALFLIFE_LOOKBACK_CANDLES", "300")
+        )
         # Volatility filter
         self.VOLATILITY_WINDOW = int(os.getenv("VOLATILITY_WINDOW", "24"))
         self.VOLATILITY_THRESHOLD = float(os.getenv("VOLATILITY_THRESHOLD", "0.008"))
@@ -205,9 +211,7 @@ class Settings:
         self.TRAILING_ENTRY_TIMEOUT_MINUTES = int(
             os.getenv("TRAILING_ENTRY_TIMEOUT_MINUTES", "60")
         )
-        self.FALSE_ALARM_HYSTERESIS = float(
-            os.getenv("FALSE_ALARM_HYSTERESIS", "0.3")
-        )
+        self.FALSE_ALARM_HYSTERESIS = float(os.getenv("FALSE_ALARM_HYSTERESIS", "0.3"))
 
         # Position sizing
         self.POSITION_SIZE_USDT = float(os.getenv("POSITION_SIZE_USDT", "100.0"))
@@ -248,7 +252,7 @@ class Settings:
 
         # MongoDB
         self.MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        self.MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "alpha-simple-bot")
+        self.MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "sigma-core")
 
         # PostgreSQL/TimescaleDB
         self.TIMESCALE_DB_URL = os.getenv(
@@ -296,7 +300,9 @@ class Settings:
         logger.info("-" * 40)
         logger.info("🔬 Hurst Settings:")
         logger.info(f"  HURST_THRESHOLD: {self.HURST_THRESHOLD}")
-        logger.info(f"  HURST_WATCH_TOLERANCE: {self.HURST_WATCH_TOLERANCE} (hold threshold: {self.HURST_THRESHOLD + self.HURST_WATCH_TOLERANCE})")
+        logger.info(
+            f"  HURST_WATCH_TOLERANCE: {self.HURST_WATCH_TOLERANCE} (hold threshold: {self.HURST_THRESHOLD + self.HURST_WATCH_TOLERANCE})"
+        )
         logger.info(f"  HURST_LOOKBACK_CANDLES: {self.HURST_LOOKBACK_CANDLES}")
         logger.info("-" * 40)
         logger.info("📊 ADF Settings:")

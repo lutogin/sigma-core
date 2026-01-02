@@ -30,6 +30,7 @@ from src.domain.screener.volatility_filter import (
 )
 from src.domain.screener.z_score import ZScoreResult, ZScoreService
 from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
+from src.domain.trading_pairs import TradingPairRepository
 
 
 @dataclass
@@ -106,9 +107,16 @@ class ScreenerService:
         primary_pair: str,
         consistent_pairs: list[str],
         timeframe: str,
+        trading_pair_repository: Optional[TradingPairRepository] = None,
     ):
         """
         Initialize Screener Service.
+
+        Args:
+            trading_pair_repository: Optional repository for dynamic pair loading.
+                                     If provided, pairs are loaded from MongoDB.
+                                     Falls back to consistent_pairs if not provided
+                                     or if repository returns empty list.
         """
         self._logger = logger
         self._exchange = exchange_client
@@ -126,6 +134,7 @@ class ScreenerService:
         self._primary_pair = primary_pair
         self._consistent_pairs = consistent_pairs
         self._timeframe = timeframe
+        self._trading_pair_repository = trading_pair_repository
 
         # Internal state for last scan results
         self._last_scan_state = LastScanState()
@@ -168,6 +177,41 @@ class ScreenerService:
     def z_score_service(self) -> ZScoreService:
         """Get Z-score service for threshold access."""
         return self._z_score_service
+
+    # =========================================================================
+    # Trading Pairs
+    # =========================================================================
+
+    def _get_trading_pairs(self) -> list[str]:
+        """
+        Get list of trading pairs to scan.
+
+        Priority:
+        1. Trading pair repository (MongoDB) if available and has data
+        2. Fallback to consistent_pairs from config
+
+        Returns:
+            List of trading pair symbols.
+        """
+        if self._trading_pair_repository is not None:
+            try:
+                pairs = self._trading_pair_repository.get_active_symbols()
+                if pairs:
+                    self._logger.debug(
+                        f"Loaded {len(pairs)} trading pairs from MongoDB"
+                    )
+                    return pairs
+                else:
+                    self._logger.warning(
+                        "No active trading pairs in MongoDB, using config fallback"
+                    )
+            except Exception as e:
+                self._logger.error(
+                    f"Failed to load trading pairs from MongoDB: {e}, using config fallback"
+                )
+
+        # Fallback to config
+        return self._consistent_pairs
 
     # =========================================================================
     # Main Scan Method
@@ -677,14 +721,17 @@ class ScreenerService:
         data_window_days = self._lookback_window_days * 3 + 2
         start_time = end_time - timedelta(days=data_window_days)
 
+        # Get trading pairs (from MongoDB if available, otherwise from config)
+        trading_pairs = self._get_trading_pairs()
+
         self._logger.info(
-            f"Loading {data_window_days} days of data "
+            f"Loading {data_window_days} days of data for {len(trading_pairs)} pairs "
             f"(3x lookback={self._lookback_window_days} + buffer for rolling calculations)"
         )
 
         # Use optimized bulk loading
         raw_data = await self._data_loader.load_ohlcv_bulk(
-            symbols=[self._primary_pair] + self._consistent_pairs,
+            symbols=[self._primary_pair] + trading_pairs,
             start_time=start_time,
             end_time=end_time,
             batch_size=10,
