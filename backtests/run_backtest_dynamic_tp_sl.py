@@ -284,7 +284,7 @@ class BacktestConfig:
 
     # Capital
     initial_balance: float = 40_000.0  # Starting capital in USDT
-    position_size_pct: float = 0.33  # 3% of capital per spread
+    position_size_pct: float = 0.35  # 3% of capital per spread
     max_spreads: int = 3  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
@@ -323,15 +323,17 @@ class BacktestConfig:
 
     # Hurst tolerance for open positions (hysteresis)
     # Entry requires H < threshold (0.45), holding allows H < threshold + tolerance(0.02) (0.47)
-    hurst_watch_tolerance: float = 0
+    hurst_watch_tolerance: float = 0.005
 
     # Trailing Entry settings (simulation of live EntryObserverService)
-    use_trailing_entry: bool = False  # Enable trailing entry simulation
-    trailing_pullback: float = 0.05  # Z-score pullback for reversal confirmation
+    use_trailing_entry: bool = True  # Enable trailing entry simulation
+    trailing_pullback: float = 0.02  # Z-score pullback for reversal confirmation
     trailing_timeout_minutes: int = 240  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
-        0.2  # Cancel watch only if Z drops this much below threshold
+        0.35  # Cancel watch only if Z drops this much below threshold
     )
+
+    use_adf_filter: bool = True  # Enable ADF filter
 
 
 @dataclass
@@ -575,7 +577,9 @@ class StatArbBacktest:
         warmup_days = self.lookback_window_days * 3 + 2
         data_start = start_date - timedelta(days=warmup_days)
 
-        print(f"Loading data from {data_start.date()} (warmup: {warmup_days} days for rolling calculations)")
+        print(
+            f"Loading data from {data_start.date()} (warmup: {warmup_days} days for rolling calculations)"
+        )
 
         # Load all data upfront
         all_symbols = [self.primary_pair] + self.consistent_pairs
@@ -636,13 +640,14 @@ class StatArbBacktest:
         self.equity_history = [(all_timestamps[start_idx], self.balance)]
         self.symbol_cooldowns = {}  # Reset cooldowns
 
-        # Load 1m data for ExitObserver simulation (TP/SL checks)
-        print("\n📊 Loading 1-minute data for ExitObserver simulation...")
-        await self._load_minute_data_for_backtest(
-            symbols=all_symbols,
-            start_time=start_date,
-            end_time=end_date,
-        )
+        if self.config.use_trailing_entry:
+            # Load 1m data for ExitObserver simulation (TP/SL checks)
+            print("\n📊 Loading 1-minute data for ExitObserver simulation...")
+            await self._load_minute_data_for_backtest(
+                symbols=all_symbols,
+                start_time=start_date,
+                end_time=end_date,
+            )
 
         # Main backtest loop
         for i in range(start_idx, len(all_timestamps)):
@@ -749,7 +754,9 @@ class StatArbBacktest:
             except Exception as e:
                 print(f"    ❌ Failed to load 1m data for {symbol}: {e}")
 
-        print(f"  Loaded 1m data for {len(self._minute_data_cache)}/{len(symbols)} symbols\n")
+        print(
+            f"  Loaded 1m data for {len(self._minute_data_cache)}/{len(symbols)} symbols\n"
+        )
 
     async def _process_candle(
         self,
@@ -909,7 +916,11 @@ class StatArbBacktest:
         Returns:
             True if spread is stationary (p-value < threshold), False otherwise
         """
-        if not self.adf_filter_service or not self.adf_filter_service.is_available:
+        if (
+            not self.adf_filter_service
+            or not self.adf_filter_service.is_available
+            or not self.config.use_adf_filter
+        ):
             return True  # No filter = allow all
 
         primary_df = window_data.get(self.primary_pair)
@@ -976,7 +987,9 @@ class StatArbBacktest:
             return True  # No filter = allow all
 
         if not self.halflife_filter_service.is_available:
-            print(f"  ℹ️  {symbol} Half-Life filter unavailable (statsmodels not installed)")
+            print(
+                f"  ℹ️  {symbol} Half-Life filter unavailable (statsmodels not installed)"
+            )
             return True  # No filter = allow all
 
         primary_df = window_data.get(self.primary_pair)
@@ -1075,7 +1088,9 @@ class StatArbBacktest:
             return False
 
         # Use relaxed threshold for open positions (threshold + tolerance)
-        max_allowed_hurst = self.hurst_filter_service.threshold + self.config.hurst_watch_tolerance
+        max_allowed_hurst = (
+            self.hurst_filter_service.threshold + self.config.hurst_watch_tolerance
+        )
         is_trending = hurst >= max_allowed_hurst
 
         if is_trending:
@@ -1226,8 +1241,12 @@ class StatArbBacktest:
             if coin_1m.empty or primary_1m.empty:
                 # Debug: check why no data
                 if coin_1m.empty:
-                    print(f"  ⚠️ No 1m candles for {symbol} in bar {bar_start} - {bar_end}")
-                    print(f"      coin_1m_full range: {coin_1m_full.index.min()} - {coin_1m_full.index.max()}")
+                    print(
+                        f"  ⚠️ No 1m candles for {symbol} in bar {bar_start} - {bar_end}"
+                    )
+                    print(
+                        f"      coin_1m_full range: {coin_1m_full.index.min()} - {coin_1m_full.index.max()}"
+                    )
                     print(f"      coin_1m_full timezone: {coin_1m_full.index.tz}")
                     print(f"      bar_start timezone: {bar_start.tzinfo}")
                 continue
@@ -1251,7 +1270,14 @@ class StatArbBacktest:
                 )
 
         # Close positions that hit TP/SL
-        for symbol, exit_time, exit_reason, exit_z, coin_price, primary_price in positions_to_close:
+        for (
+            symbol,
+            exit_time,
+            exit_reason,
+            exit_z,
+            coin_price,
+            primary_price,
+        ) in positions_to_close:
             await self._close_position_at_time(
                 symbol=symbol,
                 exit_time=exit_time,
@@ -1310,11 +1336,15 @@ class StatArbBacktest:
         z_sl = position.z_sl_threshold
 
         # Debug: print first check for this position
-        if debug:
-            print(f"    DEBUG {position.symbol}: bars_held={bars_held}, entry_z={position.entry_z_score:.2f}")
-            print(f"    DEBUG frozen: beta={position.entry_beta:.4f}, mean={position.spread_mean:.6f}, std={position.spread_std:.6f}")
-            print(f"    DEBUG thresholds: TP={dynamic_tp:.2f}, SL={z_sl:.2f}")
-            print(f"    DEBUG checking {len(common_index)} 1m candles")
+        # if debug:
+        #     print(
+        #         f"    DEBUG {position.symbol}: bars_held={bars_held}, entry_z={position.entry_z_score:.2f}"
+        #     )
+        #     print(
+        #         f"    DEBUG frozen: beta={position.entry_beta:.4f}, mean={position.spread_mean:.6f}, std={position.spread_std:.6f}"
+        #     )
+        #     print(f"    DEBUG thresholds: TP={dynamic_tp:.2f}, SL={z_sl:.2f}")
+        #     print(f"    DEBUG checking {len(common_index)} 1m candles")
 
         z_scores_seen = []
 
@@ -1352,7 +1382,9 @@ class StatArbBacktest:
             min_z = min(z_scores_seen)
             max_z = max(z_scores_seen)
             min_abs_z = min(abs(z) for z in z_scores_seen)
-            print(f"    DEBUG Z-scores: min={min_z:.2f}, max={max_z:.2f}, min_abs={min_abs_z:.2f}")
+            print(
+                f"    DEBUG Z-scores: min={min_z:.2f}, max={max_z:.2f}, min_abs={min_abs_z:.2f}"
+            )
 
         return None
 
@@ -1436,9 +1468,7 @@ class StatArbBacktest:
                 continue  # Spread reverts too slowly, skip entry
 
             # Additional filter: Check ADF stationarity (after Half-Life passes)
-            if not self._check_adf_for_symbol(
-                symbol, window_data, correlation_results
-            ):
+            if not self._check_adf_for_symbol(symbol, window_data, correlation_results):
                 continue  # Spread is non-stationary, skip entry
 
             # Funding filter: Check if funding cost is acceptable
@@ -2062,9 +2092,7 @@ class StatArbBacktest:
             self.symbol_cooldowns[symbol] = unlock_time
 
         emoji = "🔺" if pnl >= 0 else "🔻"
-        print(
-            f"{emoji} {pnl:.2f} | Reason: {exit_reason} | Duration: {duration:.2f}h"
-        )
+        print(f"{emoji} {pnl:.2f} | Reason: {exit_reason} | Duration: {duration:.2f}h")
         self._print_portfolio_state()
 
     async def _open_position(
@@ -2930,7 +2958,9 @@ Examples:
             max_bars=settings.HALFLIFE_MAX_BARS,
             lookback_candles=settings.HALFLIFE_LOOKBACK_CANDLES,
         )
-        print(f"\n⏱️ Half-Life filter: max_bars={settings.HALFLIFE_MAX_BARS}, available={halflife_filter_service.is_available}")
+        print(
+            f"\n⏱️ Half-Life filter: max_bars={settings.HALFLIFE_MAX_BARS}, available={halflife_filter_service.is_available}"
+        )
 
         # Load historical funding rates if funding filter is enabled
         funding_cache = None

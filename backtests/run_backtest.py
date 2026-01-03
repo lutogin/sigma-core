@@ -316,15 +316,17 @@ class BacktestConfig:
 
     # Hurst tolerance for open positions (hysteresis)
     # Entry requires H < threshold (0.45), holding allows H < threshold + tolerance (0.50)
-    hurst_watch_tolerance: float = 0
+    hurst_watch_tolerance: float = 0.005
 
     # Trailing Entry settings (simulation of live EntryObserverService)
     use_trailing_entry: bool = False  # Enable trailing entry simulation
     trailing_pullback: float = 0.05  # Z-score pullback for reversal confirmation
     trailing_timeout_minutes: int = 240  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
-        0.2  # Cancel watch only if Z drops this much below threshold
+        0.35  # Cancel watch only if Z drops this much below threshold
     )
+
+    use_adf_filter: bool = True  # Enable ADF filter
 
 
 @dataclass
@@ -554,7 +556,9 @@ class StatArbBacktest:
         warmup_days = self.lookback_window_days * 3 + 2
         data_start = start_date - timedelta(days=warmup_days)
 
-        print(f"Loading data from {data_start.date()} (warmup: {warmup_days} days for rolling calculations)")
+        print(
+            f"Loading data from {data_start.date()} (warmup: {warmup_days} days for rolling calculations)"
+        )
 
         # Load all data upfront
         all_symbols = [self.primary_pair] + self.consistent_pairs
@@ -835,7 +839,11 @@ class StatArbBacktest:
         Returns:
             True if spread is stationary (p-value < threshold), False otherwise
         """
-        if not self.adf_filter_service or not self.adf_filter_service.is_available:
+        if (
+            not self.adf_filter_service
+            or not self.adf_filter_service.is_available
+            or not self.config.use_adf_filter
+        ):
             return True  # No filter = allow all
 
         primary_df = window_data.get(self.primary_pair)
@@ -902,7 +910,9 @@ class StatArbBacktest:
             return True  # No filter = allow all
 
         if not self.halflife_filter_service.is_available:
-            print(f"  ℹ️  {symbol} Half-Life filter unavailable (statsmodels not installed)")
+            print(
+                f"  ℹ️  {symbol} Half-Life filter unavailable (statsmodels not installed)"
+            )
             return True  # No filter = allow all
 
         primary_df = window_data.get(self.primary_pair)
@@ -1001,7 +1011,9 @@ class StatArbBacktest:
             return False
 
         # Use relaxed threshold for open positions (threshold + tolerance)
-        max_allowed_hurst = self.hurst_filter_service.threshold + self.config.hurst_watch_tolerance
+        max_allowed_hurst = (
+            self.hurst_filter_service.threshold + self.config.hurst_watch_tolerance
+        )
         is_trending = hurst >= max_allowed_hurst
 
         if is_trending:
@@ -1200,9 +1212,7 @@ class StatArbBacktest:
                 continue  # Spread reverts too slowly, skip entry
 
             # Additional filter: Check ADF stationarity (after Half-Life passes)
-            if not self._check_adf_for_symbol(
-                symbol, window_data, correlation_results
-            ):
+            if not self._check_adf_for_symbol(symbol, window_data, correlation_results):
                 continue  # Spread is non-stationary, skip entry
 
             # Funding filter: Check if funding cost is acceptable
@@ -1823,9 +1833,7 @@ class StatArbBacktest:
             self.symbol_cooldowns[symbol] = unlock_time
 
         emoji = "🔺" if pnl >= 0 else "🔻"
-        print(
-            f"{emoji} {pnl:.2f} | Reason: {exit_reason} | Duration: {duration:.2f}h"
-        )
+        print(f"{emoji} {pnl:.2f} | Reason: {exit_reason} | Duration: {duration:.2f}h")
         self._print_portfolio_state()
 
     async def _open_position(
@@ -2647,7 +2655,9 @@ Examples:
             max_bars=settings.HALFLIFE_MAX_BARS,
             lookback_candles=settings.HALFLIFE_LOOKBACK_CANDLES,
         )
-        print(f"\n⏱️ Half-Life filter: max_bars={settings.HALFLIFE_MAX_BARS}, available={halflife_filter_service.is_available}")
+        print(
+            f"\n⏱️ Half-Life filter: max_bars={settings.HALFLIFE_MAX_BARS}, available={halflife_filter_service.is_available}"
+        )
 
         # Load historical funding rates if funding filter is enabled
         funding_cache = None
