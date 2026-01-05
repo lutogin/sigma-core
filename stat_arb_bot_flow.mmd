@@ -12,7 +12,13 @@ flowchart TB
 
         subgraph SCREENER["📊 SCREENER PIPELINE"]
             direction TB
-            LOAD_DATA["Load OHLCV Data<br/>LOOKBACK_WINDOW_DAYS=3 × 2 + 1"]
+            
+            subgraph LOAD_PAIRS["📋 LOAD TRADING PAIRS"]
+                PAIRS_MONGO["TradingPairRepository<br/>(MongoDB)"]
+                PAIRS_FALLBACK["Fallback: CONSISTENT_PAIRS<br/>(config)"]
+            end
+            
+            LOAD_DATA["Load OHLCV Data<br/>LOOKBACK_WINDOW_DAYS=3 × 3 + 2"]
 
             subgraph VOLATILITY["🌡️ VOLATILITY FILTER"]
                 VOL_CHECK["Check ETH Volatility<br/>& 4h Price Change"]
@@ -49,7 +55,7 @@ flowchart TB
 
                 subgraph HALFLIFE_SCREEN["2️⃣ HALF-LIFE FILTER"]
                     CALC_HL["Calculate Half-Life (O-U process)<br/>HL = -ln(2) / λ<br/>HALFLIFE_LOOKBACK=300"]
-                    HL_CHECK{"HL <= 48 bars?<br/>(0.5 × MAX_POSITION_BARS)"}
+                    HL_CHECK{"HL <= 48 bars?<br/>(~12h for 15m)"}
                     HL_PASS["✅ Fast Reversion"]
                     HL_FAIL["❌ Slow Reversion → Remove"]
                 end
@@ -69,7 +75,7 @@ flowchart TB
 
             subgraph EXIT_CONDITIONS["Structural Exit Conditions"]
                 EXIT_CORR["📉 CORRELATION_DROP<br/>corr < MIN_CORRELATION (0.8)"]
-                EXIT_HURST["📈 HURST_TRENDING<br/>H >= 0.45 + 0.07 = 0.52<br/>(threshold + tolerance)"]
+                EXIT_HURST["📈 HURST_TRENDING<br/>H >= HURST_THRESHOLD (0.45)"]
                 EXIT_TIMEOUT["⏰ TIMEOUT<br/>bars >= MAX_POSITION_BARS (96)"]
             end
 
@@ -78,7 +84,7 @@ flowchart TB
 
         subgraph WATCH_CHECK["👁️ WATCHED PAIRS CHECK"]
             CHECK_WATCHES["Check EntryObserver watches"]
-            REMOVE_WATCH["Remove if failed:<br/>CORRELATION_DROP<br/>or HURST >= 0.52 (w/ tolerance)<br/>or FALSE_ALARM"]
+            REMOVE_WATCH["Remove if failed:<br/>CORRELATION_DROP<br/>or HURST >= 0.45<br/>or FALSE_ALARM"]
         end
 
         subgraph ENTRY_CHECK["🚀 ENTRY CONDITIONS CHECK (Orchestrator)"]
@@ -103,9 +109,22 @@ flowchart TB
         end
     end
 
+    subgraph MARKET_UNSAFE_FLOW["⛔ MARKET UNSAFE FLOW"]
+        MARKET_UNSAFE["⛔ Market Unsafe<br/>Emit MarketUnsafeEvent"]
+        CANCEL_ALL_WATCHES["EntryObserver:<br/>Cancel ALL active watches"]
+    end
+
     subgraph ENTRY_OBSERVER["👀 ENTRY OBSERVER (Trailing Entry)"]
         direction TB
         RECEIVE_PENDING["Receive PendingEntrySignalEvent"]
+
+        subgraph EXISTING_WATCH["🔄 RE-VALIDATE & RESET (existing watch)"]
+            UPDATE_PARAMS["Update params:<br/>beta, spread_mean, spread_std"]
+            RECALC_Z["Recalculate Z with new params"]
+            VALIDATE_CHECK{"new |Z| >= threshold?"}
+            INVALIDATE["❌ PARAM_INVALIDATED<br/>Cancel watch"]
+            RESET_MAX["Reset max_z = new |Z|<br/>(prevents false pullback)"]
+        end
 
         subgraph WS_MONITOR["📡 WebSocket Real-Time Monitoring"]
             SUBSCRIBE["Subscribe to Book Ticker<br/>COIN + ETH prices"]
@@ -118,7 +137,7 @@ flowchart TB
             CHECK_TIMEOUT_W{"Watch Timeout?<br/>TRAILING_ENTRY_TIMEOUT=45min"}
             CHECK_FALSE{"|Z| < threshold - 0.2?<br/>(False Alarm + Hysteresis)"}
             CHECK_SL_W{"|Z| >= Z_SL_THRESHOLD?<br/>(SL Hit)"}
-            CHECK_PULLBACK{"|Z| <= max_Z - PULLBACK?<br/>(PULLBACK=0.2)"}
+            CHECK_PULLBACK{"|Z| <= max_Z - 0.2?<br/>(PULLBACK confirmed)"}
 
             CANCEL_TIMEOUT["Cancel: TIMEOUT<br/>Apply Cooldown"]
             CANCEL_FALSE["Cancel: FALSE_ALARM"]
@@ -150,6 +169,7 @@ flowchart TB
             ROLLBACK["🔄 Rollback on Failure<br/>(Delta-Neutral Protection)"]
         end
 
+        SAVE_FROZEN["Save FROZEN params:<br/>entry_beta, spread_mean,<br/>spread_std, z_tp, z_sl"]
         REGISTER_POS["Register Position<br/>in PositionStateService"]
         EMIT_OPENED["Emit TradeOpenedEvent"]
     end
@@ -164,7 +184,7 @@ flowchart TB
         end
 
         subgraph DYNAMIC_TP["🎚️ DYNAMIC TP (Time-Based)"]
-            TIME_COEF["Calculate time_based_coefficient:<br/>0-4h: coef=0.1 (wait for ~90%)<br/>4-12h: coef=0.3 (~70%)<br/>12-24h: coef=0.5 (~50%)<br/>24h+: TIME_STOP"]
+            TIME_COEF["Calculate time_based_coefficient:<br/>0-4h: coef=0.1 (wait for ~90%)<br/>4-12h: coef=0.3 (~70%)<br/>12-24h: coef=0.5 (~50%)<br/>24h+: coef=0.8"]
             DYN_TP_CALC["dynamic_TP = peak_Z × time_coef<br/>min: Z_TP_THRESHOLD (0.25)"]
         end
 
@@ -198,10 +218,13 @@ flowchart TB
     CRON --> TIMEOUT_CHECK
     TIMEOUT_CHECK --> START_SCAN
 
-    START_SCAN --> LOAD_DATA
+    START_SCAN --> PAIRS_MONGO
+    PAIRS_MONGO --> PAIRS_FALLBACK
+    PAIRS_FALLBACK --> LOAD_DATA
     LOAD_DATA --> VOL_CHECK
     VOL_CHECK --> VOL_SAFE
-    VOL_SAFE -->|No| MARKET_UNSAFE["⛔ Market Unsafe<br/>Skip Scan"]
+    VOL_SAFE -->|No| MARKET_UNSAFE
+    MARKET_UNSAFE --> CANCEL_ALL_WATCHES
     VOL_SAFE -->|Yes| CALC_CORR
 
     CALC_CORR --> CORR_FILTER
@@ -247,9 +270,16 @@ flowchart TB
     FUNDING_CHECK -->|No| FUNDING_TOXIC
     FUNDING_OK --> EMIT_PENDING
 
-    %% Entry Observer Flow
+    %% Entry Observer Flow - New watch vs existing
     EMIT_PENDING --> RECEIVE_PENDING
-    RECEIVE_PENDING --> SUBSCRIBE
+    RECEIVE_PENDING --> UPDATE_PARAMS
+    UPDATE_PARAMS --> RECALC_Z
+    RECALC_Z --> VALIDATE_CHECK
+    VALIDATE_CHECK -->|No| INVALIDATE
+    VALIDATE_CHECK -->|Yes| RESET_MAX
+    RESET_MAX --> SUBSCRIBE
+
+    RECEIVE_PENDING -->|New watch| SUBSCRIBE
     SUBSCRIBE --> CALC_LIVE_Z
     CALC_LIVE_Z --> TRACK_MAX
     TRACK_MAX --> CHECK_TIMEOUT_W
@@ -273,8 +303,9 @@ flowchart TB
     VAL_BALANCE --> CALC_SIZE
     CALC_SIZE --> OPEN_COIN
     CALC_SIZE --> OPEN_PRIMARY
-    OPEN_COIN --> REGISTER_POS
-    OPEN_PRIMARY --> REGISTER_POS
+    OPEN_COIN --> SAVE_FROZEN
+    OPEN_PRIMARY --> SAVE_FROZEN
+    SAVE_FROZEN --> REGISTER_POS
     REGISTER_POS --> EMIT_OPENED
 
     %% Exit Observer Flow
@@ -312,12 +343,14 @@ flowchart TB
     classDef observer fill:#e17055,stroke:#fab1a0,stroke-width:2px,color:#fff
     classDef decision fill:#fd79a8,stroke:#e84393,stroke-width:2px,color:#fff
     classDef newfilter fill:#00cec9,stroke:#81ecec,stroke-width:2px,color:#fff
+    classDef unsafe fill:#636e72,stroke:#b2bec3,stroke-width:2px,color:#fff
 
     class CRON,TIMEOUT_CHECK scheduler
-    class LOAD_DATA,CALC_CORR,CORR_FILTER,CALC_SPREAD,CALC_Z screener
+    class LOAD_DATA,CALC_CORR,CORR_FILTER,CALC_SPREAD,CALC_Z,PAIRS_MONGO,PAIRS_FALLBACK screener
     class VOL_CHECK,CALC_HURST_S,PERCENTILE,EMA_SMOOTH,FLOOR,CALC_FUNDING,CALC_NET,CALC_HL,CALC_ADF filter
     class ENTRY_Z,ENTRY_NO_POS,ENTRY_NO_COOL,ENTRY_MAX,EMIT_PENDING,EMIT_ENTRY,FUNDING_OK,HURST_PASS,HL_PASS,ADF_PASS entry
     class EXIT_TP,EXIT_SL,EXIT_CORR,EXIT_HURST,EXIT_TIMEOUT,EMIT_EXIT,EMIT_EXIT_SIGNAL,FUNDING_TOXIC,HURST_FAIL,HL_FAIL,ADF_FAIL exit
-    class CALC_SIZE,OPEN_COIN,OPEN_PRIMARY,CLOSE_COIN,CLOSE_PRIMARY trading
-    class SUBSCRIBE,CALC_LIVE_Z,TRACK_MAX,EXIT_SUBSCRIBE,EXIT_CALC_Z observer
-    class VOL_SAFE,HURST_CHECK_S,HL_CHECK,ADF_CHECK,CHECK_TIMEOUT_W,CHECK_FALSE,CHECK_SL_W,CHECK_PULLBACK,LIVE_TP,LIVE_SL,COOLDOWN_CHECK,FUNDING_CHECK decision
+    class CALC_SIZE,OPEN_COIN,OPEN_PRIMARY,CLOSE_COIN,CLOSE_PRIMARY,SAVE_FROZEN trading
+    class SUBSCRIBE,CALC_LIVE_Z,TRACK_MAX,EXIT_SUBSCRIBE,EXIT_CALC_Z,UPDATE_PARAMS,RECALC_Z,RESET_MAX observer
+    class VOL_SAFE,HURST_CHECK_S,HL_CHECK,ADF_CHECK,CHECK_TIMEOUT_W,CHECK_FALSE,CHECK_SL_W,CHECK_PULLBACK,LIVE_TP,LIVE_SL,COOLDOWN_CHECK,FUNDING_CHECK,VALIDATE_CHECK decision
+    class MARKET_UNSAFE,CANCEL_ALL_WATCHES,INVALIDATE unsafe

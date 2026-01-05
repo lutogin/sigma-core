@@ -4,7 +4,9 @@
 
 Бот реализует стратегию **статистического арбитража** на бессрочных фьючерсах Binance. Основная идея — торговля спредом между альткоином (COIN) и ETH как индексом экосистемы. Когда спред отклоняется от исторической нормы (измеряется Z-score), бот открывает дельта-нейтральную позицию в ожидании возврата к среднему.
 
-**Торгуемые пары:** LINK, AAVE, MANA, ONDO, ETHFI, RENDER, RSR — все против ETH/USDT:USDT как PRIMARY.
+**Торгуемые пары:** LINK, UNI, AAVE, RENDER, TURBO, ENS, FET, MORPHO, SPX — все против ETH/USDT:USDT как PRIMARY.
+
+**Источник пар:** Пары загружаются из MongoDB (`TradingPairRepository`). Если MongoDB недоступна или пуста — fallback на `CONSISTENT_PAIRS` из конфигурации.
 
 ---
 
@@ -53,7 +55,7 @@
 #### Volatility Filter
 
 - Проверяет волатильность ETH
-- Если рынок "небезопасен" — сканирование прерывается
+- Если рынок "небезопасен" — сканирование прерывается, все активные watches отменяются
 
 #### Correlation Service
 
@@ -111,8 +113,9 @@ Orchestrator проверяет **только структурные услов
 
 - **TRAILING_ENTRY_PULLBACK = 0.2** — откат Z от максимума
 - **TRAILING_ENTRY_TIMEOUT_MINUTES = 45** — максимальное время наблюдения
+- **FALSE_ALARM_HYSTERESIS = 0.2** — отмена только если Z упал ниже threshold - hysteresis
 
-### Логика:
+### Логика мониторинга (WebSocket):
 
 ```
 При получении PendingEntrySignalEvent:
@@ -122,9 +125,22 @@ Orchestrator проверяет **только структурные услов
     IF timeout > 45 min → Cancel: TIMEOUT
     IF |Z| < threshold - hysteresis → Cancel: FALSE_ALARM
     IF |Z| >= SL_threshold → Cancel: SL_HIT
-    IF |Z| > max_z → Обновить max_z
+    IF |Z| > max_z → Обновить max_z (новый пик)
     IF |Z| <= max_z - 0.2 → ✅ REVERSAL CONFIRMED → EntrySignalEvent
 ```
+
+### Re-Validate & Reset (каждые 15 минут)
+
+При получении нового `PendingEntrySignalEvent` для уже отслеживаемого символа:
+
+```
+1. Обновить параметры расчёта (beta, spread_mean, spread_std)
+2. Пересчитать Z с новыми параметрами
+3. IF new_|Z| < entry_threshold → Cancel: PARAM_INVALIDATED (сигнал исчез)
+4. ELSE → Reset max_z = new_|Z| (предотвращает "ложный откат")
+```
+
+**Зачем Reset max_z?** При изменении spread_std текущий Z-score меняется. Если std вырос — Z упал. Без сброса max_z бот увидит "откат" которого не было, и войдёт ложно. Reset гарантирует, что pullback измеряется от **нового** пика после пересчёта параметров.
 
 ---
 
@@ -219,44 +235,104 @@ Parallel:
 ## Event Flow Summary
 
 ```
-PlannerService (cron 15m)
-    │
-    └─► OrchestratorService.run()
-            │
-            ├─► ScreenerService.scan()
-            │       ├─► VolatilityFilter
-            │       ├─► CorrelationService
-            │       ├─► ZScoreService (+ dynamic threshold)
-            │       └─► Filter Chain (Hurst, HalfLife, ADF)
-            │
-            ├─► Check STRUCTURAL Exits only:
-            │       • CORRELATION_DROP
-            │       • HURST_TRENDING
-            │       • TIMEOUT
-            │       (NO TP/SL here!)
-            │
-            └─► Check Entry Conditions → PendingEntrySignalEvent
-                                              │
-                                              ▼
-                                    EntryObserverService
-                                    (WebSocket trailing entry)
-                                              │
-                                              └─► EntrySignalEvent
-                                                        │
-                                                        ▼
-                                              TradingService
-                                              (saves frozen params)
-                                                        │
-                                                        └─► TradeOpenedEvent
-                                                                  │
-                                                                  ▼
-                                                        ExitObserverService
-                                                        (WebSocket TP/SL with frozen params)
-                                                                  │
-                                                                  └─► ExitSignalEvent (TP/SL)
-                                                                            │
-                                                                            ▼
-                                                                  TradingService.close()
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           PlannerService (cron 15m)                         │
+└─────────────────────────────────────┬───────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         OrchestratorService.run()                           │
+│                                                                             │
+│  1. ScreenerService.scan()                                                  │
+│     ├─► VolatilityFilter ──[unsafe]──► MarketUnsafeEvent                    │
+│     │                                         │                             │
+│     ├─► CorrelationService                    ▼                             │
+│     ├─► ZScoreService (+ dynamic threshold)   EntryObserverService          │
+│     └─► Filter Chain:                         ├─► Cancel all watches        │
+│         • Hurst (H < 0.45)                    └─► Clear state               │
+│         • HalfLife (HL <= 48)                                               │
+│         • ADF (p < 0.08)                                                    │
+│                                                                             │
+│  2. Check STRUCTURAL Exits (open positions + watches):                      │
+│     • CORRELATION_DROP (corr < 0.8)                                         │
+│     • HURST_TRENDING (H >= 0.45)                                            │
+│     • TIMEOUT (bars >= 96)                                                  │
+│     [NO TP/SL here - that's ExitObserver's job]                             │
+│                                                                             │
+│  3. Check Entry Conditions ──► PendingEntrySignalEvent                      │
+│                                                                             │
+└─────────────────────────────────────┬───────────────────────────────────────┘
+                                      │
+                    ┌─────────────────┴─────────────────┐
+                    ▼                                   ▼
+    ┌───────────────────────────────┐   ┌───────────────────────────────────┐
+    │    EntryObserverService       │   │  (For existing watches)           │
+    │    (WebSocket trailing entry) │   │  Re-Validate & Reset:             │
+    │                               │   │  • Update beta, spread_std        │
+    │  New watch:                   │   │  • Recalc Z with new params       │
+    │  • Subscribe to COIN + ETH    │   │  • IF |Z| < threshold → Cancel    │
+    │  • Track max_z                │   │  • ELSE → Reset max_z             │
+    │  • Wait for pullback          │   │                                   │
+    │                               │   └───────────────────────────────────┘
+    │  Exit conditions:             │
+    │  • Timeout → Cancel           │
+    │  • False alarm → Cancel       │
+    │  • SL hit → Cancel            │
+    │  • Pullback confirmed → Entry │
+    │                               │
+    └───────────────┬───────────────┘
+                    │ (pullback confirmed)
+                    ▼
+    ┌───────────────────────────────┐
+    │       EntrySignalEvent        │
+    └───────────────┬───────────────┘
+                    │
+                    ▼
+    ┌───────────────────────────────┐
+    │       TradingService          │
+    │  • Save frozen params         │
+    │  • Open COIN + PRIMARY legs   │
+    │  • Atomic execution           │
+    └───────────────┬───────────────┘
+                    │
+                    ▼
+    ┌───────────────────────────────┐
+    │      TradeOpenedEvent         │
+    └───────────────┬───────────────┘
+                    │
+                    ▼
+    ┌───────────────────────────────────────────────────────────────────────┐
+    │                      ExitObserverService                              │
+    │                   (WebSocket TP/SL monitoring)                        │
+    │                                                                       │
+    │  Uses FROZEN parameters from entry:                                   │
+    │  • frozen_beta, frozen_spread_mean, frozen_spread_std                 │
+    │                                                                       │
+    │  Dynamic TP based on time in position:                                │
+    │  • 0-4h: 1× coefficient                                               │
+    │  • 4-12h: 3× coefficient                                              │
+    │  • 12-24h: 5× coefficient                                             │
+    │  • 24h+: 8× coefficient                                               │
+    │                                                                       │
+    │  Exit conditions:                                                     │
+    │  • |Z| <= dynamic_TP → TAKE_PROFIT                                    │
+    │  • |Z| >= z_sl_threshold → STOP_LOSS                                  │
+    │                                                                       │
+    └───────────────────────────────────┬───────────────────────────────────┘
+                                        │
+                                        ▼
+                          ┌───────────────────────────────┐
+                          │       ExitSignalEvent         │
+                          │   (TP/SL or Structural)       │
+                          └───────────────┬───────────────┘
+                                          │
+                                          ▼
+                          ┌───────────────────────────────┐
+                          │   TradingService.close()      │
+                          │  • Close COIN entirely        │
+                          │  • Close PRIMARY partially    │
+                          │  • Apply cooldown if needed   │
+                          └───────────────────────────────┘
 ```
 
 ---
@@ -269,20 +345,22 @@ PlannerService (cron 15m)
 | LOOKBACK_WINDOW_DAYS           | 3         | Окно для rolling расчётов                    |
 | MIN_CORRELATION                | 0.8       | Минимальная корреляция                       |
 | MIN_BETA / MAX_BETA            | 0.5 / 2.0 | Диапазон допустимых бет                      |
-| Z_ENTRY_THRESHOLD              | 2.1       | Базовый порог входа                          |
+| Z_ENTRY_THRESHOLD              | 2.0       | Базовый порог входа (dynamic override)       |
 | Z_TP_THRESHOLD                 | 0.25      | Базовый порог TP                             |
 | Z_SL_THRESHOLD                 | 4.0       | Порог SL                                     |
 | ADAPTIVE_PERCENTILE            | 95        | Перцентиль для dynamic threshold             |
 | DYNAMIC_THRESHOLD_WINDOW_BARS  | 440       | Окно для dynamic threshold                   |
-| THRESHOLD_EMA_ALPHA            | 0.03      | Сглаживание dynamic threshold                |
+| THRESHOLD_EMA_ALPHA            | 0.1       | Сглаживание dynamic threshold                |
 | HURST_THRESHOLD                | 0.45      | Порог Hurst (вход)                           |
-| HURST_WATCH_TOLERANCE          | 0.07      | Tolerance для watches/позиций (hold до 0.52) |
-| HALFLIFE_MAX_BARS              | 48        | Макс. Half-Life                              |
+| HURST_WATCH_TOLERANCE          | 0         | Tolerance для watches/позиций                |
+| HALFLIFE_MAX_BARS              | 48        | Макс. Half-Life (~12h)                       |
 | ADF_PVALUE_THRESHOLD           | 0.08      | Макс. p-value для стационарности             |
-| MAX_FUNDING_COST_THRESHOLD     | -0.0005   | Макс. расход на фандинг                      |
-| TRAILING_ENTRY_PULLBACK        | 0.2       | Откат Z для подтверждения                    |
+| MAX_FUNDING_COST_THRESHOLD     | -0.0005   | Макс. расход на фандинг (-0.05% за 8h)       |
+| TRAILING_ENTRY_PULLBACK        | 0.2       | Откат Z для подтверждения разворота          |
 | TRAILING_ENTRY_TIMEOUT_MINUTES | 45        | Таймаут trailing entry                       |
+| FALSE_ALARM_HYSTERESIS         | 0.2       | Гистерезис для отмены watch                  |
 | POSITION_SIZE_USDT             | 100       | Размер позиции COIN leg                      |
 | MAX_OPEN_SPREADS               | 5         | Максимум спредов                             |
-| COOLDOWN_BARS                  | 16        | Cooldown после неудачного выхода             |
-| MAX_POSITION_BARS              | 96        | Макс. длительность позиции                   |
+| COOLDOWN_BARS                  | 16        | Cooldown после неудачного выхода (~4h)       |
+| MAX_POSITION_BARS              | 96        | Макс. длительность позиции (~24h)            |
+| EXCHANGE_DEFAULT_LEVERAGE      | 5         | Плечо                                        |
