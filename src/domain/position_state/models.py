@@ -45,6 +45,7 @@ class SpreadPosition:
     entry_beta: float = 0.0
     entry_correlation: float = 0.0
     entry_hurst: float = 0.0
+    entry_halflife: float = 0.0  # Half-life in bars (used for dynamic position sizing)
 
     # Spread statistics for real-time Z calculation
     spread_mean: float = 0.0

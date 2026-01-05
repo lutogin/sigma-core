@@ -155,6 +155,24 @@ Orchestrator проверяет **только структурные услов
 
 Эти параметры используются ExitObserver для расчёта Z-score.
 
+### Dynamic Position Sizing (Half-Life Based):
+
+Размер позиции рассчитывается динамически на основе Half-Life спреда:
+
+```
+Size = BaseSize × (TargetHalfLife / CurrentHalfLife)
+```
+
+| Half-Life (bars) | Multiplier | Описание |
+| --- | --- | --- |
+| 6 bars (1.5h) | 2.0x | Быстрая ревёрсия → большая позиция |
+| 12 bars (3h) | 1.0x | Эталон (TARGET_HALFLIFE_BARS) |
+| 24 bars (6h) | 0.5x | Медленная ревёрсия → маленькая позиция |
+
+**Лимиты:** MIN_SIZE_MULTIPLIER (0.5x) – MAX_SIZE_MULTIPLIER (2.0x)
+
+**Логика:** Чем быстрее спред возвращается к среднему, тем больше можно рисковать.
+
 ### Atomic Execution:
 
 ```

@@ -54,6 +54,7 @@ class ExitWatch:
     entry_z_score: float = 0.0  # Z-score at entry
     correlation: float = 0.0
     hurst: float = 0.0
+    halflife: float = 0.0  # Half-life in bars (stored for logging/debugging)
 
     # Thresholds
     z_tp_threshold: float = 0.0  # Take profit when |Z| <= this

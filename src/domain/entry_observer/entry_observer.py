@@ -219,6 +219,7 @@ class EntryObserverService:
                 watch.spread_std = event.spread_std
                 watch.correlation = event.correlation
                 watch.hurst = event.hurst
+                watch.halflife = event.halflife
                 watch.z_entry_threshold = event.z_entry_threshold
                 watch.z_tp_threshold = event.z_tp_threshold
                 watch.z_sl_threshold = event.z_sl_threshold
@@ -284,6 +285,7 @@ class EntryObserverService:
                 initial_z=event.z_score,
                 correlation=event.correlation,
                 hurst=event.hurst,
+                halflife=event.halflife,
                 z_entry_threshold=event.z_entry_threshold,
                 z_tp_threshold=event.z_tp_threshold,
                 z_sl_threshold=event.z_sl_threshold,
@@ -372,7 +374,9 @@ class EntryObserverService:
             self._watches.clear()
             self._last_check.clear()
 
-        self._logger.info(f"🧹 Cleared {cancelled_count} watches due to volatility filter")
+        self._logger.info(
+            f"🧹 Cleared {cancelled_count} watches due to volatility filter"
+        )
 
     # =========================================================================
     # WebSocket Management
@@ -599,6 +603,7 @@ class EntryObserverService:
             beta=watch.beta,
             correlation=watch.correlation,
             hurst=watch.hurst,
+            halflife=watch.halflife,
             spread_mean=watch.spread_mean,
             spread_std=watch.spread_std,
             coin_price=watch.coin_price,

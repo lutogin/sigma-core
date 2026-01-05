@@ -341,6 +341,9 @@ class Container:
                 leverage=self._settings.EXCHANGE_DEFAULT_LEVERAGE,
                 max_open_spreads=self._settings.MAX_OPEN_SPREADS,
                 primary_symbol=self._settings.PRIMARY_PAIR,
+                target_halflife_bars=self._settings.TARGET_HALFLIFE_BARS,
+                min_size_multiplier=self._settings.MIN_SIZE_MULTIPLIER,
+                max_size_multiplier=self._settings.MAX_SIZE_MULTIPLIER,
             )
         return self._instances["trading_service"]
 

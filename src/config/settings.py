@@ -78,6 +78,13 @@ class Settings:
     HALFLIFE_MAX_BARS: float = 48.0  # 0.5 * MAX_POSITION_BARS (96) = 48 bars = 12h
     HALFLIFE_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Half-Life
 
+    # Dynamic Position Sizing based on Half-Life
+    # Size = BaseSize × (TargetHalfLife / CurrentHalfLife)
+    # Fast reversion (low HL) → larger size, slow reversion (high HL) → smaller size
+    TARGET_HALFLIFE_BARS: float = 12.0  # Target HL = 12 bars (3h for 15m) as baseline
+    MIN_SIZE_MULTIPLIER: float = 0.5  # Minimum multiplier (slow reversion protection)
+    MAX_SIZE_MULTIPLIER: float = 2.0  # Maximum multiplier (fast reversion cap)
+
     # Volatility filter
     VOLATILITY_WINDOW: int = 24  # 6 hours (24 x 15min candles)
     VOLATILITY_THRESHOLD: float = 0.008
@@ -183,6 +190,11 @@ class Settings:
         self.HALFLIFE_LOOKBACK_CANDLES = int(
             os.getenv("HALFLIFE_LOOKBACK_CANDLES", "300")
         )
+
+        # Dynamic Position Sizing based on Half-Life
+        self.TARGET_HALFLIFE_BARS = float(os.getenv("TARGET_HALFLIFE_BARS", "12.0"))
+        self.MIN_SIZE_MULTIPLIER = float(os.getenv("MIN_SIZE_MULTIPLIER", "0.5"))
+        self.MAX_SIZE_MULTIPLIER = float(os.getenv("MAX_SIZE_MULTIPLIER", "2.0"))
         # Volatility filter
         self.VOLATILITY_WINDOW = int(os.getenv("VOLATILITY_WINDOW", "24"))
         self.VOLATILITY_THRESHOLD = float(os.getenv("VOLATILITY_THRESHOLD", "0.008"))
@@ -312,6 +324,10 @@ class Settings:
         logger.info("⏱️ Half-Life Settings:")
         logger.info(f"  HALFLIFE_MAX_BARS: {self.HALFLIFE_MAX_BARS}")
         logger.info(f"  HALFLIFE_LOOKBACK_CANDLES: {self.HALFLIFE_LOOKBACK_CANDLES}")
+        logger.info(f"  TARGET_HALFLIFE_BARS: {self.TARGET_HALFLIFE_BARS}")
+        logger.info(
+            f"  SIZE_MULTIPLIER: {self.MIN_SIZE_MULTIPLIER}x - {self.MAX_SIZE_MULTIPLIER}x"
+        )
         logger.info("-" * 40)
         logger.info("💸 Funding Filter Settings:")
         logger.info(

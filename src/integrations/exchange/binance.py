@@ -385,7 +385,7 @@ class BinanceClient:
                     f"Loaded 24h volume for {len(volume_by_symbol)} symbols"
                 )
             except Exception as e:
-                self.logger.warning(f"Failed to load 24h volumes: {e}")
+                self.logger.error(f"Failed to load 24h volumes: {e}")
                 # If failed, don't filter by volume
                 min_volume_usdt = 0
 
@@ -506,7 +506,7 @@ class BinanceClient:
                 await asyncio.sleep(0.1)  # Rate limiting
 
             except Exception as e:
-                self.logger.warning(f"Error fetching OHLCV for {symbol}: {repr(e)}")
+                self.logger.error(f"Error fetching OHLCV for {symbol}: {repr(e)}")
                 break
 
         return self._ohlcv_to_dataframe(all_data)
@@ -648,7 +648,7 @@ class BinanceClient:
             return None
 
         except Exception as e:
-            self.logger.warning(f"Failed to get funding rate for {symbol}: {e}")
+            self.logger.error(f"Failed to get funding rate for {symbol}: {e}")
             return None
 
     async def get_funding_rates_batch(
@@ -772,7 +772,7 @@ class BinanceClient:
             return all_rates
 
         except Exception as e:
-            self.logger.warning(
+            self.logger.error(
                 f"Failed to get historical funding rates for {symbol}: {e}"
             )
             return []
@@ -994,7 +994,7 @@ class BinanceClient:
                 self.logger.info(f"Position mode changed to {mode_name}")
                 return True
 
-            self.logger.warning(f"Unexpected response from position mode change: {response}")
+            self.logger.error(f"Unexpected response from position mode change: {response}")
             return False
 
         except Exception as e:
@@ -1354,7 +1354,7 @@ class BinanceClient:
                         )
 
                 except BinanceAPIException as e:
-                    self.logger.warning(f"Order attempt failed: {e}")
+                    self.logger.error(f"Order attempt failed: {e}")
                     if e.code == -2021:  # Order would immediately match and take
                         # This is actually fine for our purpose
                         pass
@@ -1570,7 +1570,7 @@ class BinanceClient:
                         )
 
                 except BinanceAPIException as e:
-                    self.logger.warning(f"Close order attempt failed: {e}")
+                    self.logger.error(f"Close order attempt failed: {e}")
                     if e.code != -2021:
                         raise
 
@@ -2068,7 +2068,7 @@ class BinanceClient:
                             self.logger.info(f"🔌 Unsubscribed: {stream_description}")
                             return  # Exit completely
                         except Exception as e:
-                            self.logger.warning(
+                            self.logger.error(
                                 f"WebSocket recv error ({stream_description}): {e}"
                             )
                             break  # Break inner loop to reconnect

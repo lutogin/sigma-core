@@ -106,6 +106,7 @@ class PositionStateService:
         coin_contracts: float = 0.0,
         primary_contracts: float = 0.0,
         leverage: int = 1,
+        entry_halflife: float = 0.0,
     ) -> SpreadPosition:
         """
         Register a new open position.
@@ -129,6 +130,7 @@ class PositionStateService:
             coin_contracts: COIN leg size in contracts.
             primary_contracts: PRIMARY leg size in contracts.
             leverage: Position leverage.
+            entry_halflife: Half-life in bars at entry (for dynamic sizing).
 
         Returns:
             Created SpreadPosition.
@@ -141,6 +143,7 @@ class PositionStateService:
             entry_beta=entry_beta,
             entry_correlation=entry_correlation,
             entry_hurst=entry_hurst,
+            entry_halflife=entry_halflife,
             spread_mean=spread_mean,
             spread_std=spread_std,
             coin_size_usdt=coin_size_usdt,

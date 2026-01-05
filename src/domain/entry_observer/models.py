@@ -54,6 +54,7 @@ class WatchCandidate:
     initial_z: float = 0.0  # Z-score when watch started
     correlation: float = 0.0
     hurst: float = 0.0
+    halflife: float = 0.0  # Half-life in bars (used for dynamic position sizing)
 
     # Thresholds
     z_entry_threshold: float = 2.0
@@ -122,6 +123,7 @@ class WatchCandidate:
             "initial_z": self.initial_z,
             "correlation": self.correlation,
             "hurst": self.hurst,
+            "halflife": self.halflife,
             "z_entry_threshold": self.z_entry_threshold,
             "z_tp_threshold": self.z_tp_threshold,
             "z_sl_threshold": self.z_sl_threshold,
@@ -148,6 +150,7 @@ class WatchCandidate:
             initial_z=data.get("initial_z", 0.0),
             correlation=data.get("correlation", 0.0),
             hurst=data.get("hurst", 0.0),
+            halflife=data.get("halflife", 0.0),
             z_entry_threshold=data.get("z_entry_threshold", 2.0),
             z_tp_threshold=data.get("z_tp_threshold", 0.0),
             z_sl_threshold=data.get("z_sl_threshold", 4.0),

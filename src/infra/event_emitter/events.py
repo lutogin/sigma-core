@@ -161,8 +161,9 @@ class EntrySignalEvent(BaseEvent):
     beta: float = 0.0  # Hedge ratio (β)
     correlation: float = 0.0  # Current correlation
 
-    # Hurst exponent (mean-reversion quality)
-    hurst: float = 0.0
+    # Mean-reversion quality metrics
+    hurst: float = 0.0  # Hurst exponent (< 0.45 = mean-reverting)
+    halflife: float = 0.0  # Half-life in bars (used for dynamic position sizing)
 
     # Spread statistics for real-time Z calculation
     spread_mean: float = 0.0
@@ -187,6 +188,7 @@ class EntrySignalEvent(BaseEvent):
                 "beta": self.beta,
                 "correlation": self.correlation,
                 "hurst": self.hurst,
+                "halflife": self.halflife,
                 "spread_mean": self.spread_mean,
                 "spread_std": self.spread_std,
                 "coin_price": self.coin_price,
@@ -255,6 +257,7 @@ class PendingEntrySignalEvent(BaseEvent):
     beta: float = 0.0  # Hedge ratio (β) for spread calculation
     correlation: float = 0.0  # Current correlation
     hurst: float = 0.0  # Hurst exponent
+    halflife: float = 0.0  # Half-life in bars (used for dynamic position sizing)
 
     # Spread statistics for live Z-score calculation
     # (last values from rolling window)
@@ -281,6 +284,7 @@ class PendingEntrySignalEvent(BaseEvent):
                 "beta": self.beta,
                 "correlation": self.correlation,
                 "hurst": self.hurst,
+                "halflife": self.halflife,
                 "spread_mean": self.spread_mean,
                 "spread_std": self.spread_std,
                 "coin_price": self.coin_price,
@@ -549,6 +553,7 @@ class TradeOpenedEvent(BaseEvent):
     beta: float = 0.0
     correlation: float = 0.0
     hurst: float = 0.0
+    halflife: float = 0.0  # Half-life in bars (used for dynamic position sizing)
 
     # Spread statistics for real-time Z calculation
     spread_mean: float = 0.0
@@ -581,6 +586,7 @@ class TradeOpenedEvent(BaseEvent):
                 "beta": self.beta,
                 "correlation": self.correlation,
                 "hurst": self.hurst,
+                "halflife": self.halflife,
                 "spread_mean": self.spread_mean,
                 "spread_std": self.spread_std,
                 "coin_size_usdt": self.coin_size_usdt,

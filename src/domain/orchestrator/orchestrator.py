@@ -176,6 +176,7 @@ class OrchestratorService:
         entry_signals = await self._check_entry_conditions(
             filtered_results=scan_result.filtered_results,
             hurst_values=scan_result.hurst_values,
+            halflife_values=scan_result.halflife_values,
             raw_data=scan_result.raw_data,
             z_entry=z_entry,
             z_sl=z_sl,
@@ -406,6 +407,7 @@ class OrchestratorService:
         self,
         filtered_results: Dict[str, ZScoreResult],
         hurst_values: Dict[str, float],
+        halflife_values: Dict[str, float],
         raw_data: Dict[str, pd.DataFrame],
         z_entry: float,
         z_sl: float,
@@ -509,6 +511,7 @@ class OrchestratorService:
                 beta=result.current_beta,
                 correlation=result.current_correlation,
                 hurst=hurst_values.get(symbol, 0.0),
+                halflife=halflife_values.get(symbol, 0.0),
                 spread_mean=spread_mean,
                 spread_std=spread_std,
                 coin_price=coin_price,

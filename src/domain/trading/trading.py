@@ -60,6 +60,9 @@ class TradingService:
         leverage: int = 3,
         max_open_spreads: int = 3,
         primary_symbol: str = "ETH/USDT:USDT",
+        target_halflife_bars: float = 12.0,
+        min_size_multiplier: float = 0.5,
+        max_size_multiplier: float = 2.0,
     ):
         """
         Initialize trading service.
@@ -74,6 +77,9 @@ class TradingService:
             leverage: Default leverage for positions.
             max_open_spreads: Maximum number of open spread positions.
             primary_symbol: Primary trading pair (e.g., "ETH/USDT:USDT").
+            target_halflife_bars: Target half-life (baseline for position sizing).
+            min_size_multiplier: Minimum position size multiplier (slow reversion).
+            max_size_multiplier: Maximum position size multiplier (fast reversion).
         """
         self._emitter = event_emitter
         self._exchange = exchange_client
@@ -84,6 +90,11 @@ class TradingService:
         self._leverage = leverage
         self._max_open_spreads = max_open_spreads
         self._primary_symbol = primary_symbol
+
+        # Dynamic position sizing based on Half-Life
+        self._target_halflife = target_halflife_bars
+        self._min_size_mult = min_size_multiplier
+        self._max_size_mult = max_size_multiplier
 
         self._is_running = False
 
@@ -226,14 +237,21 @@ class TradingService:
                 self._logger.warning(f"⚠️ Cannot open position: {reason}")
                 return
 
-            # 2. Check balance
-            balance = await self._exchange.get_balance("USDT")
-            available = balance.free
-
-            # Calculate required USDT for both legs
-            coin_size_usdt = self._position_size_usdt
+            # 2. Calculate dynamic position size based on half-life
+            size_multiplier = self._calculate_size_multiplier(event.halflife)
+            coin_size_usdt = self._position_size_usdt * size_multiplier
             primary_size_usdt = coin_size_usdt * abs(event.beta)
             total_required = coin_size_usdt + primary_size_usdt
+
+            self._logger.info(
+                f"📊 Position sizing: base={self._position_size_usdt:.0f} × "
+                f"mult={size_multiplier:.2f}x (HL={event.halflife:.1f}) = "
+                f"coin={coin_size_usdt:.2f} USDT"
+            )
+
+            # 3. Check balance
+            balance = await self._exchange.get_balance("USDT")
+            available = balance.free
 
             if available < total_required:
                 self._logger.warning(
@@ -242,7 +260,7 @@ class TradingService:
                 )
                 return
 
-            # 3. Open atomic spread positions
+            # 4. Open atomic spread positions
             await self._open_spread(event, coin_size_usdt, primary_size_usdt)
 
         except Exception as e:
@@ -345,9 +363,7 @@ class TradingService:
         try:
             # Execute both positions in parallel
             results = await asyncio.gather(
-                self._open_position_with_retry(
-                    coin_symbol, coin_side, coin_contracts
-                ),
+                self._open_position_with_retry(coin_symbol, coin_side, coin_contracts),
                 self._open_position_with_retry(
                     primary_symbol, primary_side, primary_contracts
                 ),
@@ -392,6 +408,7 @@ class TradingService:
                     entry_beta=event.beta,
                     entry_correlation=event.correlation,
                     entry_hurst=event.hurst,
+                    entry_halflife=event.halflife,
                     coin_size_usdt=coin_size_usdt,
                     primary_size_usdt=primary_size_usdt,
                     coin_contracts=coin_contracts,
@@ -421,6 +438,7 @@ class TradingService:
                         beta=event.beta,
                         correlation=event.correlation,
                         hurst=event.hurst,
+                        halflife=event.halflife,
                         spread_mean=event.spread_mean,
                         spread_std=event.spread_std,
                         coin_size_usdt=coin_size_usdt,
@@ -629,7 +647,9 @@ class TradingService:
         # Determine close side for PRIMARY partial close
         # LONG spread: Buy COIN, Sell PRIMARY -> PRIMARY is short -> close with BUY
         # SHORT spread: Sell COIN, Buy PRIMARY -> PRIMARY is long -> close with SELL
-        primary_close_side: TradeSide = "buy" if position.side.value == "long" else "sell"
+        primary_close_side: TradeSide = (
+            "buy" if position.side.value == "long" else "sell"
+        )
 
         try:
             # Close COIN entirely, close PRIMARY partially (only the amount for this spread)
@@ -771,6 +791,38 @@ class TradingService:
     # =========================================================================
     # Helpers
     # =========================================================================
+
+    def _calculate_size_multiplier(self, halflife: float) -> float:
+        """
+        Calculate position size multiplier based on half-life.
+
+        Formula: multiplier = TargetHalfLife / CurrentHalfLife
+        - Fast reversion (low HL) → larger size (up to max_size_mult)
+        - Slow reversion (high HL) → smaller size (down to min_size_mult)
+
+        Args:
+            halflife: Half-life in bars for the spread.
+
+        Returns:
+            Position size multiplier (clamped to [min, max]).
+        """
+        if halflife <= 0:
+            # Invalid halflife, use base size (multiplier = 1.0)
+            self._logger.warning(f"Invalid halflife={halflife}, using multiplier=1.0")
+            return 1.0
+
+        multiplier = self._target_halflife / halflife
+
+        # Clamp to limits
+        clamped = max(self._min_size_mult, min(self._max_size_mult, multiplier))
+
+        self._logger.debug(
+            f"Size multiplier: target_HL={self._target_halflife} / "
+            f"current_HL={halflife:.1f} = {multiplier:.2f} → "
+            f"clamped={clamped:.2f}x"
+        )
+
+        return clamped
 
     def _log_release_symbols(self, coin_symbol: str, primary_symbol: str) -> None:
         """Log symbol release (state is managed by PositionStateService)."""

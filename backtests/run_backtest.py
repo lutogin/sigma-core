@@ -301,7 +301,7 @@ class BacktestConfig:
     # Maximum position duration before forced exit (in bars)
     # 144 bars = 32 hours for 15m timeframe
     # 96 bars = 24 hours for 15m timeframe
-    max_position_bars: int = 96  # 24 hours
+    max_position_bars: int = 128 # 36 hours
 
     # Funding filter
     # Block entry if net funding cost exceeds this threshold per 8h
@@ -327,6 +327,18 @@ class BacktestConfig:
     )
 
     use_adf_filter: bool = True  # Enable ADF filter
+    adf_pvalue_threshold: float = 0.15  # Maximum ADF p-value to enter
+    adf_lookback_candles: int = (
+        300  # Number of candles to look back for ADF calculation
+    )
+
+    # Dynamic position sizing based on HalfLife
+    # Size = BaseSize * (TargetHalfLife / CurrentHalfLife)
+    # Faster mean reversion -> larger position, slower -> smaller position
+    use_dynamic_position_size: bool = False  # Enable dynamic position sizing
+    target_halflife_bars: int = 12  # Target half-life in bars (3 hours for 15m)
+    halflife_multiplier_min: float = 0.5  # Minimum position size multiplier
+    halflife_multiplier_max: float = 2.0  # Maximum position size multiplier
 
 
 @dataclass
@@ -378,11 +390,11 @@ class BacktestWatchCandidate:
     start_time: datetime
     beta: float
     spread_mean: float
-    spread_mean: float
     spread_std: float
     z_entry_threshold: float
     z_sl_threshold: float
     correlation: float
+    halflife: Optional[float] = None  # HalfLife in bars for dynamic position sizing
 
 
 @dataclass
@@ -960,6 +972,85 @@ class StatArbBacktest:
 
         return is_acceptable
 
+    def _get_halflife_for_symbol(
+        self,
+        symbol: str,
+        window_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict,
+    ) -> Optional[float]:
+        """
+        Calculate and return the HalfLife value for a symbol.
+
+        Args:
+            symbol: Symbol to calculate halflife for
+            window_data: OHLCV data
+            correlation_results: Correlation results with beta values
+
+        Returns:
+            HalfLife in bars, or None if calculation fails
+        """
+        if (
+            not self.halflife_filter_service
+            or not self.halflife_filter_service.is_available
+        ):
+            return None
+
+        primary_df = window_data.get(self.primary_pair)
+        coin_df = window_data.get(symbol)
+
+        if primary_df is None or coin_df is None or primary_df.empty or coin_df.empty:
+            return None
+
+        corr_result = correlation_results.get(symbol)
+        if corr_result is None:
+            return None
+
+        beta = corr_result.latest_beta
+        coin_log_prices = coin_df["close"].apply(np.log)
+        primary_log_prices = primary_df["close"].apply(np.log)
+
+        halflife = self.halflife_filter_service.calculate_for_spread(
+            coin_log_prices=coin_log_prices,
+            primary_log_prices=primary_log_prices,
+            beta=beta,
+        )
+
+        return halflife if halflife is not None and halflife > 0 else None
+
+    def _calculate_halflife_multiplier(self, halflife: Optional[float]) -> float:
+        """
+        Calculate position size multiplier based on HalfLife.
+
+        Formula: multiplier = TargetHalfLife / CurrentHalfLife
+        - Faster reversion (HL < target) -> larger position (multiplier > 1)
+        - Slower reversion (HL > target) -> smaller position (multiplier < 1)
+
+        Args:
+            halflife: HalfLife in bars
+
+        Returns:
+            Position size multiplier (clamped to min/max bounds)
+        """
+        if not self.config.use_dynamic_position_size:
+            return 1.0
+
+        if halflife is None or halflife <= 0:
+            return 1.0
+
+        target = self.config.target_halflife_bars
+        if target <= 0:
+            return 1.0
+
+        multiplier = target / halflife
+
+        # Clamp to configured bounds
+        multiplier = max(
+            self.config.halflife_multiplier_min,
+            min(self.config.halflife_multiplier_max, multiplier),
+        )
+
+        return multiplier
+
     def _check_hurst_exit(
         self,
         symbol: str,
@@ -1243,6 +1334,8 @@ class StatArbBacktest:
                     z_result=z_result,
                     current_time=current_time,
                     current_bar_idx=current_bar_idx,
+                    window_data=window_data,
+                    correlation_results=correlation_results,
                 )
             else:
                 # Immediate entry (original behavior)
@@ -1254,6 +1347,7 @@ class StatArbBacktest:
                     current_bar_idx=current_bar_idx,
                     window_data=window_data,
                     dynamic_threshold=dyn_threshold,
+                    correlation_results=correlation_results,
                 )
 
     # =========================================================================
@@ -1267,6 +1361,8 @@ class StatArbBacktest:
         z_result: ZScoreResult,
         current_time: datetime,
         current_bar_idx: int,
+        window_data: Optional[Dict[str, pd.DataFrame]] = None,
+        correlation_results: Optional[Dict] = None,
     ) -> None:
         """Start watching a symbol for trailing entry."""
         # Calculate spread_mean and spread_std from the spread_series
@@ -1275,6 +1371,17 @@ class StatArbBacktest:
         recent_spread = z_result.spread_series.tail(lookback).dropna()
         spread_mean = float(recent_spread.mean()) if len(recent_spread) > 0 else 0.0
         spread_std = float(recent_spread.std()) if len(recent_spread) > 1 else 1.0
+
+        # Calculate halflife for dynamic position sizing if enabled
+        halflife = None
+        if (
+            self.config.use_dynamic_position_size
+            and window_data
+            and correlation_results
+        ):
+            halflife = self._get_halflife_for_symbol(
+                symbol, window_data, correlation_results
+            )
 
         watch = BacktestWatchCandidate(
             symbol=symbol,
@@ -1289,11 +1396,13 @@ class StatArbBacktest:
             z_entry_threshold=z_result.dynamic_entry_threshold,
             z_sl_threshold=self.config.z_sl_threshold,
             correlation=z_result.current_correlation,
+            halflife=halflife,
         )
         self.watch_candidates[symbol] = watch
+        hl_str = f" | HL={halflife:.1f}" if halflife else ""
         print(
             f"👀 WATCH START {symbol} | Z={z_result.current_z_score:.2f} | "
-            f"side={side} | pullback_target={watch.max_z - self.config.trailing_pullback:.2f}"
+            f"side={side} | pullback_target={watch.max_z - self.config.trailing_pullback:.2f}{hl_str}"
         )
 
     async def _process_watches(
@@ -1613,8 +1722,12 @@ class StatArbBacktest:
         coin_price = window_data[symbol]["close"].iloc[-1]
         primary_price = window_data[self.primary_pair]["close"].iloc[-1]
 
-        # Calculate position size
-        position_size = self.balance * self.config.position_size_pct
+        # Calculate base position size
+        base_position_size = self.balance * self.config.position_size_pct
+
+        # Apply HalfLife-based dynamic position sizing if enabled
+        multiplier = self._calculate_halflife_multiplier(watch.halflife)
+        position_size = base_position_size * multiplier
 
         # Position sizing
         beta = abs(watch.beta)
@@ -1640,11 +1753,14 @@ class StatArbBacktest:
         self.positions[symbol] = position
 
         watch_duration = (entry_time - watch.start_time).total_seconds() / 60
+        multiplier_str = (
+            f" | HL={watch.halflife:.1f} x{multiplier:.2f}" if multiplier != 1.0 else ""
+        )
         print(
             f"✅ WATCH ENTRY {symbol} | Z={entry_z:.2f} (peak={watch.max_z:.2f}) | "
             f"pullback={watch.max_z - abs(entry_z):.2f} | "
             f"watch_duration={watch_duration:.0f}min | "
-            f"β={beta:.3f}"
+            f"β={beta:.3f}{multiplier_str}"
         )
         self._print_portfolio_state()
 
@@ -1845,6 +1961,7 @@ class StatArbBacktest:
         current_bar_idx: int,
         window_data: Dict[str, pd.DataFrame],
         dynamic_threshold: float,
+        correlation_results: Optional[Dict] = None,
     ) -> None:
         """
         Open a spread position (two legs).
@@ -1855,8 +1972,19 @@ class StatArbBacktest:
 
         The PnL comes from the spread reverting to mean, not from directional price moves.
         """
-        # Calculate position size
-        position_size = self.balance * self.config.position_size_pct
+        # Calculate base position size
+        base_position_size = self.balance * self.config.position_size_pct
+
+        # Apply HalfLife-based dynamic position sizing if enabled
+        halflife = None
+        multiplier = 1.0
+        if self.config.use_dynamic_position_size and correlation_results:
+            halflife = self._get_halflife_for_symbol(
+                symbol, window_data, correlation_results
+            )
+            multiplier = self._calculate_halflife_multiplier(halflife)
+
+        position_size = base_position_size * multiplier
 
         # Get current prices
         coin_price = window_data[symbol]["close"].iloc[-1]
@@ -1890,9 +2018,13 @@ class StatArbBacktest:
 
         self.positions[symbol] = position
 
+        # Log with multiplier info if dynamic sizing is used
+        multiplier_str = (
+            f" | HL={halflife:.1f} x{multiplier:.2f}" if multiplier != 1.0 else ""
+        )
         print(
             f"OPEN {side.upper()} SPREAD {symbol} | "
-            f"Z={z_result.current_z_score:.2f} (th={dynamic_threshold:.2f}) β={beta:.3f} | "
+            f"Z={z_result.current_z_score:.2f} (th={dynamic_threshold:.2f}) β={beta:.3f}{multiplier_str} | "
             f"Coin: ${coin_size:.2f} @ {coin_price:.4f} | "
             f"Hedge: ${primary_size:.2f} @ {primary_price:.4f}"
         )
@@ -2564,7 +2696,6 @@ Examples:
     config = BacktestConfig(
         consistent_pairs=consistent_pairs,
         use_dynamic_tp=args.use_dynamic_tp,
-        max_position_bars=settings.MAX_POSITION_BARS,
         use_funding_filter=not args.no_funding_filter,
         max_funding_cost_threshold=settings.MAX_FUNDING_COST_THRESHOLD,
     )
@@ -2645,8 +2776,8 @@ Examples:
         # Create ADF filter service
         adf_filter_service = ADFFilterService(
             logger=logger,
-            pvalue_threshold=settings.ADF_PVALUE_THRESHOLD,
-            lookback_candles=settings.ADF_LOOKBACK_CANDLES,
+            pvalue_threshold=config.adf_pvalue_threshold or settings.ADF_PVALUE_THRESHOLD,
+            lookback_candles=config.adf_lookback_candles or settings.ADF_LOOKBACK_CANDLES,
         )
 
         # Create Half-Life filter service
