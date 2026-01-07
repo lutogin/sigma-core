@@ -229,11 +229,14 @@ class EntryObserverService:
                 abs_new_z = abs(new_z)
 
                 # RE-VALIDATE: Check if signal still valid with new parameters
-                if abs_new_z < event.z_entry_threshold:
+                # Use hysteresis to prevent premature cancellation on minor Z drops
+                # Same logic as FALSE_ALARM check during trailing
+                invalidation_level = event.z_entry_threshold - self._false_alarm_hysteresis
+                if abs_new_z < invalidation_level:
                     # Signal disappeared after parameter update - cancel watch
                     self._logger.info(
                         f"🔄❌ Watch {coin} INVALIDATED after param update | "
-                        f"new_Z={new_z:.2f} < threshold={event.z_entry_threshold:.2f} | "
+                        f"new_Z={new_z:.2f} < invalidation_level={invalidation_level:.2f} | "
                         f"std: {old_std:.4f}→{event.spread_std:.4f}"
                     )
                     # Release lock before cancelling

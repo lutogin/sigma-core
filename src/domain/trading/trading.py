@@ -796,9 +796,17 @@ class TradingService:
         """
         Calculate position size multiplier based on half-life.
 
-        Formula: multiplier = TargetHalfLife / CurrentHalfLife
-        - Fast reversion (low HL) → larger size (up to max_size_mult)
-        - Slow reversion (high HL) → smaller size (down to min_size_mult)
+        Formula: multiplier = sqrt(TargetHalfLife / CurrentHalfLife)
+        Using sqrt dampens extreme values:
+        - Fast reversion (low HL) → larger size, but not as aggressive
+        - Slow reversion (high HL) → smaller size, but not as punishing
+
+        Example with target=12:
+        - HL=3  → sqrt(12/3)  = sqrt(4)  = 2.0x (capped)
+        - HL=6  → sqrt(12/6)  = sqrt(2)  = 1.41x
+        - HL=12 → sqrt(12/12) = sqrt(1)  = 1.0x (baseline)
+        - HL=24 → sqrt(12/24) = sqrt(0.5)= 0.71x
+        - HL=48 → sqrt(12/48) = sqrt(0.25)= 0.5x (floor)
 
         Args:
             halflife: Half-life in bars for the spread.
@@ -806,19 +814,22 @@ class TradingService:
         Returns:
             Position size multiplier (clamped to [min, max]).
         """
+        import math
+
         if halflife <= 0:
             # Invalid halflife, use base size (multiplier = 1.0)
-            self._logger.warning(f"Invalid halflife={halflife}, using multiplier=1.0")
+            self._logger.error(f"Invalid halflife={halflife}, using multiplier=1.0")
             return 1.0
 
-        multiplier = self._target_halflife / halflife
+        # Use sqrt to dampen extreme multipliers
+        raw_multiplier = math.sqrt(self._target_halflife / halflife)
 
         # Clamp to limits
-        clamped = max(self._min_size_mult, min(self._max_size_mult, multiplier))
+        clamped = max(self._min_size_mult, min(self._max_size_mult, raw_multiplier))
 
         self._logger.debug(
-            f"Size multiplier: target_HL={self._target_halflife} / "
-            f"current_HL={halflife:.1f} = {multiplier:.2f} → "
+            f"Size multiplier: sqrt({self._target_halflife} / "
+            f"{halflife:.1f}) = {raw_multiplier:.2f} → "
             f"clamped={clamped:.2f}x"
         )
 

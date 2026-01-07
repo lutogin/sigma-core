@@ -281,7 +281,7 @@ class BacktestConfig:
     max_spreads: int = 3  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
-    z_entry_threshold: float = 2.0  # |Z| >= this to enter
+    z_entry_threshold: float = 2.1  # |Z| >= this to enter
     z_tp_threshold: float = 0.25  # |Z| <= this to take profit
     z_sl_threshold: float = 4.0  # |Z| >= this to stop loss
     min_correlation: float = 0.8  # Minimum correlation to trade
@@ -301,7 +301,7 @@ class BacktestConfig:
     # Maximum position duration before forced exit (in bars)
     # 144 bars = 32 hours for 15m timeframe
     # 96 bars = 24 hours for 15m timeframe
-    max_position_bars: int = 128 # 36 hours
+    max_position_bars: int = 192  # 48 hours
 
     # Funding filter
     # Block entry if net funding cost exceeds this threshold per 8h
@@ -318,6 +318,8 @@ class BacktestConfig:
     # Entry requires H < threshold (0.45), holding allows H < threshold + tolerance (0.50)
     hurst_watch_tolerance: float = 0.005
 
+    halflife_max_bars: int = 64  # 16 hours
+
     # Trailing Entry settings (simulation of live EntryObserverService)
     use_trailing_entry: bool = False  # Enable trailing entry simulation
     trailing_pullback: float = 0.05  # Z-score pullback for reversal confirmation
@@ -327,7 +329,7 @@ class BacktestConfig:
     )
 
     use_adf_filter: bool = True  # Enable ADF filter
-    adf_pvalue_threshold: float = 0.15  # Maximum ADF p-value to enter
+    adf_pvalue_threshold: float = 0.12  # Maximum ADF p-value to enter
     adf_lookback_candles: int = (
         300  # Number of candles to look back for ADF calculation
     )
@@ -335,10 +337,10 @@ class BacktestConfig:
     # Dynamic position sizing based on HalfLife
     # Size = BaseSize * (TargetHalfLife / CurrentHalfLife)
     # Faster mean reversion -> larger position, slower -> smaller position
-    use_dynamic_position_size: bool = False  # Enable dynamic position sizing
-    target_halflife_bars: int = 12  # Target half-life in bars (3 hours for 15m)
+    use_dynamic_position_size: bool = True  # Enable dynamic position sizing
+    target_halflife_bars: int = 16  # Target half-life in bars (4 hours for 15m)
     halflife_multiplier_min: float = 0.5  # Minimum position size multiplier
-    halflife_multiplier_max: float = 2.0  # Maximum position size multiplier
+    halflife_multiplier_max: float = 2.1  # Maximum position size multiplier
 
 
 @dataclass
@@ -1021,9 +1023,17 @@ class StatArbBacktest:
         """
         Calculate position size multiplier based on HalfLife.
 
-        Formula: multiplier = TargetHalfLife / CurrentHalfLife
-        - Faster reversion (HL < target) -> larger position (multiplier > 1)
-        - Slower reversion (HL > target) -> smaller position (multiplier < 1)
+        Formula: multiplier = sqrt(TargetHalfLife / CurrentHalfLife)
+        Using sqrt dampens extreme values:
+        - Faster reversion (HL < target) -> larger position, but not as aggressive
+        - Slower reversion (HL > target) -> smaller position, but not as punishing
+
+        Example with target=12:
+        - HL=3  → sqrt(12/3)  = sqrt(4)  = 2.0x (capped)
+        - HL=6  → sqrt(12/6)  = sqrt(2)  = 1.41x
+        - HL=12 → sqrt(12/12) = sqrt(1)  = 1.0x (baseline)
+        - HL=24 → sqrt(12/24) = sqrt(0.5)= 0.71x
+        - HL=48 → sqrt(12/48) = sqrt(0.25)= 0.5x (floor)
 
         Args:
             halflife: HalfLife in bars
@@ -1041,12 +1051,13 @@ class StatArbBacktest:
         if target <= 0:
             return 1.0
 
-        multiplier = target / halflife
+        # Use sqrt to dampen extreme multipliers
+        raw_multiplier = math.sqrt(target / halflife)
 
         # Clamp to configured bounds
         multiplier = max(
             self.config.halflife_multiplier_min,
-            min(self.config.halflife_multiplier_max, multiplier),
+            min(self.config.halflife_multiplier_max, raw_multiplier),
         )
 
         return multiplier
@@ -1109,11 +1120,9 @@ class StatArbBacktest:
 
         if is_trending:
             print(
-                f"📈 {symbol} Hurst={hurst:.3f} >= {max_allowed_hurst:.2f} "
+                f"📈 {symbol} Hurst={hurst:.3f} >= {max_allowed_hurst:.3f} "
                 f"(spread became trending, exit position)"
             )
-
-        return is_trending
 
         return is_trending
 
@@ -1448,6 +1457,14 @@ class StatArbBacktest:
                 if len(recent_spread) > 1:
                     watch.spread_std = float(recent_spread.std())
 
+                # Update halflife for dynamic position sizing (like production)
+                if self.config.use_dynamic_position_size:
+                    new_halflife = self._get_halflife_for_symbol(
+                        symbol, window_data, correlation_results
+                    )
+                    if new_halflife is not None:
+                        watch.halflife = new_halflife
+
                 # Recalculate Z with new parameters
                 coin_price = window_data[symbol]["close"].iloc[-1]
                 primary_price = window_data[self.primary_pair]["close"].iloc[-1]
@@ -1461,10 +1478,15 @@ class StatArbBacktest:
                 abs_new_z = abs(new_z)
 
                 # RE-VALIDATE: Check if signal still valid
-                if abs_new_z < watch.z_entry_threshold:
+                # Use hysteresis to prevent premature cancellation on minor Z drops
+                # Same logic as FALSE_ALARM check during trailing
+                invalidation_level = (
+                    watch.z_entry_threshold - self.config.false_alarm_hysteresis
+                )
+                if abs_new_z < invalidation_level:
                     print(
                         f"🔄❌ WATCH {symbol} INVALIDATED after param update | "
-                        f"new_Z={new_z:.2f} < threshold={watch.z_entry_threshold:.2f} | "
+                        f"new_Z={new_z:.2f} < invalidation_level={invalidation_level:.2f} | "
                         f"std: {old_std:.4f}→{watch.spread_std:.4f}"
                     )
                     watches_to_remove.append((symbol, "PARAM_INVALIDATED"))
@@ -1578,6 +1600,16 @@ class StatArbBacktest:
                         watch=watch,
                         window_data=window_data,
                     )
+                elif action == "TIMEOUT":
+                    # Watch timed out during 1m simulation (like production)
+                    watch_duration = (
+                        entry_time - watch.start_time
+                    ).total_seconds() / 60
+                    print(
+                        f"⏰ WATCH TIMEOUT {symbol} at 1m candle | "
+                        f"duration={watch_duration:.0f}min | max_z={watch.max_z:.2f}"
+                    )
+                    watches_to_remove.append((symbol, "TIMEOUT"))
                 else:
                     # Watch cancelled (FALSE_ALARM, SL_HIT)
                     print(
@@ -1616,13 +1648,15 @@ class StatArbBacktest:
 
         Uses same logic as EntryObserverService._process_price_update():
         1. Check pullback (ENTRY) - FIRST priority
-        2. Check false alarm with HYSTERESIS
-        3. Check SL hit
-        4. Update max_z if still widening
+        2. Check timeout (must be checked on each 1m candle like production)
+        3. Check false alarm with HYSTERESIS
+        4. Check SL hit
+        5. Update max_z if still widening
 
         Returns:
             Tuple of (action, timestamp, z_score) where action is:
             - "ENTER": Entry confirmed after pullback
+            - "TIMEOUT": Watch exceeded timeout duration
             - "FALSE_ALARM": Z dropped significantly below entry threshold
             - "SL_HIT": Z exceeded stop-loss
             - None: Still watching
@@ -1631,6 +1665,11 @@ class StatArbBacktest:
 
         # Calculate false alarm level with hysteresis
         false_alarm_level = watch.z_entry_threshold - self.config.false_alarm_hysteresis
+
+        # Calculate timeout threshold (like production checks on each tick)
+        timeout_threshold = watch.start_time + timedelta(
+            minutes=self.config.trailing_timeout_minutes
+        )
 
         # Align data
         common_index = coin_1m.index.intersection(primary_1m.index)
@@ -1651,18 +1690,24 @@ class StatArbBacktest:
 
             # 1. Check pullback (ENTRY) - FIRST priority
             if abs_z <= max_z - self.config.trailing_pullback:
+                # Update watch.max_z before returning so logs show correct peak
+                watch.max_z = max_z
                 return ("ENTER", ts, live_z)
 
-            # 2. Check false alarm with HYSTERESIS
+            # 2. Check timeout (like production - on each tick)
+            if ts >= timeout_threshold:
+                return ("TIMEOUT", ts, live_z)
+
+            # 3. Check false alarm with HYSTERESIS
             # Only cancel if Z dropped SIGNIFICANTLY below threshold
             if abs_z < false_alarm_level:
                 return ("FALSE_ALARM", ts, live_z)
 
-            # 3. Check SL hit
+            # 4. Check SL hit
             if abs_z >= watch.z_sl_threshold:
                 return ("SL_HIT", ts, live_z)
 
-            # 4. Update max_z if still widening
+            # 5. Update max_z if still widening
             if abs_z > max_z:
                 max_z = abs_z
 
@@ -1703,6 +1748,14 @@ class StatArbBacktest:
                 start_time=start_time,
                 end_time=end_time,
             )
+
+            if df is None or df.empty:
+                return None
+
+            # Filter to ensure we only have candles within the requested range
+            # This prevents returning old data that could cause negative watch_duration
+            df = df[(df.index >= start_time) & (df.index <= end_time)]
+
             return df if not df.empty else None
         except Exception as e:
             return None
@@ -2776,14 +2829,16 @@ Examples:
         # Create ADF filter service
         adf_filter_service = ADFFilterService(
             logger=logger,
-            pvalue_threshold=config.adf_pvalue_threshold or settings.ADF_PVALUE_THRESHOLD,
-            lookback_candles=config.adf_lookback_candles or settings.ADF_LOOKBACK_CANDLES,
+            pvalue_threshold=config.adf_pvalue_threshold
+            or settings.ADF_PVALUE_THRESHOLD,
+            lookback_candles=config.adf_lookback_candles
+            or settings.ADF_LOOKBACK_CANDLES,
         )
 
         # Create Half-Life filter service
         halflife_filter_service = HalfLifeFilterService(
             logger=logger,
-            max_bars=settings.HALFLIFE_MAX_BARS,
+            max_bars=config.halflife_max_bars or settings.HALFLIFE_MAX_BARS,
             lookback_candles=settings.HALFLIFE_LOOKBACK_CANDLES,
         )
         print(

@@ -285,7 +285,7 @@ class BacktestConfig:
     # Capital
     initial_balance: float = 40_000.0  # Starting capital in USDT
     position_size_pct: float = 0.35  # 3% of capital per spread
-    max_spreads: int = 3  # Maximum concurrent spread positions
+    max_spreads: int = 4  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
     z_entry_threshold: float = 2.1  # |Z| >= this to enter
@@ -299,7 +299,7 @@ class BacktestConfig:
     use_limit_orders: bool = True  # Use maker fees (limit orders)
 
     # Risk
-    leverage: int = 5  # Leverage multiplier
+    leverage: int = 10  # Leverage multiplier
 
     # Cooldown after adverse exits (SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
     # 2 bars = 30 minutes for 15m timeframe
@@ -313,7 +313,7 @@ class BacktestConfig:
     # Funding filter
     # Block entry if net funding cost exceeds this threshold per 8h
     # -0.0005 = -0.05% (5x standard rate of 0.01%)
-    max_funding_cost_threshold: float = -0.0005
+    max_funding_cost_threshold: float = -0.001
     use_funding_filter: bool = True  # Enable/disable funding filter
 
     # Trading pairs (from settings or CLI)
@@ -325,16 +325,18 @@ class BacktestConfig:
     # Entry requires H < threshold (0.45), holding allows H < threshold + tolerance(0.02) (0.47)
     hurst_watch_tolerance: float = 0.005
 
+    halflife_max_bars: int = 64  # 16 hours
+
     # Trailing Entry settings (simulation of live EntryObserverService)
     use_trailing_entry: bool = True  # Enable trailing entry simulation
-    trailing_pullback: float = 0.02  # Z-score pullback for reversal confirmation
+    trailing_pullback: float = 0.05  # Z-score pullback for reversal confirmation
     trailing_timeout_minutes: int = 240  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
         0.35  # Cancel watch only if Z drops this much below threshold
     )
 
     use_adf_filter: bool = True  # Enable ADF filter
-    adf_pvalue_threshold: float = 0.15  # Maximum ADF p-value to enter
+    adf_pvalue_threshold: float = 0.12  # Maximum ADF p-value to enter
     adf_lookback_candles: int = (
         300  # Number of candles to look back for ADF calculation
     )
@@ -343,9 +345,9 @@ class BacktestConfig:
     # Size = BaseSize * (TargetHalfLife / CurrentHalfLife)
     # Faster mean reversion -> larger position, slower -> smaller position
     use_dynamic_position_size: bool = True  # Enable dynamic position sizing
-    target_halflife_bars: int = 12  # Target half-life in bars (3 hours for 15m)
+    target_halflife_bars: int = 16  # Target half-life in bars (4 hours for 15m)
     halflife_multiplier_min: float = 0.5  # Minimum position size multiplier
-    halflife_multiplier_max: float = 2.0  # Maximum position size multiplier
+    halflife_multiplier_max: float = 2.1  # Maximum position size multiplier
 
 
 @dataclass
@@ -797,10 +799,13 @@ class StatArbBacktest:
         # Filter by correlation
         filtered_results = self._filter_by_correlation(z_score_results)
 
-        # Step 1: Simulate ExitObserver - check TP/SL on 1m candles FIRST
-        # This mirrors live bot where ExitObserver can exit at any moment
-        # before the 15m Orchestrator scan
-        await self._simulate_exit_observer(current_time, current_bar_idx, window_data)
+        # Step 1: Simulate ExitObserver - check TP/SL
+        # When use_trailing_entry=True: check on 1m candles (mirrors live bot)
+        # When use_trailing_entry=False: TP/SL checked in _check_structural_exits on 15m
+        if self.config.use_trailing_entry:
+            await self._simulate_exit_observer(
+                current_time, current_bar_idx, window_data
+            )
 
         # Step 2: Check structural exits for remaining open positions
         await self._check_structural_exits(
@@ -1099,9 +1104,17 @@ class StatArbBacktest:
         """
         Calculate position size multiplier based on HalfLife.
 
-        Formula: multiplier = TargetHalfLife / CurrentHalfLife
-        - Faster reversion (HL < target) -> larger position (multiplier > 1)
-        - Slower reversion (HL > target) -> smaller position (multiplier < 1)
+        Formula: multiplier = sqrt(TargetHalfLife / CurrentHalfLife)
+        Using sqrt dampens extreme values:
+        - Faster reversion (HL < target) -> larger position, but not as aggressive
+        - Slower reversion (HL > target) -> smaller position, but not as punishing
+
+        Example with target=12:
+        - HL=3  → sqrt(12/3)  = sqrt(4)  = 2.0x (capped)
+        - HL=6  → sqrt(12/6)  = sqrt(2)  = 1.41x
+        - HL=12 → sqrt(12/12) = sqrt(1)  = 1.0x (baseline)
+        - HL=24 → sqrt(12/24) = sqrt(0.5)= 0.71x
+        - HL=48 → sqrt(12/48) = sqrt(0.25)= 0.5x (floor)
 
         Args:
             halflife: HalfLife in bars
@@ -1119,12 +1132,13 @@ class StatArbBacktest:
         if target <= 0:
             return 1.0
 
-        multiplier = target / halflife
+        # Use sqrt to dampen extreme multipliers
+        raw_multiplier = math.sqrt(target / halflife)
 
         # Clamp to configured bounds
         multiplier = max(
             self.config.halflife_multiplier_min,
-            min(self.config.halflife_multiplier_max, multiplier),
+            min(self.config.halflife_multiplier_max, raw_multiplier),
         )
 
         return multiplier
@@ -1187,7 +1201,7 @@ class StatArbBacktest:
 
         if is_trending:
             print(
-                f"📈 {symbol} Hurst={hurst:.3f} >= {max_allowed_hurst:.2f} "
+                f"📈 {symbol} Hurst={hurst:.3f} >= {max_allowed_hurst:.3f} "
                 f"(spread became trending, exit position)"
             )
 
@@ -1239,13 +1253,17 @@ class StatArbBacktest:
         """
         Check STRUCTURAL exit conditions for open positions.
 
-        Like the live Orchestrator, this only checks:
+        Like the live Orchestrator, this checks:
         1. TIMEOUT: Position held too long
         2. CORRELATION_DROP: Correlation dropped below threshold
         3. HURST_TRENDING: Spread became trending
 
-        Z-Score TP/SL are checked separately via _simulate_exit_observer()
-        using "frozen" entry parameters to avoid "moving goalposts" problem.
+        When use_trailing_entry=True:
+            Z-Score TP/SL are checked separately via _simulate_exit_observer()
+            using "frozen" entry parameters on 1m candles.
+
+        When use_trailing_entry=False:
+            Z-Score TP/SL are checked here on 15m candles using frozen parameters.
         """
         positions_to_close = []
 
@@ -1271,8 +1289,39 @@ class StatArbBacktest:
                 if self._check_hurst_exit(symbol, window_data, correlation_results):
                     exit_reason = "HURST_TRENDING"
 
-            # NOTE: Z-Score TP/SL are NOT checked here!
-            # They are handled by _simulate_exit_observer() using frozen parameters
+            # 5. Z-Score TP/SL on 15m candles (when use_trailing_entry=False)
+            # When use_trailing_entry=True, this is handled by _simulate_exit_observer on 1m
+            if exit_reason is None and not self.config.use_trailing_entry:
+                coin_price = window_data[symbol]["close"].iloc[-1]
+                primary_price = window_data[self.primary_pair]["close"].iloc[-1]
+
+                # Calculate Z-score using FROZEN parameters from entry
+                live_z = self._calculate_live_z(
+                    coin_price,
+                    primary_price,
+                    position.entry_beta,
+                    position.spread_mean,
+                    position.spread_std,
+                )
+                abs_z = abs(live_z)
+
+                # Calculate dynamic TP threshold based on time held
+                if self.config.use_dynamic_tp:
+                    time_coef = self._get_time_based_tp_coefficient(bars_held)
+                    reference_z = (
+                        position.peak_z_score
+                        if position.peak_z_score > 0
+                        else abs(position.entry_z_score)
+                    )
+                    dynamic_tp = max(reference_z * time_coef, position.z_tp_threshold)
+                else:
+                    dynamic_tp = position.z_tp_threshold
+
+                # Check TP/SL
+                if abs_z <= dynamic_tp:
+                    exit_reason = "TP"
+                elif abs_z >= position.z_sl_threshold:
+                    exit_reason = "SL"
 
             if exit_reason:
                 positions_to_close.append((symbol, exit_reason))
@@ -1712,6 +1761,14 @@ class StatArbBacktest:
                 if len(recent_spread) > 1:
                     watch.spread_std = float(recent_spread.std())
 
+                # Update halflife for dynamic position sizing (like production)
+                if self.config.use_dynamic_position_size:
+                    new_halflife = self._get_halflife_for_symbol(
+                        symbol, window_data, correlation_results
+                    )
+                    if new_halflife is not None:
+                        watch.halflife = new_halflife
+
                 # Recalculate Z with new parameters
                 coin_price = window_data[symbol]["close"].iloc[-1]
                 primary_price = window_data[self.primary_pair]["close"].iloc[-1]
@@ -1725,10 +1782,15 @@ class StatArbBacktest:
                 abs_new_z = abs(new_z)
 
                 # RE-VALIDATE: Check if signal still valid
-                if abs_new_z < watch.z_entry_threshold:
+                # Use hysteresis to prevent premature cancellation on minor Z drops
+                # Same logic as FALSE_ALARM check during trailing
+                invalidation_level = (
+                    watch.z_entry_threshold - self.config.false_alarm_hysteresis
+                )
+                if abs_new_z < invalidation_level:
                     print(
                         f"🔄❌ WATCH {symbol} INVALIDATED after param update | "
-                        f"new_Z={new_z:.2f} < threshold={watch.z_entry_threshold:.2f} | "
+                        f"new_Z={new_z:.2f} < invalidation_level={invalidation_level:.2f} | "
                         f"std: {old_std:.4f}→{watch.spread_std:.4f}"
                     )
                     watches_to_remove.append((symbol, "PARAM_INVALIDATED"))
@@ -1842,6 +1904,16 @@ class StatArbBacktest:
                         watch=watch,
                         window_data=window_data,
                     )
+                elif action == "TIMEOUT":
+                    # Watch timed out during 1m simulation (like production)
+                    watch_duration = (
+                        entry_time - watch.start_time
+                    ).total_seconds() / 60
+                    print(
+                        f"⏰ WATCH TIMEOUT {symbol} at 1m candle | "
+                        f"duration={watch_duration:.0f}min | max_z={watch.max_z:.2f}"
+                    )
+                    watches_to_remove.append((symbol, "TIMEOUT"))
                 else:
                     # Watch cancelled (FALSE_ALARM, SL_HIT)
                     print(
@@ -1880,13 +1952,15 @@ class StatArbBacktest:
 
         Uses same logic as EntryObserverService._process_price_update():
         1. Check pullback (ENTRY) - FIRST priority
-        2. Check false alarm with HYSTERESIS
-        3. Check SL hit
-        4. Update max_z if still widening
+        2. Check timeout (must be checked on each 1m candle like production)
+        3. Check false alarm with HYSTERESIS
+        4. Check SL hit
+        5. Update max_z if still widening
 
         Returns:
             Tuple of (action, timestamp, z_score) where action is:
             - "ENTER": Entry confirmed after pullback
+            - "TIMEOUT": Watch exceeded timeout duration
             - "FALSE_ALARM": Z dropped significantly below entry threshold
             - "SL_HIT": Z exceeded stop-loss
             - None: Still watching
@@ -1895,6 +1969,11 @@ class StatArbBacktest:
 
         # Calculate false alarm level with hysteresis
         false_alarm_level = watch.z_entry_threshold - self.config.false_alarm_hysteresis
+
+        # Calculate timeout threshold (like production checks on each tick)
+        timeout_threshold = watch.start_time + timedelta(
+            minutes=self.config.trailing_timeout_minutes
+        )
 
         # Align data
         common_index = coin_1m.index.intersection(primary_1m.index)
@@ -1915,18 +1994,24 @@ class StatArbBacktest:
 
             # 1. Check pullback (ENTRY) - FIRST priority
             if abs_z <= max_z - self.config.trailing_pullback:
+                # Update watch.max_z before returning so logs show correct peak
+                watch.max_z = max_z
                 return ("ENTER", ts, live_z)
 
-            # 2. Check false alarm with HYSTERESIS
+            # 2. Check timeout (like production - on each tick)
+            if ts >= timeout_threshold:
+                return ("TIMEOUT", ts, live_z)
+
+            # 3. Check false alarm with HYSTERESIS
             # Only cancel if Z dropped SIGNIFICANTLY below threshold
             if abs_z < false_alarm_level:
                 return ("FALSE_ALARM", ts, live_z)
 
-            # 3. Check SL hit
+            # 4. Check SL hit
             if abs_z >= watch.z_sl_threshold:
                 return ("SL_HIT", ts, live_z)
 
-            # 4. Update max_z if still widening
+            # 5. Update max_z if still widening
             if abs_z > max_z:
                 max_z = abs_z
 
@@ -1967,6 +2052,14 @@ class StatArbBacktest:
                 start_time=start_time,
                 end_time=end_time,
             )
+
+            if df is None or df.empty:
+                return None
+
+            # Filter to ensure we only have candles within the requested range
+            # This prevents returning old data that could cause negative watch_duration
+            df = df[(df.index >= start_time) & (df.index <= end_time)]
+
             return df if not df.empty else None
         except Exception as e:
             return None
@@ -3096,11 +3189,11 @@ Examples:
         # Create Half-Life filter service
         halflife_filter_service = HalfLifeFilterService(
             logger=logger,
-            max_bars=settings.HALFLIFE_MAX_BARS,
+            max_bars=config.halflife_max_bars or settings.HALFLIFE_MAX_BARS,
             lookback_candles=settings.HALFLIFE_LOOKBACK_CANDLES,
         )
         print(
-            f"\n⏱️ Half-Life filter: max_bars={settings.HALFLIFE_MAX_BARS}, available={halflife_filter_service.is_available}"
+            f"\n⏱️ Half-Life filter: max_bars={config.halflife_max_bars or settings.HALFLIFE_MAX_BARS}, available={halflife_filter_service.is_available}"
         )
 
         # Load historical funding rates if funding filter is enabled
