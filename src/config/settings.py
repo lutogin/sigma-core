@@ -58,6 +58,10 @@ class Settings:
     LOOKBACK_WINDOW_DAYS: int = 3  # 3 days (244 candles for 15m timeframe)
     # Correlation settings
     MIN_CORRELATION: float = 0.8  # Если корреляция упала ниже, пару не торгуем!
+    # Correlation hysteresis thresholds (relaxed thresholds for existing positions/watches)
+    # Entry requires >= MIN_CORRELATION, but holding/watching allows lower values
+    CORRELATION_EXIT_THRESHOLD: float = 0.70  # Exit position if correlation drops below this
+    CORRELATION_WATCH_THRESHOLD: float = 0.75  # Remove watch if correlation drops below this
     # Z-Score settings
     Z_ENTRY_THRESHOLD: float = 0  # Воход в мониторинг PendingEntrySignalEvent
     Z_TP_THRESHOLD: float = 0.25  # Выход
@@ -172,6 +176,13 @@ class Settings:
         # Screener
         self.LOOKBACK_WINDOW_DAYS = int(os.getenv("LOOKBACK_WINDOW_DAYS", "3"))
         self.MIN_CORRELATION = float(os.getenv("MIN_CORRELATION", "0.8"))
+        # Correlation hysteresis
+        self.CORRELATION_EXIT_THRESHOLD = float(
+            os.getenv("CORRELATION_EXIT_THRESHOLD", "0.70")
+        )
+        self.CORRELATION_WATCH_THRESHOLD = float(
+            os.getenv("CORRELATION_WATCH_THRESHOLD", "0.75")
+        )
         self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.0"))
         self.Z_TP_THRESHOLD = float(os.getenv("Z_TP_THRESHOLD", "0.25"))
         self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "0"))
@@ -295,6 +306,12 @@ class Settings:
         logger.info("📊 Screener Settings:")
         logger.info(f"  LOOKBACK_WINDOW_DAYS: {self.LOOKBACK_WINDOW_DAYS}")
         logger.info(f"  MIN_CORRELATION: {self.MIN_CORRELATION}")
+        logger.info(
+            f"  CORRELATION_EXIT_THRESHOLD: {self.CORRELATION_EXIT_THRESHOLD} (hysteresis for positions)"
+        )
+        logger.info(
+            f"  CORRELATION_WATCH_THRESHOLD: {self.CORRELATION_WATCH_THRESHOLD} (hysteresis for watches)"
+        )
         logger.info("-" * 40)
         logger.info("📈 Z-Score Settings:")
         logger.info(f"  Z_ENTRY_THRESHOLD: {self.Z_ENTRY_THRESHOLD}")

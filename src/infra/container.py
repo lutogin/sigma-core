@@ -282,6 +282,8 @@ class Container:
                 entry_observer_service=self.entry_observer_service,
                 funding_filter_service=self.funding_filter_service,
                 hurst_watch_tolerance=self._settings.HURST_WATCH_TOLERANCE,
+                correlation_exit_threshold=self._settings.CORRELATION_EXIT_THRESHOLD,
+                correlation_watch_threshold=self._settings.CORRELATION_WATCH_THRESHOLD,
             )
         return self._instances["orchestrator_service"]
 

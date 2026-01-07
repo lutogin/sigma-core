@@ -286,6 +286,11 @@ class BacktestConfig:
     z_sl_threshold: float = 4.0  # |Z| >= this to stop loss
     min_correlation: float = 0.8  # Minimum correlation to trade
 
+    # Correlation hysteresis thresholds (relaxed for existing positions/watches)
+    # Entry requires >= min_correlation, but holding/watching allows lower values
+    correlation_exit_threshold: float = 0.70  # Exit position if correlation drops below
+    correlation_watch_threshold: float = 0.75  # Remove watch if correlation drops below
+
     # Fees
     maker_fee: float = 0.0002  # 0.02% maker fee
     taker_fee: float = 0.0004  # 0.04% taker fee
@@ -329,7 +334,7 @@ class BacktestConfig:
     )
 
     use_adf_filter: bool = True  # Enable ADF filter
-    adf_pvalue_threshold: float = 0.12  # Maximum ADF p-value to enter
+    adf_pvalue_threshold: float = 0.13  # Maximum ADF p-value to enter
     adf_lookback_candles: int = (
         300  # Number of candles to look back for ADF calculation
     )
@@ -1181,8 +1186,10 @@ class StatArbBacktest:
             elif z_result is None:
                 # No z-score data - shouldn't happen, but close if it does
                 exit_reason = "NO_DATA"
-            elif symbol not in filtered_results:
-                # Correlation dropped below threshold
+            elif z_result.current_correlation < self.config.correlation_exit_threshold:
+                # Correlation dropped below relaxed threshold (hysteresis)
+                # Entry requires >= min_correlation (0.80)
+                # Exit only when < correlation_exit_threshold (0.70)
                 exit_reason = "CORRELATION_DROP"
             else:
                 z = z_result.current_z_score
@@ -1478,7 +1485,17 @@ class StatArbBacktest:
                 abs_new_z = abs(new_z)
 
                 # RE-VALIDATE: Check if signal still valid
-                # Use hysteresis to prevent premature cancellation on minor Z drops
+                # 1. Check correlation with hysteresis
+                if watch.correlation < self.config.correlation_watch_threshold:
+                    print(
+                        f"🔄❌ WATCH {symbol} CORRELATION_DROP | "
+                        f"corr={watch.correlation:.3f} < watch_threshold={self.config.correlation_watch_threshold} | "
+                        f"entry_threshold={self.config.min_correlation}"
+                    )
+                    watches_to_remove.append((symbol, "CORRELATION_DROP"))
+                    continue
+
+                # 2. Use hysteresis to prevent premature cancellation on minor Z drops
                 # Same logic as FALSE_ALARM check during trailing
                 invalidation_level = (
                     watch.z_entry_threshold - self.config.false_alarm_hysteresis

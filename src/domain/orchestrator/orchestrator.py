@@ -75,7 +75,9 @@ class OrchestratorService:
         primary_pair: str,
         entry_observer_service: Optional["EntryObserverService"] = None,
         funding_filter_service: Optional[FundingFilterService] = None,
-        hurst_watch_tolerance: float = 0.02,
+        hurst_watch_tolerance: float = 0.005,
+        correlation_exit_threshold: float = 0.70,
+        correlation_watch_threshold: float = 0.75,
     ):
         """
         Initialize Orchestrator Service.
@@ -92,6 +94,10 @@ class OrchestratorService:
             hurst_watch_tolerance: Tolerance for Hurst threshold on watches/positions.
                 Entry requires H < threshold, but holding allows H < threshold + tolerance.
                 Default 0.02 means entry at 0.45, hold until 0.47.
+            correlation_exit_threshold: Relaxed correlation threshold for exiting positions.
+                Entry requires >= MIN_CORRELATION (0.8), exit only when < this (0.70).
+            correlation_watch_threshold: Relaxed correlation threshold for watches.
+                Entry requires >= MIN_CORRELATION (0.8), remove watch only when < this (0.75).
         """
         self._logger = logger
         self._screener_service = screener_service
@@ -102,6 +108,8 @@ class OrchestratorService:
         self._entry_observer = entry_observer_service
         self._funding_filter = funding_filter_service
         self._hurst_watch_tolerance = hurst_watch_tolerance
+        self._correlation_exit_threshold = correlation_exit_threshold
+        self._correlation_watch_threshold = correlation_watch_threshold
 
     async def run(self) -> None:
         """
@@ -215,7 +223,8 @@ class OrchestratorService:
         Check if any watched pairs in EntryObserver should be removed.
 
         A watched pair should be removed if:
-        1. CORRELATION_DROP: symbol not in filtered_results (correlation < threshold)
+        1. CORRELATION_DROP: correlation < correlation_watch_threshold (with hysteresis)
+           Uses relaxed threshold (0.75) vs entry threshold (0.80)
         2. HURST_TRENDING: Hurst >= hurst_threshold (spread became trending)
         3. FALSE_ALARM: |Z| < dynamic_entry_threshold (signal disappeared)
 
@@ -235,13 +244,15 @@ class OrchestratorService:
             remove_reason = None
             z_result = z_score_results.get(coin_symbol)
 
-            # Check if symbol dropped from correlation filter
-            if coin_symbol not in filtered_results:
-                current_corr = z_result.current_correlation if z_result else 0.0
-
+            # Check correlation with HYSTERESIS
+            # Entry requires >= MIN_CORRELATION (0.80)
+            # Remove watch only when correlation drops below relaxed threshold (0.75)
+            current_corr = z_result.current_correlation if z_result else 0.0
+            if current_corr < self._correlation_watch_threshold:
                 self._logger.info(
                     f"🔻 Watch {coin_symbol} failed CORRELATION filter | "
-                    f"corr={current_corr:.3f} < {min_correlation}"
+                    f"corr={current_corr:.3f} < watch_threshold={self._correlation_watch_threshold} "
+                    f"(entry_threshold={min_correlation})"
                 )
                 remove_reason = WatchCancelReason.CORRELATION_DROP
 
@@ -271,7 +282,9 @@ class OrchestratorService:
                         )
 
                         # Use relaxed threshold for watches (threshold + tolerance)
-                        max_allowed_hurst = self._hurst_filter.threshold + self._hurst_watch_tolerance
+                        max_allowed_hurst = (
+                            self._hurst_filter.threshold + self._hurst_watch_tolerance
+                        )
 
                         if hurst is not None and hurst >= max_allowed_hurst:
                             self._logger.info(
@@ -302,7 +315,8 @@ class OrchestratorService:
         Check STRUCTURAL exit conditions for all open positions.
 
         Orchestrator checks only structural failures that invalidate the spread:
-        1. CORRELATION_DROP: correlation < min_correlation (spread relationship broken)
+        1. CORRELATION_DROP: correlation < correlation_exit_threshold (spread relationship broken)
+           Uses relaxed threshold (0.70) vs entry threshold (0.80) for hysteresis.
         2. HURST_TRENDING: Hurst >= threshold (spread became trending, not mean-reverting)
 
         Z-Score based exits (TP/SL) are handled ONLY by ExitObserver using
@@ -338,13 +352,16 @@ class OrchestratorService:
             current_z = z_result.current_z_score
             current_corr = z_result.current_correlation
 
-            # 1. STRUCTURAL CHECK: Correlation drop
-            # If correlation dropped below threshold, the spread relationship is broken
-            if coin_symbol not in filtered_results:
+            # 1. STRUCTURAL CHECK: Correlation drop with HYSTERESIS
+            # Entry requires >= MIN_CORRELATION (0.80)
+            # Exit only when correlation drops below relaxed threshold (0.70)
+            # This prevents premature exits due to temporary correlation dips
+            if current_corr < self._correlation_exit_threshold:
                 exit_reason = ExitReason.CORRELATION_DROP
                 self._logger.info(
                     f"🔻 CORRELATION_DROP detected | {coin_symbol} | "
-                    f"corr={current_corr:.3f} < {min_correlation}"
+                    f"corr={current_corr:.3f} < exit_threshold={self._correlation_exit_threshold} "
+                    f"(entry_threshold={min_correlation})"
                 )
 
             # 2. STRUCTURAL CHECK: Hurst trending
@@ -361,7 +378,9 @@ class OrchestratorService:
                     )
 
                     # Use relaxed threshold for positions (threshold + tolerance)
-                    max_allowed_hurst = self._hurst_filter.threshold + self._hurst_watch_tolerance
+                    max_allowed_hurst = (
+                        self._hurst_filter.threshold + self._hurst_watch_tolerance
+                    )
 
                     if hurst is not None and hurst >= max_allowed_hurst:
                         exit_reason = ExitReason.HURST_TRENDING
