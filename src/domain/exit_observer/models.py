@@ -17,6 +17,7 @@ class ExitWatchStatus(str, Enum):
     WATCHING = "watching"  # Actively monitoring for TP/SL
     EXITED_TP = "exited_tp"  # Exit triggered by take profit
     EXITED_SL = "exited_sl"  # Exit triggered by stop loss
+    EXITED_TIMEOUT = "exited_timeout"  # Exit triggered by max position duration
     CLOSED = "closed"  # Position closed externally
 
 

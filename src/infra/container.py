@@ -315,6 +315,11 @@ class Container:
         self._check_initialized()
         if "exit_observer_service" not in self._instances:
             from src.domain.exit_observer import ExitObserverService
+            from src.domain.utils import get_timeframe_minutes
+
+            # Calculate max position duration in minutes
+            timeframe_minutes = get_timeframe_minutes(self._settings.TIMEFRAME)
+            max_position_minutes = self._settings.MAX_POSITION_BARS * timeframe_minutes
 
             self._instances["exit_observer_service"] = ExitObserverService(
                 event_emitter=self.event_emitter,
@@ -323,6 +328,7 @@ class Container:
                 logger=self.logger,
                 primary_symbol=self._settings.PRIMARY_PAIR,
                 debounce_seconds=1.0,
+                max_position_minutes=max_position_minutes,
             )
         return self._instances["exit_observer_service"]
 

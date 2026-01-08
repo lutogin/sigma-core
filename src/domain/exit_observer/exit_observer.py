@@ -52,6 +52,7 @@ class ExitObserverService:
         logger: Any,
         primary_symbol: str = "ETH/USDT:USDT",
         debounce_seconds: float = 1.0,
+        max_position_minutes: int = 1440,  # 24 hours default (96 bars * 15min)
     ):
         """
         Initialize Exit Observer Service.
@@ -63,6 +64,7 @@ class ExitObserverService:
             logger: Logger instance.
             primary_symbol: Primary trading pair (e.g., "ETH/USDT:USDT").
             debounce_seconds: Minimum time between Z-score checks.
+            max_position_minutes: Maximum position duration before forced exit.
         """
         self._emitter = event_emitter
         self._exchange = exchange_client
@@ -71,6 +73,7 @@ class ExitObserverService:
 
         self._primary_symbol = primary_symbol
         self._debounce = debounce_seconds
+        self._max_position_minutes = max_position_minutes
 
         # Active watches: coin_symbol -> ExitWatch
         self._watches: Dict[str, ExitWatch] = {}
@@ -112,6 +115,7 @@ class ExitObserverService:
         self._logger.info(
             f"🎯 ExitObserverService started | "
             f"debounce={self._debounce}s | "
+            f"max_position={self._max_position_minutes}min | "
             f"active_watches={len(self._watches)}"
         )
 
@@ -402,8 +406,9 @@ class ExitObserverService:
         Checks exit conditions:
         1. Apply debounce (min 1 second between checks)
         2. Calculate live Z-score
-        3. Check TP condition: |Z| <= z_tp_threshold
-        4. Check SL condition: |Z| >= z_sl_threshold
+        3. Check TIMEOUT condition: position held >= max_position_minutes
+        4. Check TP condition: |Z| <= z_tp_threshold
+        5. Check SL condition: |Z| >= z_sl_threshold
         """
         now = time.time()
 
@@ -426,9 +431,19 @@ class ExitObserverService:
         live_z = watch.current_z_score
         abs_z = abs(live_z)
 
+        # 1. Check TIMEOUT condition first (position held too long)
+        if watch.watch_duration_minutes >= self._max_position_minutes:
+            self._logger.info(
+                f"⏰ {coin} TIMEOUT hit! | "
+                f"duration={watch.watch_duration_minutes:.0f}min >= max={self._max_position_minutes}min | "
+                f"entry_Z={watch.entry_z_score:.2f}, current_Z={live_z:.2f}"
+            )
+            await self._emit_exit_signal(watch, ExitReason.TIMEOUT, live_z)
+            return
+
         time_based_coef = ExitObserverService.get_time_based_coefficient(watch)
 
-        # 1. Check TAKE PROFIT condition
+        # 2. Check TAKE PROFIT condition
         if abs_z <= watch.z_tp_threshold * time_based_coef:
             self._logger.info(
                 f"✅ {coin} TP hit! | "
@@ -438,7 +453,7 @@ class ExitObserverService:
             await self._emit_exit_signal(watch, ExitReason.TAKE_PROFIT, live_z)
             return
 
-        # 2. Check STOP LOSS condition
+        # 3. Check STOP LOSS condition
         if abs_z >= watch.z_sl_threshold:
             self._logger.info(
                 f"🛑 {coin} SL hit! | "
@@ -482,14 +497,16 @@ class ExitObserverService:
 
         Args:
             watch: Exit watch with position details.
-            reason: Exit reason (TP or SL).
+            reason: Exit reason (TP, SL, or TIMEOUT).
             current_z: Current Z-score at exit.
         """
         coin = watch.coin_symbol
 
-        # Update watch status
+        # Update watch status based on exit reason
         if reason == ExitReason.TAKE_PROFIT:
             watch.status = ExitWatchStatus.EXITED_TP
+        elif reason == ExitReason.TIMEOUT:
+            watch.status = ExitWatchStatus.EXITED_TIMEOUT
         else:
             watch.status = ExitWatchStatus.EXITED_SL
 
