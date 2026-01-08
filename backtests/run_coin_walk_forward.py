@@ -26,6 +26,7 @@ DEFAULT_WORKERS = 10
 @dataclass
 class MonthlyResult:
     """Results for a single month."""
+
     period: str
     pnl: float
     pnl_pct: float
@@ -39,6 +40,7 @@ class MonthlyResult:
 @dataclass
 class CoinResult:
     """Aggregated results for a single coin."""
+
     coin: str
     symbol: str
     total_pnl: float
@@ -143,14 +145,23 @@ class CoinWalkForwardRunner:
         symbol = f"{coin}/USDT:USDT"
 
         # Build command - run from backtests directory
+        # Note: Always run walk-forward tests WITHOUT trailing entry/live exit for speed
         cmd = [
             sys.executable,
             "run_walk_forward_backtest.py",
-            "--start", self.start_date,
-            "--end", self.end_date,
-            "--balance", str(self.balance),
-            "--coin", coin,
+            "--start",
+            self.start_date,
+            "--end",
+            self.end_date,
+            "--balance",
+            str(self.balance),
+            "--coin",
+            coin,
             "--json-output",
+            "--use-trailing-entry",
+            "false",
+            "--use-live-exit",
+            "false",
         ]
 
         if self.leverage:
@@ -170,7 +181,9 @@ class CoinWalkForwardRunner:
         stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
-            error_msg = stderr.decode().strip() if stderr else f"Exit code {process.returncode}"
+            error_msg = (
+                stderr.decode().strip() if stderr else f"Exit code {process.returncode}"
+            )
             return CoinResult(
                 coin=coin,
                 symbol=symbol,
@@ -191,13 +204,13 @@ class CoinWalkForwardRunner:
         try:
             # Find JSON in output - it should be the last line starting with {
             output = stdout.decode()
-            lines = output.strip().split('\n')
+            lines = output.strip().split("\n")
 
             # Find the JSON line (last line that starts with '{')
             json_line = None
             for line in reversed(lines):
                 line = line.strip()
-                if line.startswith('{'):
+                if line.startswith("{"):
                     json_line = line
                     break
 
@@ -351,8 +364,12 @@ class CoinWalkForwardRunner:
         avg_pnl = total_pnl_all / len(successful) if successful else 0
 
         print(f"  Total Coins Tested: {len(successful)} (failed: {len(failed)})")
-        print(f"  Profitable Coins: {profitable_coins} ({profitable_coins/len(successful)*100:.1f}%)")
-        print(f"  Losing Coins: {losing_coins} ({losing_coins/len(successful)*100:.1f}%)")
+        print(
+            f"  Profitable Coins: {profitable_coins} ({profitable_coins/len(successful)*100:.1f}%)"
+        )
+        print(
+            f"  Losing Coins: {losing_coins} ({losing_coins/len(successful)*100:.1f}%)"
+        )
         print(f"  Total PnL (all coins): ${total_pnl_all:+.2f}")
         print(f"  Average PnL per coin: ${avg_pnl:+.2f}")
 
@@ -369,9 +386,7 @@ class CoinWalkForwardRunner:
         for i, result in enumerate(consistent, 1):
             total_months = result.profitable_months + result.losing_months
             consistency_pct = (
-                result.profitable_months / total_months * 100
-                if total_months > 0
-                else 0
+                result.profitable_months / total_months * 100 if total_months > 0 else 0
             )
             print(
                 f"{i}. {result.symbol:<20} | "
@@ -385,7 +400,8 @@ class CoinWalkForwardRunner:
         print("-" * 120)
 
         quality_coins = [
-            r for r in successful
+            r
+            for r in successful
             if r.avg_sharpe >= 1.5
             and r.overall_win_rate >= 0.6
             and r.total_trades >= 10
@@ -492,8 +508,10 @@ def main():
         "--leverage", type=int, default=None, help="Leverage. Default: from settings"
     )
     parser.add_argument(
-        "--workers", type=int, default=DEFAULT_WORKERS,
-        help=f"Number of parallel workers. Default: {DEFAULT_WORKERS}"
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=f"Number of parallel workers. Default: {DEFAULT_WORKERS}",
     )
     parser.add_argument(
         "--coins-file",
@@ -501,7 +519,6 @@ def main():
         default="backtests/to_test.json",
         help="JSON file with coin list. Default: backtests/to_test.json",
     )
-
     args = parser.parse_args()
 
     # Validate dates

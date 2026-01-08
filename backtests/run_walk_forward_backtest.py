@@ -294,6 +294,18 @@ async def main():
         action="store_true",
         help="Output results as JSON (for programmatic use)",
     )
+    parser.add_argument(
+        "--use-trailing-entry",
+        type=str,
+        default="false",
+        help="Enable trailing entry simulation (true/false). Default: false",
+    )
+    parser.add_argument(
+        "--use-live-exit",
+        type=str,
+        default="false",
+        help="Enable live exit simulation on 1m candles (true/false). Default: false",
+    )
 
     args = parser.parse_args()
 
@@ -314,6 +326,10 @@ async def main():
     if args.coin:
         consistent_pairs = [f"{args.coin}/USDT:USDT"]
 
+    # Parse use_trailing_entry and use_live_exit from CLI
+    use_trailing_entry = args.use_trailing_entry.lower() in ("true", "1", "yes")
+    use_live_exit = args.use_live_exit.lower() in ("true", "1", "yes")
+
     # Config
     config = BacktestConfig(
         initial_balance=args.balance,
@@ -323,6 +339,8 @@ async def main():
         z_sl_threshold=settings.Z_SL_THRESHOLD,
         min_correlation=settings.MIN_CORRELATION,
         consistent_pairs=consistent_pairs or [],
+        use_trailing_entry=use_trailing_entry,
+        use_live_exit=use_live_exit,
     )
 
     # Services
