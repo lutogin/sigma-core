@@ -334,14 +334,14 @@ class BacktestConfig:
 
     # Trailing Entry settings (simulation of live EntryObserverService)
     use_trailing_entry: bool = True  # Enable trailing entry simulation
-    trailing_pullback: float = 0.03  # Z-score pullback for reversal confirmation
+    trailing_pullback: float = 0.038  # Z-score pullback for reversal confirmation
     trailing_timeout_minutes: int = 180  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
         0.25  # Cancel watch only if Z drops this much below threshold
     )
 
-    use_adf_filter: bool = False  # Enable ADF filter
-    adf_pvalue_threshold: float = 0.18  # Maximum ADF p-value to enter
+    use_adf_filter: bool = True  # Enable ADF filter
+    adf_pvalue_threshold: float = 0.21  # Maximum ADF p-value to enter
     adf_lookback_candles: int = (
         300  # Number of candles to look back for ADF calculation
     )
@@ -979,14 +979,17 @@ class StatArbBacktest:
         coin_df = window_data.get(symbol)
 
         if primary_df is None or coin_df is None:
+            print(f"  ⚠️  {symbol} ADF: no data available")
             return False
 
         if primary_df.empty or coin_df.empty:
+            print(f"  ⚠️  {symbol} ADF: empty dataframes")
             return False
 
         # Get beta from correlation results
         corr_result = correlation_results.get(symbol)
         if corr_result is None:
+            print(f"  ⚠️  {symbol} ADF: no correlation result")
             return False
 
         beta = corr_result.latest_beta
@@ -1935,7 +1938,8 @@ class StatArbBacktest:
             if abs_new_z < invalidation_level:
                 print(
                     f"🔄❌ WATCH {symbol} INVALIDATED after param update | "
-                    f"new_Z={new_z:.2f} < invalidation_level={invalidation_level:.2f} | "
+                    f"new_Z={abs_new_z:.2f} < invalidation={invalidation_level:.2f} "
+                    f"(threshold={watch.z_entry_threshold:.2f} - hysteresis={self.config.false_alarm_hysteresis}) | "
                     f"std: {old_std:.4f}→{watch.spread_std:.4f}"
                 )
                 watches_to_remove.append((symbol, "PARAM_INVALIDATED"))
