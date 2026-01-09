@@ -241,18 +241,20 @@ class EntryObserverService:
                     )
                     return
 
-                # Signal still valid - KEEP FROZEN ANCHOR for params
-                # beta, spread_mean, spread_std, z_entry_threshold stay frozen
-                # BUT max_z CAN increase if scan Z is higher (it's a MAX tracker!)
-                old_max_z = watch.max_z
-                if abs_event_z > watch.max_z:
-                    watch.max_z = abs_event_z
+                # Signal still valid - KEEP FROZEN ANCHOR for Z-score calculation
+                # beta, spread_mean, spread_std, z_entry_threshold stay FROZEN (affect Z calculation)
+                # max_z is updated ONLY from real-time WebSocket data (_process_price_update)
+                # NOT from scan (which uses new params that would cause "Parameter Jump")
+                #
+                # ONLY halflife can be updated - it affects position sizing, not trailing logic
+                old_halflife = watch.halflife
+                watch.halflife = event.halflife
 
-                max_z_change = f"→{watch.max_z:.2f}" if watch.max_z != old_max_z else ""
+                entry_target = watch.max_z - self._pullback
                 self._logger.info(
-                    f"🛡️ Watch {coin} FROZEN | "
-                    f"scan_Z={abs_event_z:.2f} | max_z={old_max_z:.2f}{max_z_change} | "
-                    f"β={watch.beta:.3f} (frozen)"
+                    f"🛡️ Watch {coin} FROZEN | scan_Z={abs_event_z:.2f} | "
+                    f"max_z={watch.max_z:.2f} | entry_target={entry_target:.2f} | "
+                    f"HL: {old_halflife:.1f}→{watch.halflife:.1f}"
                 )
                 return
 

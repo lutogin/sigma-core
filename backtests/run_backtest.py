@@ -313,7 +313,7 @@ class BacktestConfig:
     # Maximum position duration before forced exit (in bars)
     # 144 bars = 32 hours for 15m timeframe
     # 96 bars = 24 hours for 15m timeframe
-    max_position_bars: int = 192  # 48 hours
+    max_position_bars: int = 144  # 32 hours
 
     # Funding filter
     # Block entry if net funding cost exceeds this threshold per 8h
@@ -330,15 +330,29 @@ class BacktestConfig:
     # Entry requires H < threshold (0.45), holding allows H < threshold + tolerance(0.02) (0.47)
     hurst_watch_tolerance: float = 0.005
 
-    halflife_max_bars: int = 64  # 16 hours
+    halflife_max_bars: int = 48  # 12 hours
 
     # Trailing Entry settings (simulation of live EntryObserverService)
+    """
+    Поскольку мы симулируем вебсокеты на минутных свечах, мы не можем использовать реальные данные. EntryObserver использует 15м шкалу.
+    Нужно пересчитать pullback под 1m-close шкалу!!!
+    Грубая инженерная оценка:
+        •	шаг цены масштабируется ~ sqrt(dt)
+        •	dt = 1m / 15m = 1/15
+        •	sqrt(1/15) ≈ 0.258
+
+    Тогда:
+	    •	0.25 * 0.258 ≈ 0.065 ~ 0.07 || 0.06
+    То есть, если “0.25 на реальных тиках” примерно соответствует “0.06 - 0.08 на 1m close”.
+
+    Реально, с учётом сглаживания close, можно ожидать диапазон:
+	    •	0.05 ~ 0.10 для backtest на 1m close.
+    """
     use_trailing_entry: bool = True  # Enable trailing entry simulation
-    # trailing_pullback: float = 0.15  # Z-score pullback for reversal confirmation
-    trailing_pullback: float = 0.25  # Z-score pullback for reversal confirmation
+    trailing_pullback: float = 0.03  # Z-score pullback for reversal confirmation
     trailing_timeout_minutes: int = 90  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
-        0.50  # Cancel watch only if Z drops this much below threshold
+        0.45  # Cancel watch only if Z drops this much below threshold
     )
 
     use_adf_filter: bool = True  # Enable ADF filter
@@ -1736,12 +1750,25 @@ class StatArbBacktest:
         correlation_results: Optional[Dict] = None,
     ) -> None:
         """Start watching a symbol for trailing entry."""
-        # Calculate spread_mean and spread_std from the spread_series
-        # Use the lookback window for consistency with z-score calculation
+        # Calculate spread_mean and spread_std using ROLLING calculation
+        # This must match ZScoreService which uses rolling(window).mean()/std()
+        # NOT the static mean/std of the tail!
         lookback = min(len(z_result.spread_series), 288)  # ~3 days of 15m candles
-        recent_spread = z_result.spread_series.tail(lookback).dropna()
-        spread_mean = float(recent_spread.mean()) if len(recent_spread) > 0 else 0.0
-        spread_std = float(recent_spread.std()) if len(recent_spread) > 1 else 1.0
+
+        # Use ROLLING mean/std at the current point (last value of rolling series)
+        rolling_mean = z_result.spread_series.rolling(window=lookback).mean()
+        rolling_std = z_result.spread_series.rolling(window=lookback).std()
+
+        spread_mean = (
+            float(rolling_mean.iloc[-1]) if len(rolling_mean.dropna()) > 0 else 0.0
+        )
+        spread_std = (
+            float(rolling_std.iloc[-1]) if len(rolling_std.dropna()) > 0 else 1.0
+        )
+
+        # Ensure std is not zero
+        if spread_std == 0 or np.isnan(spread_std):
+            spread_std = 1.0
 
         # Calculate halflife for dynamic position sizing if enabled
         halflife = None
@@ -1863,6 +1890,7 @@ class StatArbBacktest:
 
             # Fallback: use 15m data if no 1m data
             if not checked_1m:
+                print(f"    ⚠️ {symbol} NO 1M DATA - using 15m fallback")
                 coin_price = window_data[symbol]["close"].iloc[-1]
                 primary_price = window_data[self.primary_pair]["close"].iloc[-1]
                 live_z = self._calculate_live_z(
@@ -1933,18 +1961,15 @@ class StatArbBacktest:
                 watches_to_remove.append((symbol, "HURST_TRENDING"))
                 continue
 
-            # Signal still valid - KEEP FROZEN ANCHOR for params
+            # Signal still valid - KEEP FROZEN ANCHOR
             # beta, spread_mean, spread_std, z_entry_threshold stay frozen
-            # BUT max_z CAN increase if scan Z is higher (it's a MAX tracker!)
-            old_max_z = watch.max_z
-            if abs_scan_z > watch.max_z:
-                watch.max_z = abs_scan_z
+            # max_z is updated ONLY from real-time data (1m simulation or 15m fallback with frozen params)
+            # NOT from scan (which uses new params)
 
             entry_target = watch.max_z - self.config.trailing_pullback
-            max_z_change = f"→{watch.max_z:.2f}" if watch.max_z != old_max_z else ""
             print(
                 f"🛡️ WATCH {symbol} FROZEN | scan_Z={abs_scan_z:.2f} | "
-                f"max_z={old_max_z:.2f}{max_z_change} | entry_target={entry_target:.2f}"
+                f"max_z={watch.max_z:.2f} | entry_target={entry_target:.2f}"
             )
 
         # Remove processed watches
@@ -1978,38 +2003,19 @@ class StatArbBacktest:
         end_time: datetime,
     ) -> Optional[pd.DataFrame]:
         """
-        Robust loading of 1m candles.
-        Ensures we get data even if boundaries are tight.
+        Load 1m candles from pre-loaded cache for trailing entry simulation.
+        Uses the same cache as ExitObserver simulation.
         """
-        try:
-            # Load with a small buffer to ensure we cover the edges
-            buffer = timedelta(minutes=5)
-            load_start = start_time - buffer
-            load_end = end_time + buffer
+        # Get from pre-loaded cache (loaded at backtest start)
+        df_full = self._minute_data_cache.get(symbol)
 
-            # Calculate bars approx
-            num_bars = int((load_end - load_start).total_seconds() / 60)
-
-            df = await self.data_loader.load_ohlcv_with_cache(
-                symbol=symbol,
-                num_bars=num_bars,
-                timeframe="1m",
-                start_time=load_start,
-                end_time=load_end,
-            )
-
-            if df is None or df.empty:
-                return None
-
-            # Precise filtering
-            df = df[
-                (df.index > start_time - timedelta(seconds=1)) & (df.index <= end_time)
-            ]
-
-            return df if not df.empty else None
-        except Exception as e:
-            print(f"Error loading 1m for {symbol}: {e}")
+        if df_full is None or df_full.empty:
             return None
+
+        # Filter to requested time range
+        df = df_full[(df_full.index > start_time) & (df_full.index <= end_time)]
+
+        return df if not df.empty else None
 
     def _simulate_trailing_on_minute_data(
         self,
@@ -2036,6 +2042,7 @@ class StatArbBacktest:
             - None: Still watching
         """
         max_z = watch.max_z
+        min_z_seen = float("inf")  # Track minimum |Z| for debugging
 
         # Calculate false alarm level with hysteresis
         false_alarm_level = watch.z_entry_threshold - self.config.false_alarm_hysteresis
@@ -2052,6 +2059,20 @@ class StatArbBacktest:
         if len(common_index) == 0:
             print(f"    ⚠️ {watch.symbol} No 1m candles in common index")
             return None
+
+        # DEBUG: Print first and last 1m candle prices to verify data is changing
+        first_ts = common_index[0]
+        last_ts = common_index[-1]
+        first_coin = coin_1m.loc[first_ts, "close"]
+        last_coin = coin_1m.loc[last_ts, "close"]
+        first_primary = primary_1m.loc[first_ts, "close"]
+        last_primary = primary_1m.loc[last_ts, "close"]
+        print(
+            f"    🔬 DEBUG {watch.symbol}: {len(common_index)} candles "
+            f"| coin: {first_coin:.4f} → {last_coin:.4f} (Δ{(last_coin/first_coin-1)*100:.3f}%) "
+            f"| ETH: {first_primary:.2f} → {last_primary:.2f} (Δ{(last_primary/first_primary-1)*100:.3f}%) "
+            f"| β={watch.beta:.4f} | std={watch.spread_std:.6f}"
+        )
 
         for ts in common_index:
             coin_price = coin_1m.loc[ts, "close"]
@@ -2090,15 +2111,19 @@ class StatArbBacktest:
             if abs_z > max_z:
                 max_z = abs_z
 
+            # Track min for debugging
+            if abs_z < min_z_seen:
+                min_z_seen = abs_z
+
         # Update max_z in watch for next iteration
         watch.max_z = max_z
 
-        # Debug: why no entry?
+        # Debug: show frozen Z range vs entry target
         entry_target = max_z - self.config.trailing_pullback
         print(
-            f"    📊 {watch.symbol} 1m simulation: {len(common_index)} candles | "
-            f"max_z={max_z:.2f} | entry_target={entry_target:.2f} | "
-            f"false_alarm={false_alarm_level:.2f}"
+            f"    📊 {watch.symbol} 1m: {len(common_index)} candles | "
+            f"frozen_Z: [{min_z_seen:.2f}-{max_z:.2f}] | "
+            f"entry_target={entry_target:.2f} | gap={min_z_seen - entry_target:.2f}"
         )
 
         return None
