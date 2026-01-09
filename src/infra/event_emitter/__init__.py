@@ -6,6 +6,7 @@ Abstraction layer over pyee for easy replacement.
 
 Events:
 - PendingEntrySignalEvent: Entry candidate detected, start trailing entry watch
+- WatchStartedEvent: New watch added by EntryObserver (for notifications)
 - EntrySignalEvent: Signal to open a spread position (after reversal confirmation)
 - ExitSignalEvent: Signal to close a spread position (TP, SL, etc.)
 - WatchCancelledEvent: Watch cancelled without entry (timeout, false alarm)
@@ -27,6 +28,7 @@ from .events import (
     # Trading signal events
     SpreadLeg,
     PendingEntrySignalEvent,
+    WatchStartedEvent,
     EntrySignalEvent,
     ExitSignalEvent,
     SignalSkippedEvent,
@@ -59,6 +61,7 @@ __all__ = [
     # Trading signal events
     "SpreadLeg",
     "PendingEntrySignalEvent",
+    "WatchStartedEvent",
     "EntrySignalEvent",
     "ExitSignalEvent",
     "SignalSkippedEvent",

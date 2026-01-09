@@ -44,6 +44,57 @@ from src.domain.utils import get_timeframe_minutes
 
 
 # =============================================================================
+# OHLC Pseudo-Tick Generator (for realistic 1m simulation)
+# =============================================================================
+
+
+def iter_pseudo_ticks(df_1m: pd.DataFrame):
+    """
+    Yield pseudo-ticks from 1m OHLCV data.
+    
+    Generates 4 "ticks" per minute candle (O/H/L/C) to capture intra-minute
+    price movements that would otherwise be missed with close-only simulation.
+    
+    Order heuristic based on candle direction:
+    - Bullish (close >= open): open → low → high → close
+    - Bearish (close < open): open → high → low → close
+    
+    This provides both impulse and retracement within each minute,
+    closer to what WebSocket streams would see in production.
+    
+    Args:
+        df_1m: DataFrame with OHLCV columns, indexed by timestamp
+        
+    Yields:
+        Tuple of (timestamp_with_offset, price)
+    """
+    # Intra-minute offsets to maintain temporal order
+    offsets = [
+        timedelta(seconds=0),   # open
+        timedelta(seconds=15),  # first extreme
+        timedelta(seconds=30),  # second extreme  
+        timedelta(seconds=45),  # close
+    ]
+    
+    for ts, row in df_1m.iterrows():
+        o = float(row["open"])
+        h = float(row["high"])
+        l = float(row["low"])
+        c = float(row["close"])
+        
+        # Determine price sequence based on candle direction
+        if c >= o:
+            # Bullish: open → low (dip) → high (peak) → close
+            seq = [o, l, h, c]
+        else:
+            # Bearish: open → high (peak) → low (dip) → close
+            seq = [o, h, l, c]
+        
+        for off, px in zip(offsets, seq):
+            yield (ts + off, px)
+
+
+# =============================================================================
 # Historical Funding Rate Cache
 # =============================================================================
 
@@ -350,7 +401,7 @@ class BacktestConfig:
     """
     use_trailing_entry: bool = True  # Enable trailing entry simulation
     trailing_pullback: float = 0.03  # Z-score pullback for reversal confirmation
-    trailing_timeout_minutes: int = 60  # Max watch duration before cancellation
+    trailing_timeout_minutes: int = 90  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
         0.45  # Cancel watch only if Z drops this much below threshold
     )
@@ -2024,7 +2075,7 @@ class StatArbBacktest:
         primary_1m: pd.DataFrame,
     ) -> Optional[Tuple[str, datetime, float]]:
         """
-        Simulate trailing entry on 1m candles.
+        Simulate trailing entry on 1m candles using OHLC pseudo-ticks.
 
         Uses same logic as EntryObserverService._process_price_update():
         1. Check pullback (ENTRY) - FIRST priority
@@ -2032,6 +2083,10 @@ class StatArbBacktest:
         3. Check false alarm with HYSTERESIS
         4. Check SL hit
         5. Update max_z if still widening
+
+        IMPORTANT: Uses 4 pseudo-ticks per minute (O/H/L/C) to capture
+        intra-minute movements that close-only simulation would miss.
+        This is critical for trailing_pullback to work realistically.
 
         Returns:
             Tuple of (action, timestamp, z_score) where action is:
@@ -2052,33 +2107,43 @@ class StatArbBacktest:
             minutes=self.config.trailing_timeout_minutes
         )
 
-        # Align data
-        common_index = coin_1m.index.intersection(primary_1m.index)
+        # 1) Align by minute timestamps
+        common_minutes = coin_1m.index.intersection(primary_1m.index)
 
-        # Debug: check if we have data
-        if len(common_index) == 0:
+        if len(common_minutes) == 0:
             print(f"    ⚠️ {watch.symbol} No 1m candles in common index")
             return None
 
-        # DEBUG: Print first and last 1m candle prices to verify data is changing
-        first_ts = common_index[0]
-        last_ts = common_index[-1]
-        first_coin = coin_1m.loc[first_ts, "close"]
-        last_coin = coin_1m.loc[last_ts, "close"]
-        first_primary = primary_1m.loc[first_ts, "close"]
-        last_primary = primary_1m.loc[last_ts, "close"]
-        print(
-            f"    🔬 DEBUG {watch.symbol}: {len(common_index)} candles "
-            f"| coin: {first_coin:.4f} → {last_coin:.4f} (Δ{(last_coin/first_coin-1)*100:.3f}%) "
-            f"| ETH: {first_primary:.2f} → {last_primary:.2f} (Δ{(last_primary/first_primary-1)*100:.3f}%) "
-            f"| β={watch.beta:.4f} | std={watch.spread_std:.6f}"
-        )
+        coin_slice = coin_1m.loc[common_minutes]
+        primary_slice = primary_1m.loc[common_minutes]
 
-        for ts in common_index:
-            coin_price = coin_1m.loc[ts, "close"]
-            primary_price = primary_1m.loc[ts, "close"]
+        # 2) Generate pseudo-ticks from OHLC (4 ticks per minute)
+        coin_ticks = list(iter_pseudo_ticks(coin_slice))
+        primary_ticks = list(iter_pseudo_ticks(primary_slice))
 
-            # Calculate live Z-score
+        # 3) Build lookup map for primary ticks
+        primary_map = {ts: px for ts, px in primary_ticks}
+
+        # DEBUG: Show tick count and price range
+        if coin_ticks:
+            first_ts, first_px = coin_ticks[0]
+            last_ts, last_px = coin_ticks[-1]
+            first_primary = primary_map.get(first_ts, 0)
+            last_primary = primary_map.get(last_ts, 0)
+            print(
+                f"    🔬 DEBUG {watch.symbol}: {len(coin_ticks)} pseudo-ticks ({len(common_minutes)} minutes) "
+                f"| coin: {first_px:.4f} → {last_px:.4f} "
+                f"| ETH: {first_primary:.2f} → {last_primary:.2f} "
+                f"| β={watch.beta:.4f} | std={watch.spread_std:.6f}"
+            )
+
+        # 4) Iterate through pseudo-ticks
+        for ts, coin_price in coin_ticks:
+            primary_price = primary_map.get(ts)
+            if primary_price is None:
+                continue
+
+            # Calculate live Z-score with FROZEN parameters
             live_z = self._calculate_live_z(
                 coin_price,
                 primary_price,
@@ -2095,7 +2160,9 @@ class StatArbBacktest:
                 return ("ENTER", ts, live_z)
 
             # 2. Check timeout (like production - on each tick)
-            if ts >= timeout_threshold:
+            # Use minute timestamp (floor to minute) for timeout comparison
+            minute_ts = ts.replace(second=0, microsecond=0)
+            if minute_ts >= timeout_threshold:
                 return ("TIMEOUT", ts, live_z)
 
             # 3. Check false alarm with HYSTERESIS
@@ -2120,10 +2187,11 @@ class StatArbBacktest:
 
         # Debug: show frozen Z range vs entry target
         entry_target = max_z - self.config.trailing_pullback
+        gap = min_z_seen - entry_target
         print(
-            f"    📊 {watch.symbol} 1m: {len(common_index)} candles | "
+            f"    📊 {watch.symbol} 1m: {len(common_minutes)} min ({len(coin_ticks)} ticks) | "
             f"frozen_Z: [{min_z_seen:.2f}-{max_z:.2f}] | "
-            f"entry_target={entry_target:.2f} | gap={min_z_seen - entry_target:.2f}"
+            f"entry_target={entry_target:.2f} | gap={gap:+.2f}"
         )
 
         return None

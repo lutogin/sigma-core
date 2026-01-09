@@ -29,6 +29,9 @@ class EventType(str, Enum):
     WATCH_TIMEOUT_COOLDOWN = (
         "watch_timeout_cooldown"  # Watch timed out, apply cooldown to symbol
     )
+    WATCH_STARTED = (
+        "watch_started"  # New watch added by EntryObserver (for notifications)
+    )
 
     # Position management (for future TradeExecutor)
     POSITION_OPENED = "position_opened"
@@ -272,6 +275,76 @@ class PendingEntrySignalEvent(BaseEvent):
     z_entry_threshold: float = 2.1  # Entry threshold
     z_tp_threshold: float = 0.25  # Take profit when |Z| <= this
     z_sl_threshold: float = 4.0  # Stop loss when |Z| >= this
+
+    def to_dict(self) -> dict:
+        base = super().to_dict()
+        base.update(
+            {
+                "coin_symbol": self.coin_symbol,
+                "primary_symbol": self.primary_symbol,
+                "spread_side": self.spread_side.value,
+                "z_score": self.z_score,
+                "beta": self.beta,
+                "correlation": self.correlation,
+                "hurst": self.hurst,
+                "halflife": self.halflife,
+                "spread_mean": self.spread_mean,
+                "spread_std": self.spread_std,
+                "coin_price": self.coin_price,
+                "primary_price": self.primary_price,
+                "z_entry_threshold": self.z_entry_threshold,
+                "z_tp_threshold": self.z_tp_threshold,
+                "z_sl_threshold": self.z_sl_threshold,
+            }
+        )
+        return base
+
+
+# =============================================================================
+# Watch Started Event (for notifications - emitted only on NEW watch)
+# =============================================================================
+
+
+@dataclass
+class WatchStartedEvent(BaseEvent):
+    """
+    Watch started event - emitted only when EntryObserver adds a NEW watch.
+
+    Unlike PendingEntrySignalEvent which is emitted every 15m scan,
+    this event is emitted ONLY once when a symbol is first added to watch list.
+    Used for Telegram notifications to avoid spam.
+
+    Contains same data as PendingEntrySignalEvent.
+    """
+
+    event_type: EventType = field(default=EventType.WATCH_STARTED, init=False)
+
+    # Symbol info
+    coin_symbol: str = ""  # e.g., "ARB/USDT:USDT"
+    primary_symbol: str = ""  # e.g., "ETH/USDT:USDT"
+
+    # Spread direction
+    spread_side: SpreadSide = SpreadSide.LONG  # LONG or SHORT spread
+
+    # Signal metrics at detection time
+    z_score: float = 0.0  # Z-score when threshold was crossed
+    beta: float = 0.0  # Hedge ratio (β) for spread calculation
+    correlation: float = 0.0  # Current correlation
+    hurst: float = 0.0  # Hurst exponent
+    halflife: float = 0.0  # Half-life in bars
+
+    # Spread statistics for Z-score calculation
+    spread_mean: float = 0.0  # Rolling mean of spread
+    spread_std: float = 0.0  # Rolling std of spread
+
+    # Current prices
+    coin_price: float = 0.0
+    primary_price: float = 0.0
+
+    # Thresholds
+    z_entry_threshold: float = 2.1
+    z_tp_threshold: float = 0.25
+    z_sl_threshold: float = 4.0
 
     def to_dict(self) -> dict:
         base = super().to_dict()

@@ -30,6 +30,7 @@ from src.infra.event_emitter import (
     EventEmitter,
     EventType,
     PendingEntrySignalEvent,
+    WatchStartedEvent,
     EntrySignalEvent,
     WatchCancelledEvent,
     WatchCancelReason,
@@ -303,6 +304,27 @@ class EntryObserverService:
                 f"Z={event.z_score:.2f} | max_z={watch.max_z:.2f} | "
                 f"side={event.spread_side.value} | "
                 f"pullback_target={watch.max_z - self._pullback:.2f}"
+            )
+
+            # Emit WatchStartedEvent for notifications (only on NEW watch)
+            await self._emitter.emit(
+                WatchStartedEvent(
+                    coin_symbol=coin,
+                    primary_symbol=event.primary_symbol,
+                    spread_side=event.spread_side,
+                    z_score=event.z_score,
+                    beta=event.beta,
+                    correlation=event.correlation,
+                    hurst=event.hurst,
+                    halflife=event.halflife,
+                    spread_mean=event.spread_mean,
+                    spread_std=event.spread_std,
+                    coin_price=event.coin_price,
+                    primary_price=event.primary_price,
+                    z_entry_threshold=event.z_entry_threshold,
+                    z_tp_threshold=event.z_tp_threshold,
+                    z_sl_threshold=event.z_sl_threshold,
+                )
             )
 
         # Subscribe to WebSocket feeds (outside lock to avoid blocking)

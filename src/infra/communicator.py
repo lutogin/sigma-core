@@ -14,7 +14,7 @@ from src.infra.event_emitter.events import (
     EventType,
     ExitReason,
     SpreadSide,
-    PendingEntrySignalEvent,
+    WatchStartedEvent,
     EntrySignalEvent,
     ExitSignalEvent,
     WatchCancelledEvent,
@@ -36,7 +36,7 @@ class CommunicatorService:
     Communicator listens to trade events and sends notifications.
 
     Subscribes to:
-    - PENDING_ENTRY_SIGNAL → Entry candidate detected, watching for reversal
+    - WATCH_STARTED → New watch added by EntryObserver (only once per symbol)
     - ENTRY_SIGNAL → Entry confirmed after reversal
     - EXIT_SIGNAL → Exit signal detected
     - WATCH_CANCELLED → Watch cancelled without entry
@@ -93,7 +93,7 @@ class CommunicatorService:
 
         # Subscribe to trade lifecycle events
         self._event_emitter.on(
-            EventType.PENDING_ENTRY_SIGNAL, self._on_pending_entry_signal
+            EventType.WATCH_STARTED, self._on_watch_started
         )
         self._event_emitter.on(EventType.ENTRY_SIGNAL, self._on_entry_signal)
         self._event_emitter.on(EventType.EXIT_SIGNAL, self._on_exit_signal)
@@ -115,7 +115,7 @@ class CommunicatorService:
 
         # Unsubscribe from trade lifecycle events
         self._event_emitter.off(
-            EventType.PENDING_ENTRY_SIGNAL, self._on_pending_entry_signal
+            EventType.WATCH_STARTED, self._on_watch_started
         )
         self._event_emitter.off(EventType.ENTRY_SIGNAL, self._on_entry_signal)
         self._event_emitter.off(EventType.EXIT_SIGNAL, self._on_exit_signal)
@@ -785,8 +785,8 @@ class CommunicatorService:
     # Event Handlers
     # =========================================================================
 
-    async def _on_pending_entry_signal(self, event: PendingEntrySignalEvent) -> None:
-        """Handle pending entry signal event - entry candidate detected."""
+    async def _on_watch_started(self, event: WatchStartedEvent) -> None:
+        """Handle watch started event - NEW watch added by EntryObserver."""
         try:
             side_emoji = "📈" if event.spread_side == SpreadSide.LONG else "📉"
             side_text = "LONG" if event.spread_side == SpreadSide.LONG else "SHORT"
@@ -828,11 +828,11 @@ _Monitoring for pullback confirmation..._
 """
             await self._telegram.send_message_markdown(message)
             self._logger.debug(
-                f"Sent pending entry notification for {event.coin_symbol}"
+                f"Sent watch started notification for {event.coin_symbol}"
             )
 
         except Exception as e:
-            self._logger.error(f"Failed to send pending entry notification: {e}")
+            self._logger.error(f"Failed to send watch started notification: {e}")
 
     async def _on_entry_signal(self, event: EntrySignalEvent) -> None:
         """Handle entry signal event - entry confirmed after reversal."""
