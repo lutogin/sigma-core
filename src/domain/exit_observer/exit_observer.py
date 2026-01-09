@@ -53,6 +53,9 @@ class ExitObserverService:
         primary_symbol: str = "ETH/USDT:USDT",
         debounce_seconds: float = 1.0,
         max_position_minutes: int = 1440,  # 24 hours default (96 bars * 15min)
+        trailing_sl_offset: float = 1.5,  # Offset from min_z for trailing SL
+        trailing_sl_activation: float = 1.0,  # Min Z recovery to activate trailing
+        z_entry_threshold: float = 2.1,  # Entry threshold floor for trailing SL
     ):
         """
         Initialize Exit Observer Service.
@@ -65,6 +68,9 @@ class ExitObserverService:
             primary_symbol: Primary trading pair (e.g., "ETH/USDT:USDT").
             debounce_seconds: Minimum time between Z-score checks.
             max_position_minutes: Maximum position duration before forced exit.
+            trailing_sl_offset: How much to add to min_z_reached for new SL.
+            trailing_sl_activation: Minimum Z recovery from entry to activate trailing SL.
+            z_entry_threshold: Entry threshold floor for trailing SL calculation.
         """
         self._emitter = event_emitter
         self._exchange = exchange_client
@@ -74,6 +80,9 @@ class ExitObserverService:
         self._primary_symbol = primary_symbol
         self._debounce = debounce_seconds
         self._max_position_minutes = max_position_minutes
+        self._trailing_sl_offset = trailing_sl_offset
+        self._trailing_sl_activation = trailing_sl_activation
+        self._z_entry_threshold = z_entry_threshold
 
         # Active watches: coin_symbol -> ExitWatch
         self._watches: Dict[str, ExitWatch] = {}
@@ -116,6 +125,8 @@ class ExitObserverService:
             f"🎯 ExitObserverService started | "
             f"debounce={self._debounce}s | "
             f"max_position={self._max_position_minutes}min | "
+            f"trailing_sl_offset={self._trailing_sl_offset} | "
+            f"trailing_sl_activation={self._trailing_sl_activation} | "
             f"active_watches={len(self._watches)}"
         )
 
@@ -153,6 +164,9 @@ class ExitObserverService:
                     continue
 
                 # Create ExitWatch from stored position
+                # For restored positions, use entry Z as min_z_reached
+                # (we don't know the true min during downtime)
+                entry_abs_z = abs(position.entry_z_score)
                 watch = ExitWatch(
                     coin_symbol=coin,
                     primary_symbol=position.primary_symbol,
@@ -164,8 +178,11 @@ class ExitObserverService:
                     correlation=position.entry_correlation,
                     hurst=position.entry_hurst,
                     halflife=position.entry_halflife,
+                    z_entry_threshold=self._z_entry_threshold,
                     z_tp_threshold=position.z_tp_threshold,
                     z_sl_threshold=position.z_sl_threshold,
+                    initial_sl_threshold=position.z_sl_threshold,
+                    min_z_reached=entry_abs_z,  # Start from entry
                     coin_price=position.coin_entry_price,
                     primary_price=position.primary_entry_price,
                 )
@@ -248,6 +265,7 @@ class ExitObserverService:
                 await self._cleanup_watch(coin)
 
             # Create ExitWatch
+            entry_abs_z = abs(event.z_score)
             watch = ExitWatch(
                 coin_symbol=coin,
                 primary_symbol=event.primary_symbol,
@@ -259,8 +277,11 @@ class ExitObserverService:
                 correlation=event.correlation,
                 hurst=event.hurst,
                 halflife=event.halflife,
+                z_entry_threshold=self._z_entry_threshold,
                 z_tp_threshold=event.z_tp_threshold,
                 z_sl_threshold=event.z_sl_threshold,
+                initial_sl_threshold=event.z_sl_threshold,
+                min_z_reached=entry_abs_z,  # Start from entry Z
                 coin_price=event.coin_price,
                 primary_price=event.primary_price,
             )
@@ -453,15 +474,74 @@ class ExitObserverService:
             await self._emit_exit_signal(watch, ExitReason.TAKE_PROFIT, live_z)
             return
 
-        # 3. Check STOP LOSS condition
+        # 3. Check STOP LOSS condition (with trailing SL)
         if abs_z >= watch.z_sl_threshold:
+            # Determine if this is a trailing SL hit or original SL
+            is_trailing_sl = watch.z_sl_threshold < watch.initial_sl_threshold
+            sl_type = "trailing SL" if is_trailing_sl else "SL"
             self._logger.info(
-                f"🛑 {coin} SL hit! | "
+                f"🛑 {coin} {sl_type} hit! | "
                 f"entry_Z={watch.entry_z_score:.2f}, current_Z={live_z:.2f}, "
-                f"threshold={watch.z_sl_threshold:.2f}"
+                f"threshold={watch.z_sl_threshold:.2f} (initial={watch.initial_sl_threshold:.2f}) | "
+                f"min_z_reached={watch.min_z_reached:.2f}"
             )
             await self._emit_exit_signal(watch, ExitReason.STOP_LOSS, live_z)
             return
+
+        # 4. Update trailing SL if Z-score moved in our favor
+        await self._update_trailing_sl(watch, abs_z)
+
+    async def _update_trailing_sl(self, watch: ExitWatch, abs_z: float) -> None:
+        """
+        Update trailing stop loss based on favorable Z-score movement.
+
+        Trailing SL Logic:
+        1. Track minimum |Z| reached during position lifetime (min_z_reached)
+        2. Only activate trailing when Z has recovered at least trailing_sl_activation from entry
+        3. New SL = max(z_entry_threshold, min_z_reached + trailing_sl_offset)
+        4. SL can only tighten (decrease), never loosen
+
+        Example:
+        - Entry at Z=3.0, SL=4.0, activation=1.0, offset=1.5
+        - Z drops to 2.5 → min_z_reached=2.5, not activated yet (need 2.0 to activate)
+        - Z drops to 1.8 → min_z_reached=1.8, activated! new_SL = max(2.0, 1.8+1.5) = 3.3
+        - Z drops to 1.0 → min_z_reached=1.0, new_SL = max(2.0, 1.0+1.5) = 2.5
+        - Z reverses to 2.6 → SL hit! Exit with partial profit
+        """
+        entry_abs_z = abs(watch.entry_z_score)
+
+        # Update min_z_reached if Z moved in our favor (lower)
+        if abs_z < watch.min_z_reached:
+            old_min = watch.min_z_reached
+            watch.min_z_reached = abs_z
+
+            # Check if trailing SL should be activated
+            # Activation requires Z to recover at least trailing_sl_activation from entry
+            z_recovery = entry_abs_z - watch.min_z_reached
+            if z_recovery >= self._trailing_sl_activation:
+                # Calculate new trailing SL
+                # new_SL = max(entry_threshold, min_z_reached + offset)
+                new_sl = max(
+                    watch.z_entry_threshold,
+                    watch.min_z_reached + self._trailing_sl_offset,
+                )
+
+                # SL can only tighten (decrease), never loosen
+                if new_sl < watch.z_sl_threshold:
+                    old_sl = watch.z_sl_threshold
+                    watch.z_sl_threshold = new_sl
+
+                    self._logger.info(
+                        f"📈 {watch.coin_symbol} Trailing SL tightened | "
+                        f"min_z: {old_min:.2f}→{watch.min_z_reached:.2f} | "
+                        f"SL: {old_sl:.2f}→{new_sl:.2f} | "
+                        f"recovery={z_recovery:.2f} (activation={self._trailing_sl_activation})"
+                    )
+            else:
+                self._logger.debug(
+                    f"📊 {watch.coin_symbol} min_z updated: {old_min:.2f}→{abs_z:.2f} | "
+                    f"recovery={z_recovery:.2f} < activation={self._trailing_sl_activation}"
+                )
 
     @staticmethod
     def get_time_based_coefficient(watch: ExitWatch) -> int:

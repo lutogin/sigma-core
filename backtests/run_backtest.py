@@ -334,7 +334,7 @@ class BacktestConfig:
 
     # Trailing Entry settings (simulation of live EntryObserverService)
     use_trailing_entry: bool = True  # Enable trailing entry simulation
-    trailing_pullback: float = 0.038  # Z-score pullback for reversal confirmation
+    trailing_pullback: float = 0.025  # Z-score pullback for reversal confirmation
     trailing_timeout_minutes: int = 180  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
         0.25  # Cancel watch only if Z drops this much below threshold
@@ -360,6 +360,12 @@ class BacktestConfig:
     # This is INDEPENDENT of use_trailing_entry - in production ExitObserver
     # always runs on WebSocket regardless of how entry was made
     use_live_exit: bool = True
+
+    # Trailing Stop Loss (smart SL that follows favorable moves)
+    # When Z-score moves in our favor, we tighten the SL to lock in gains
+    use_trailing_sl: bool = True  # Enable trailing SL
+    trailing_sl_offset: float = 1.0  # Offset from min_z_reached for new SL
+    trailing_sl_activation: float = 1.4  # Min Z recovery from entry to activate
 
 
 @dataclass
@@ -403,6 +409,10 @@ class Position:
     spread_std: float = 1.0
     z_tp_threshold: float = 0.25
     z_sl_threshold: float = 4.0
+    initial_sl_threshold: float = 4.0  # Original SL at entry (before trailing)
+
+    # Trailing SL tracking
+    min_z_reached: float = 0.0  # Minimum |Z| reached during position lifetime
 
 
 @dataclass
@@ -1359,6 +1369,10 @@ class StatArbBacktest:
                     exit_reason = "TP"
                 elif abs_z >= position.z_sl_threshold:
                     exit_reason = "SL"
+                else:
+                    # Update trailing SL if enabled
+                    if self.config.use_trailing_sl:
+                        self._update_trailing_sl_for_position(position, abs_z)
 
             if exit_reason:
                 positions_to_close.append((symbol, exit_reason))
@@ -1561,6 +1575,12 @@ class StatArbBacktest:
 
             if exit_reason:
                 return (ts, exit_reason, live_z, coin_price, primary_price)
+
+            # Trailing SL: update min_z and tighten SL if favorable
+            if self.config.use_trailing_sl:
+                self._update_trailing_sl_for_position(position, abs_z)
+                # Update local z_sl for next iteration
+                z_sl = position.z_sl_threshold
 
         # Debug: print Z-score range if no exit found
         if debug and z_scores_seen:
@@ -1880,25 +1900,25 @@ class StatArbBacktest:
                 watches_to_remove.append((symbol, "NO_DATA"))
                 continue
 
-            z_result = z_score_results[symbol]
+                z_result = z_score_results[symbol]
 
-            # Store old values for logging
-            old_beta = watch.beta
-            old_std = watch.spread_std
-            old_max_z = watch.max_z
+                # Store old values for logging
+                old_beta = watch.beta
+                old_std = watch.spread_std
+                old_max_z = watch.max_z
 
-            # Update calculation parameters
-            watch.beta = z_result.current_beta
-            watch.correlation = z_result.current_correlation
-            watch.z_entry_threshold = z_result.dynamic_entry_threshold
+                # Update calculation parameters
+                watch.beta = z_result.current_beta
+                watch.correlation = z_result.current_correlation
+                watch.z_entry_threshold = z_result.dynamic_entry_threshold
 
-            # Recalculate spread_mean and spread_std
-            lookback = min(len(z_result.spread_series), 288)
-            recent_spread = z_result.spread_series.tail(lookback).dropna()
-            if len(recent_spread) > 0:
-                watch.spread_mean = float(recent_spread.mean())
-            if len(recent_spread) > 1:
-                watch.spread_std = float(recent_spread.std())
+                # Recalculate spread_mean and spread_std
+                lookback = min(len(z_result.spread_series), 288)
+                recent_spread = z_result.spread_series.tail(lookback).dropna()
+                if len(recent_spread) > 0:
+                    watch.spread_mean = float(recent_spread.mean())
+                if len(recent_spread) > 1:
+                    watch.spread_std = float(recent_spread.std())
 
             # Update halflife for dynamic position sizing
             if self.config.use_dynamic_position_size:
@@ -1908,19 +1928,19 @@ class StatArbBacktest:
                 if new_halflife is not None:
                     watch.halflife = new_halflife
 
-            # Recalculate Z with NEW parameters
-            coin_price = window_data[symbol]["close"].iloc[-1]
-            primary_price = window_data[self.primary_pair]["close"].iloc[-1]
-            new_z = self._calculate_live_z(
-                coin_price,
-                primary_price,
-                watch.beta,
-                watch.spread_mean,
-                watch.spread_std,
-            )
-            abs_new_z = abs(new_z)
+                # Recalculate Z with NEW parameters
+                coin_price = window_data[symbol]["close"].iloc[-1]
+                primary_price = window_data[self.primary_pair]["close"].iloc[-1]
+                new_z = self._calculate_live_z(
+                    coin_price,
+                    primary_price,
+                    watch.beta,
+                    watch.spread_mean,
+                    watch.spread_std,
+                )
+                abs_new_z = abs(new_z)
 
-            # RE-VALIDATE: Check if signal still valid
+                # RE-VALIDATE: Check if signal still valid
             # 1. Check correlation with hysteresis
             if watch.correlation < self.config.correlation_watch_threshold:
                 print(
@@ -1954,21 +1974,21 @@ class StatArbBacktest:
                 watches_to_remove.append((symbol, "HURST_TRENDING"))
                 continue
 
-            # RESET: Signal still valid - reset max_z for NEXT bar
-            # This prevents Parameter Jump false entries
-            watch.max_z = abs_new_z
+                # RESET: Signal still valid - reset max_z for NEXT bar
+                # This prevents Parameter Jump false entries
+                watch.max_z = abs_new_z
 
-            # Log significant parameter changes
-            if (
-                abs(old_beta - watch.beta) > 0.01
-                or abs(old_std - watch.spread_std) > 0.0001
-            ):
-                print(
-                    f"🔄 Updated watch {symbol} | "
-                    f"β: {old_beta:.3f}→{watch.beta:.3f} | "
-                    f"std: {old_std:.4f}→{watch.spread_std:.4f} | "
-                    f"Z={new_z:.2f} | max_z: {old_max_z:.2f}→{watch.max_z:.2f} (RESET)"
-                )
+                # Log significant parameter changes
+                if (
+                    abs(old_beta - watch.beta) > 0.01
+                    or abs(old_std - watch.spread_std) > 0.0001
+                ):
+                    print(
+                        f"🔄 Updated watch {symbol} | "
+                        f"β: {old_beta:.3f}→{watch.beta:.3f} | "
+                        f"std: {old_std:.4f}→{watch.spread_std:.4f} | "
+                        f"Z={new_z:.2f} | max_z: {old_max_z:.2f}→{watch.max_z:.2f} (RESET)"
+                    )
 
         # Remove processed watches
         for symbol, reason in watches_to_remove:
@@ -2085,7 +2105,7 @@ class StatArbBacktest:
                         watch, current_time, live_z, current_bar_idx, window_data
                     )
                     watches_to_remove.append((symbol, None))
-                    continue
+                continue
 
             # 3. RE-VALIDATE & RESET (Granitsa 15m svechi)
             # =================================================================
@@ -2121,7 +2141,7 @@ class StatArbBacktest:
                 # Проверка корреляции
                 if watch.correlation < self.config.correlation_watch_threshold:
                     watches_to_remove.append((symbol, "CORRELATION_DROP"))
-                    continue
+                continue
 
                 # Проверка Invalidation (Слишком сильное падение Z из-за смены параметров)
                 invalidation_level = (
@@ -2293,6 +2313,37 @@ class StatArbBacktest:
         watch.max_z = max_z
         return None
 
+    def _update_trailing_sl_for_position(
+        self, position: Position, abs_z: float
+    ) -> None:
+        """
+        Update trailing stop loss for a position.
+
+        Same logic as ExitObserverService._update_trailing_sl:
+        1. Track min_z_reached (lowest |Z|)
+        2. Activate when Z recovery >= trailing_sl_activation
+        3. New SL = max(z_entry_threshold, min_z + offset)
+        4. SL can only tighten (decrease)
+        """
+        entry_abs_z = abs(position.entry_z_score)
+
+        # Update min_z_reached if Z moved in our favor
+        if abs_z < position.min_z_reached:
+            position.min_z_reached = abs_z
+
+            # Check activation: Z must recover at least trailing_sl_activation from entry
+            z_recovery = entry_abs_z - position.min_z_reached
+            if z_recovery >= self.config.trailing_sl_activation:
+                # Calculate new trailing SL
+                new_sl = max(
+                    self.config.z_entry_threshold,
+                    position.min_z_reached + self.config.trailing_sl_offset,
+                )
+
+                # SL can only tighten (decrease)
+                if new_sl < position.z_sl_threshold:
+                    position.z_sl_threshold = new_sl
+
     def _calculate_live_z(
         self,
         coin_price: float,
@@ -2335,6 +2386,7 @@ class StatArbBacktest:
         primary_size = position_size * beta
 
         # Create position with peak_z from trailing watch and frozen parameters
+        entry_abs_z = abs(entry_z)
         position = Position(
             symbol=symbol,
             side=watch.side,
@@ -2353,6 +2405,8 @@ class StatArbBacktest:
             spread_std=watch.spread_std,
             z_tp_threshold=self.config.z_tp_threshold,
             z_sl_threshold=watch.z_sl_threshold,
+            initial_sl_threshold=watch.z_sl_threshold,
+            min_z_reached=entry_abs_z,  # Start from entry Z
         )
 
         self.positions[symbol] = position
@@ -2444,6 +2498,11 @@ class StatArbBacktest:
                 exit_reason = "TP"
             elif abs_z >= z_sl:
                 exit_reason = "SL"
+            else:
+                # Update trailing SL if enabled
+                if self.config.use_trailing_sl:
+                    self._update_trailing_sl_for_position(position, abs_z)
+                    z_sl = position.z_sl_threshold  # Update for next iteration
 
             if exit_reason:
                 # Close position at this 1m timestamp
@@ -2611,6 +2670,7 @@ class StatArbBacktest:
         spread_std = self._get_spread_std(z_result)
 
         # Create position with frozen parameters for ExitObserver
+        entry_abs_z = abs(z_result.current_z_score)
         position = Position(
             symbol=symbol,
             side=side,
@@ -2623,12 +2683,14 @@ class StatArbBacktest:
             coin_size=coin_size,
             primary_entry_price=primary_price,
             primary_size=primary_size,
-            peak_z_score=abs(z_result.current_z_score),  # No trailing, peak = entry
+            peak_z_score=entry_abs_z,  # No trailing, peak = entry
             # Frozen parameters for ExitObserver
             spread_mean=spread_mean,
             spread_std=spread_std,
             z_tp_threshold=self.config.z_tp_threshold,
             z_sl_threshold=self.config.z_sl_threshold,
+            initial_sl_threshold=self.config.z_sl_threshold,
+            min_z_reached=entry_abs_z,  # Start from entry Z
         )
 
         self.positions[symbol] = position

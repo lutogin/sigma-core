@@ -60,10 +60,10 @@ class EntryObserverPlusRedisService:
         redis_cache: RedisCache,
         logger: Any,
         primary_symbol: str = "ETH/USDT:USDT",
-        z_entry_threshold: float = 2.0,
+        z_entry_threshold: float = 2.1,
         z_sl_threshold: float = 4.0,
-        pullback: float = 0.3,
-        watch_timeout_seconds: int = 2700,  # 45 minutes
+        pullback: float = 0.38,
+        watch_timeout_seconds: int = 3600,  # 60 minutes
         debounce_seconds: float = 1.0,
         max_watches: int = 5,
     ):

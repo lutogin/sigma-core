@@ -269,7 +269,7 @@ class PendingEntrySignalEvent(BaseEvent):
     primary_price: float = 0.0
 
     # Thresholds
-    z_entry_threshold: float = 2.0  # Entry threshold
+    z_entry_threshold: float = 2.1  # Entry threshold
     z_tp_threshold: float = 0.25  # Take profit when |Z| <= this
     z_sl_threshold: float = 4.0  # Stop loss when |Z| >= this
 

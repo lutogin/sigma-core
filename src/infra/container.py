@@ -329,6 +329,9 @@ class Container:
                 primary_symbol=self._settings.PRIMARY_PAIR,
                 debounce_seconds=1.0,
                 max_position_minutes=max_position_minutes,
+                trailing_sl_offset=self._settings.TRAILING_SL_OFFSET,
+                trailing_sl_activation=self._settings.TRAILING_SL_ACTIVATION,
+                z_entry_threshold=self._settings.Z_ENTRY_THRESHOLD,
             )
         return self._instances["exit_observer_service"]
 

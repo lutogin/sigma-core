@@ -113,6 +113,15 @@ class Settings:
         0.2  # Cancel watch only if Z drops this much below threshold
     )
 
+    # Trailing Stop Loss settings (smart SL that follows favorable moves)
+    # When Z-score moves in our favor, we tighten the SL to lock in gains
+    TRAILING_SL_OFFSET: float = 1.0  # Offset from min_z_reached for new SL
+    TRAILING_SL_ACTIVATION: float = (
+        1.4  # Min Z recovery from entry before trailing SL activates
+    )
+    # Example: Entry at Z=3.0, activation=1.0 → trail starts when Z drops to 2.0
+    # If Z drops to 1.0, new SL = max(entry_threshold, 1.0 + 1.5) = 2.5
+
     # Position sizing
     POSITION_SIZE_USDT: float = 100.0  # USDT размер позиции на COIN ногу
 
@@ -206,6 +215,10 @@ class Settings:
         self.TARGET_HALFLIFE_BARS = float(os.getenv("TARGET_HALFLIFE_BARS", "12.0"))
         self.MIN_SIZE_MULTIPLIER = float(os.getenv("MIN_SIZE_MULTIPLIER", "0.5"))
         self.MAX_SIZE_MULTIPLIER = float(os.getenv("MAX_SIZE_MULTIPLIER", "2.0"))
+
+        # Trailing Stop Loss
+        self.TRAILING_SL_OFFSET = float(os.getenv("TRAILING_SL_OFFSET", "1.3"))
+        self.TRAILING_SL_ACTIVATION = float(os.getenv("TRAILING_SL_ACTIVATION", "1.4"))
         # Volatility filter
         self.VOLATILITY_WINDOW = int(os.getenv("VOLATILITY_WINDOW", "24"))
         self.VOLATILITY_THRESHOLD = float(os.getenv("VOLATILITY_THRESHOLD", "0.008"))
@@ -345,6 +358,10 @@ class Settings:
         logger.info(
             f"  SIZE_MULTIPLIER: {self.MIN_SIZE_MULTIPLIER}x - {self.MAX_SIZE_MULTIPLIER}x"
         )
+        logger.info("-" * 40)
+        logger.info("🎯 Trailing SL Settings:")
+        logger.info(f"  TRAILING_SL_OFFSET: {self.TRAILING_SL_OFFSET}")
+        logger.info(f"  TRAILING_SL_ACTIVATION: {self.TRAILING_SL_ACTIVATION}")
         logger.info("-" * 40)
         logger.info("💸 Funding Filter Settings:")
         logger.info(

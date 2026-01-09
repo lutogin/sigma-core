@@ -57,7 +57,7 @@ class WatchCandidate:
     halflife: float = 0.0  # Half-life in bars (used for dynamic position sizing)
 
     # Thresholds
-    z_entry_threshold: float = 2.0
+    z_entry_threshold: float = 2.1
     z_tp_threshold: float = 0.25
     z_sl_threshold: float = 4.0
 

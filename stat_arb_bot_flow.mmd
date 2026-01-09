@@ -3,7 +3,6 @@
 flowchart TB
     subgraph SCHEDULER["⏰ SCHEDULER (PlannerService)"]
         CRON["Cron: */15 * * * *<br/>Every 15 minutes"]
-        TIMEOUT_CHECK["Check Position Timeouts<br/>MAX_POSITION_BARS=96 (~24h)"]
     end
 
     subgraph ORCHESTRATOR["🎯 ORCHESTRATOR (OrchestratorService.run)"]
@@ -73,8 +72,8 @@ flowchart TB
             direction TB
             GET_POSITIONS["Get Active Positions"]
 
-            subgraph EXIT_CONDITIONS["Structural Exit Conditions"]
-                EXIT_CORR["📉 CORRELATION_DROP<br/>corr < MIN_CORRELATION (0.8)"]
+            subgraph EXIT_CONDITIONS["Structural Exit Conditions<br/>(Hysteresis: relaxed thresholds)"]
+                EXIT_CORR["📉 CORRELATION_DROP<br/>corr < CORR_EXIT_THRESHOLD (0.70)<br/>(relaxed from entry 0.80)"]
                 EXIT_HURST["📈 HURST_TRENDING<br/>H >= HURST_THRESHOLD (0.45)"]
                 EXIT_TIMEOUT["⏰ TIMEOUT<br/>bars >= MAX_POSITION_BARS (96)"]
             end
@@ -84,7 +83,7 @@ flowchart TB
 
         subgraph WATCH_CHECK["👁️ WATCHED PAIRS CHECK"]
             CHECK_WATCHES["Check EntryObserver watches"]
-            REMOVE_WATCH["Remove if failed:<br/>CORRELATION_DROP<br/>or HURST >= 0.45<br/>or FALSE_ALARM"]
+            REMOVE_WATCH["Remove if failed:<br/>• CORRELATION < 0.75 (relaxed)<br/>• HURST >= 0.50 (with tolerance)<br/>• FALSE_ALARM"]
         end
 
         subgraph ENTRY_CHECK["🚀 ENTRY CONDITIONS CHECK (Orchestrator)"]
@@ -105,7 +104,7 @@ flowchart TB
                 FUNDING_TOXIC["❌ TOXIC_FUNDING<br/>Block Entry"]
             end
 
-            EMIT_PENDING["Emit PendingEntrySignalEvent<br/>(with dynamic_entry_threshold)"]
+            EMIT_PENDING["Emit PendingEntrySignalEvent<br/>(with dynamic_entry_threshold,<br/>halflife, hurst)"]
         end
     end
 
@@ -119,25 +118,25 @@ flowchart TB
         RECEIVE_PENDING["Receive PendingEntrySignalEvent"]
 
         subgraph EXISTING_WATCH["🔄 RE-VALIDATE & RESET (existing watch)"]
-            UPDATE_PARAMS["Update params:<br/>beta, spread_mean, spread_std"]
+            UPDATE_PARAMS["Update params:<br/>beta, spread_mean, spread_std,<br/>halflife"]
             RECALC_Z["Recalculate Z with new params"]
-            VALIDATE_CHECK{"new |Z| >= threshold?"}
+            VALIDATE_CHECK{"new |Z| >= threshold<br/>- FALSE_ALARM_HYSTERESIS?"}
             INVALIDATE["❌ PARAM_INVALIDATED<br/>Cancel watch"]
-            RESET_MAX["Reset max_z = new |Z|<br/>(prevents false pullback)"]
+            RESET_MAX["Reset max_z = new |Z|<br/>(prevents 'Parameter Jump')"]
         end
 
         subgraph WS_MONITOR["📡 WebSocket Real-Time Monitoring"]
             SUBSCRIBE["Subscribe to Book Ticker<br/>COIN + ETH prices"]
             CALC_LIVE_Z["Calculate Live Z-Score<br/>every 1 second (debounce)"]
-            TRACK_MAX["Track max |Z| reached"]
+            TRACK_MAX["Track max |Z| reached<br/>(only update UPWARD)"]
         end
 
         subgraph TRAILING_LOGIC["🎯 Trailing Entry Logic"]
             direction TB
             CHECK_TIMEOUT_W{"Watch Timeout?<br/>TRAILING_ENTRY_TIMEOUT=45min"}
-            CHECK_FALSE{"|Z| < threshold - 0.2?<br/>(False Alarm + Hysteresis)"}
+            CHECK_FALSE{"|Z| < threshold<br/>- FALSE_ALARM_HYSTERESIS (0.2)?"}
             CHECK_SL_W{"|Z| >= Z_SL_THRESHOLD?<br/>(SL Hit)"}
-            CHECK_PULLBACK{"|Z| <= max_Z - 0.2?<br/>(PULLBACK confirmed)"}
+            CHECK_PULLBACK{"|Z| <= max_Z<br/>- TRAILING_PULLBACK (0.2)?"}
 
             CANCEL_TIMEOUT["Cancel: TIMEOUT<br/>Apply Cooldown"]
             CANCEL_FALSE["Cancel: FALSE_ALARM"]
@@ -160,7 +159,7 @@ flowchart TB
 
         subgraph EXECUTION["⚡ Atomic Execution (ACID)"]
             subgraph DYN_SIZE["📊 DYNAMIC POSITION SIZING"]
-                CALC_MULT["multiplier = TARGET_HL (12) / current_HL<br/>clamped: [0.5x, 2.0x]"]
+                CALC_MULT["multiplier = √(TARGET_HL / current_HL)<br/>clamped: [0.5x, 2.0x]"]
                 CALC_SIZE["COIN = BASE_SIZE × multiplier<br/>PRIMARY = COIN × β"]
             end
 
@@ -172,18 +171,23 @@ flowchart TB
             ROLLBACK["🔄 Rollback on Failure<br/>(Delta-Neutral Protection)"]
         end
 
-        SAVE_FROZEN["Save FROZEN params:<br/>entry_beta, spread_mean,<br/>spread_std, z_tp, z_sl"]
+        SAVE_FROZEN["Save FROZEN params:<br/>entry_beta, spread_mean,<br/>spread_std, z_tp, z_sl,<br/>entry_halflife"]
         REGISTER_POS["Register Position<br/>in PositionStateService"]
         EMIT_OPENED["Emit TradeOpenedEvent"]
     end
 
-    subgraph EXIT_OBSERVER["🎯 EXIT OBSERVER (Real-Time TP/SL)"]
+    subgraph EXIT_OBSERVER["🎯 EXIT OBSERVER (Real-Time TP/SL/TIMEOUT)"]
         direction TB
         RECEIVE_OPENED["Receive TradeOpenedEvent"]
 
         subgraph EXIT_WS["📡 WebSocket Monitoring"]
             EXIT_SUBSCRIBE["Subscribe to Book Ticker"]
             EXIT_CALC_Z["Calculate Live Z-Score<br/>using FROZEN entry params<br/>(beta, spread_mean, spread_std)"]
+        end
+
+        subgraph TIMEOUT_CHECK_EXIT["⏰ TIMEOUT CHECK"]
+            CHECK_DURATION{"duration >= MAX_POSITION_MINUTES?<br/>(96 bars × 15min = 1440min)"}
+            TIMEOUT_EXIT["🕐 EXITED_TIMEOUT<br/>Force close position"]
         end
 
         subgraph DYNAMIC_TP["🎚️ DYNAMIC TP (Time-Based)"]
@@ -193,7 +197,14 @@ flowchart TB
 
         subgraph EXIT_LIVE_CHECK["TP/SL Conditions (real-time)"]
             LIVE_TP{"✅ TAKE_PROFIT<br/>|Z| <= dynamic_TP?"}
-            LIVE_SL{"🛑 STOP_LOSS<br/>|Z| >= Z_SL_THRESHOLD (4.0)?"}
+            LIVE_SL{"🛑 STOP_LOSS<br/>|Z| >= trailing_SL?"}
+        end
+
+        subgraph TRAILING_SL["📈 TRAILING STOP LOSS"]
+            TRACK_MIN["Track min_z_reached<br/>(lowest |Z| during position)"]
+            CHECK_ACTIVATION{"Z recovery >= 1.0?<br/>(from entry)"}
+            CALC_NEW_SL["new_SL = max(<br/>  z_entry_threshold,<br/>  min_z + OFFSET (1.5)<br/>)"]
+            TIGHTEN_SL["Tighten SL if new < old<br/>(SL can only decrease)"]
         end
 
         EMIT_EXIT_SIGNAL["Emit ExitSignalEvent"]
@@ -204,7 +215,7 @@ flowchart TB
 
         subgraph CLOSE_EXECUTION["Close Spread (Parallel)"]
             CLOSE_COIN["Close COIN entirely"]
-            CLOSE_PRIMARY["Close PRIMARY partially<br/>(only this spread's contracts)"]
+            CLOSE_PRIMARY["Close PRIMARY partially<br/>(only this spread's contracts:<br/>entry_primary_qty)"]
         end
 
         subgraph COOLDOWN_APPLY["⏸️ Apply Cooldown"]
@@ -218,8 +229,7 @@ flowchart TB
     end
 
     %% Main Flow Connections
-    CRON --> TIMEOUT_CHECK
-    TIMEOUT_CHECK --> START_SCAN
+    CRON --> START_SCAN
 
     START_SCAN --> PAIRS_MONGO
     PAIRS_MONGO --> PAIRS_FALLBACK
@@ -316,13 +326,21 @@ flowchart TB
     EMIT_OPENED --> RECEIVE_OPENED
     RECEIVE_OPENED --> EXIT_SUBSCRIBE
     EXIT_SUBSCRIBE --> EXIT_CALC_Z
-    EXIT_CALC_Z --> TIME_COEF
+    EXIT_CALC_Z --> CHECK_DURATION
+    CHECK_DURATION -->|Yes| TIMEOUT_EXIT
+    TIMEOUT_EXIT --> EMIT_EXIT_SIGNAL
+    CHECK_DURATION -->|No| TIME_COEF
     TIME_COEF --> DYN_TP_CALC
     DYN_TP_CALC --> LIVE_TP
     LIVE_TP -->|Yes| EMIT_EXIT_SIGNAL
     LIVE_TP -->|No| LIVE_SL
     LIVE_SL -->|Yes| EMIT_EXIT_SIGNAL
-    LIVE_SL -->|No| EXIT_CALC_Z
+    LIVE_SL -->|No| TRACK_MIN
+    TRACK_MIN --> CHECK_ACTIVATION
+    CHECK_ACTIVATION -->|Yes| CALC_NEW_SL
+    CHECK_ACTIVATION -->|No| EXIT_CALC_Z
+    CALC_NEW_SL --> TIGHTEN_SL
+    TIGHTEN_SL --> EXIT_CALC_Z
 
     %% Close Trade Flow
     EMIT_EXIT_SIGNAL --> RECEIVE_EXIT
@@ -348,13 +366,17 @@ flowchart TB
     classDef decision fill:#fd79a8,stroke:#e84393,stroke-width:2px,color:#fff
     classDef newfilter fill:#00cec9,stroke:#81ecec,stroke-width:2px,color:#fff
     classDef unsafe fill:#636e72,stroke:#b2bec3,stroke-width:2px,color:#fff
+    classDef timeout fill:#ff9f43,stroke:#feca57,stroke-width:2px,color:#000
 
-    class CRON,TIMEOUT_CHECK scheduler
+    class CRON scheduler
     class LOAD_DATA,CALC_CORR,CORR_FILTER,CALC_SPREAD,CALC_Z,PAIRS_MONGO,PAIRS_FALLBACK screener
     class VOL_CHECK,CALC_HURST_S,PERCENTILE,EMA_SMOOTH,FLOOR,CALC_FUNDING,CALC_NET,CALC_HL,CALC_ADF filter
     class ENTRY_Z,ENTRY_NO_POS,ENTRY_NO_COOL,ENTRY_MAX,EMIT_PENDING,EMIT_ENTRY,FUNDING_OK,HURST_PASS,HL_PASS,ADF_PASS entry
     class EXIT_TP,EXIT_SL,EXIT_CORR,EXIT_HURST,EXIT_TIMEOUT,EMIT_EXIT,EMIT_EXIT_SIGNAL,FUNDING_TOXIC,HURST_FAIL,HL_FAIL,ADF_FAIL exit
     class CALC_SIZE,CALC_MULT,OPEN_COIN,OPEN_PRIMARY,CLOSE_COIN,CLOSE_PRIMARY,SAVE_FROZEN trading
     class SUBSCRIBE,CALC_LIVE_Z,TRACK_MAX,EXIT_SUBSCRIBE,EXIT_CALC_Z,UPDATE_PARAMS,RECALC_Z,RESET_MAX observer
-    class VOL_SAFE,HURST_CHECK_S,HL_CHECK,ADF_CHECK,CHECK_TIMEOUT_W,CHECK_FALSE,CHECK_SL_W,CHECK_PULLBACK,LIVE_TP,LIVE_SL,COOLDOWN_CHECK,FUNDING_CHECK,VALIDATE_CHECK decision
+    class VOL_SAFE,HURST_CHECK_S,HL_CHECK,ADF_CHECK,CHECK_TIMEOUT_W,CHECK_FALSE,CHECK_SL_W,CHECK_PULLBACK,LIVE_TP,LIVE_SL,COOLDOWN_CHECK,FUNDING_CHECK,VALIDATE_CHECK,CHECK_DURATION decision
     class MARKET_UNSAFE,CANCEL_ALL_WATCHES,INVALIDATE unsafe
+    class TIMEOUT_EXIT timeout
+    class TRACK_MIN,CALC_NEW_SL,TIGHTEN_SL observer
+    class CHECK_ACTIVATION decision

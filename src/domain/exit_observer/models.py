@@ -58,8 +58,13 @@ class ExitWatch:
     halflife: float = 0.0  # Half-life in bars (stored for logging/debugging)
 
     # Thresholds
+    z_entry_threshold: float = 2.1  # Entry threshold (for trailing SL calculation)
     z_tp_threshold: float = 0.0  # Take profit when |Z| <= this
     z_sl_threshold: float = 4.0  # Stop loss when |Z| >= this
+    initial_sl_threshold: float = 4.0  # Original SL at entry (before trailing)
+
+    # Trailing SL tracking
+    min_z_reached: float = 0.0  # Minimum |Z| reached during position lifetime
 
     # Live prices (updated via WebSocket)
     coin_price: float = 0.0
