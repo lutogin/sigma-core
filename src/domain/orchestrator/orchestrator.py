@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from src.domain.position_state import PositionStateService
+from src.domain.position_state import PositionStateService, SpreadPosition
 from src.domain.screener import ScreenerService
 from src.domain.screener.hurst_filter import HurstFilterService
 from src.domain.screener.funding_filter import FundingFilterService
@@ -268,11 +268,15 @@ class OrchestratorService:
             # Check if Z-score dropped below entry threshold (signal disappeared)
             elif z_result is not None:
                 if abs(z_result.current_z_score) < z_result.dynamic_entry_threshold:
-                    self._logger.info(
+                    self._logger.warning(
                         f"❌ Watch {coin_symbol} signal DISAPPEARED | "
                         f"|Z|={abs(z_result.current_z_score):.2f} < threshold={z_result.dynamic_entry_threshold:.2f}"
                     )
-                    remove_reason = WatchCancelReason.FALSE_ALARM
+                    self._logger.warning(
+                        f"🔍 Z-score move to normal for {coin_symbol}. But still observe trailing entry."
+                    )
+                    # mute false alarm (when z-score returned to normal without entry)
+                    # remove_reason = WatchCancelReason.FALSE_ALARM
 
             # Remove from EntryObserver if failed any filter
             if remove_reason:
@@ -320,6 +324,8 @@ class OrchestratorService:
         if not open_positions:
             return exit_signals
 
+        self._logger.info(f"🔍 Checking exit conditions for {len(open_positions)} open positions")
+
         primary_df = raw_data.get(self._primary_pair)
         primary_price = primary_df["close"].iloc[-1] if primary_df is not None else 0.0
 
@@ -341,6 +347,7 @@ class OrchestratorService:
             if coin_symbol not in filtered_results:
                 exit_reason = self._determine_failed_filter_for_exit(
                     coin_symbol=coin_symbol,
+                    position=position,
                     z_result=z_result,
                     adf_pvalue=adf_pvalues.get(coin_symbol),
                     halflife=halflife_values.get(coin_symbol),
@@ -601,7 +608,11 @@ class OrchestratorService:
                     f"⛔ Watch {coin_symbol} failed ADF filter | "
                     f"p-value={adf_pvalue:.4f} >= {adf_threshold:.2f} (non-stationary)"
                 )
-                return WatchCancelReason.ADF_NON_STATIONARY
+                self._logger.warning(
+                    f"⚠️ ADF is non-stationary for {coin_symbol}. But still observe trailing entry."
+                )
+                # mute false alarm (when ADF is non-stationary) for now
+                # return WatchCancelReason.ADF_NON_STATIONARY
 
         # 2. Check Half-life filter
         if halflife_threshold is not None and halflife is not None:
@@ -610,7 +621,11 @@ class OrchestratorService:
                     f"⛔ Watch {coin_symbol} failed HALFLIFE filter | "
                     f"HL={halflife:.1f} bars > {halflife_threshold:.1f} (too slow)"
                 )
-                return WatchCancelReason.HALFLIFE_TOO_SLOW
+                # mute false alarm (when Half-life is too slow) for now
+                # return WatchCancelReason.HALFLIFE_TOO_SLOW
+                self._logger.warning(
+                    f"⚠️ Half-life is too slow for {coin_symbol}. But still observe trailing entry."
+                )
 
         # 3. Check Hurst filter (with tolerance for watches)
         if hurst_threshold is not None and hurst is not None:
@@ -645,6 +660,7 @@ class OrchestratorService:
     def _determine_failed_filter_for_exit(
         self,
         coin_symbol: str,
+        position: SpreadPosition,
         z_result: Optional[ZScoreResult],
         adf_pvalue: Optional[float],
         halflife: Optional[float],
@@ -667,10 +683,11 @@ class OrchestratorService:
         # 1. Check ADF filter
         if adf_threshold is not None and adf_pvalue is not None:
             if adf_pvalue >= adf_threshold:
-                self._logger.info(
+                self._logger.warning(
                     f"⛔ Position {coin_symbol} EXIT (ADF) | "
                     f"p-value={adf_pvalue:.4f} >= {adf_threshold:.2f} (non-stationary)"
                 )
+                # mute false alarm (when ADF is non-stationary) for now
                 # return ExitReason.ADF_NON_STATIONARY
 
         # 2. Check Half-life filter
@@ -680,7 +697,8 @@ class OrchestratorService:
                     f"⛔ Position {coin_symbol} EXIT (HALFLIFE) | "
                     f"HL={halflife:.1f} bars > {halflife_threshold:.1f} (too slow)"
                 )
-                return ExitReason.HALFLIFE_TOO_SLOW
+                # mute false alarm (when Half-life is too slow) for now
+                # return ExitReason.HALFLIFE_TOO_SLOW
 
         # 3. Check Hurst filter (with tolerance for positions)
         if hurst_threshold is not None and hurst is not None:
@@ -690,7 +708,7 @@ class OrchestratorService:
                     f"⛔ Position {coin_symbol} EXIT (HURST) | "
                     f"H={hurst:.3f} >= {max_allowed_hurst:.3f} (trending)"
                 )
-                return ExitReason.HURST_TRENDING
+                # return ExitReason.HURST_TRENDING
 
         # 4. Check Correlation
         if z_result.current_correlation < self._correlation_exit_threshold:

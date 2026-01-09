@@ -1344,9 +1344,10 @@ class StatArbBacktest:
                 exit_reason = "CORRELATION_DROP"
 
             # 4. STRUCTURAL: Hurst became trending
-            if exit_reason is None and self.hurst_filter_service is not None:
-                if self._check_hurst_exit(symbol, window_data, correlation_results):
-                    exit_reason = "HURST_TRENDING"
+            # MUTED: Like production orchestrator, we don't close positions on Hurst for now
+            # if exit_reason is None and self.hurst_filter_service is not None:
+            #     if self._check_hurst_exit(symbol, window_data, correlation_results):
+            #         exit_reason = "HURST_TRENDING"
 
             # 5. Z-Score TP/SL on 15m candles (when use_live_exit=False)
             # When use_live_exit=True, this is handled by _simulate_exit_observer on 1m
@@ -1939,24 +1940,27 @@ class StatArbBacktest:
             # 2. Check Z still above threshold (with hysteresis)
             # Use FROZEN watch.z_entry_threshold, not new scan's threshold
             # This prevents cancellation due to threshold drift
+            # MUTED: Like production orchestrator, we don't cancel on signal lost (FALSE_ALARM)
             invalidation_level = (
                 watch.z_entry_threshold - self.config.false_alarm_hysteresis
             )
             if abs_scan_z < invalidation_level:
                 print(
-                    f"❌ WATCH {symbol} SIGNAL_LOST | "
+                    f"🔍 WATCH {symbol} Z-score move to normal | "
                     f"scan_Z={abs_scan_z:.2f} < invalidation={invalidation_level:.2f} "
-                    f"(frozen_threshold={watch.z_entry_threshold:.2f} - hysteresis={self.config.false_alarm_hysteresis}) | "
-                    f"Frozen anchor max_z={watch.max_z:.2f} abandoned"
+                    f"(frozen_threshold={watch.z_entry_threshold:.2f}) | "
+                    f"But still observe trailing entry (max_z={watch.max_z:.2f})"
                 )
-                watches_to_remove.append((symbol, "SIGNAL_LOST"))
-                continue
+                # MUTED: Don't remove watch, keep observing
+                # watches_to_remove.append((symbol, "SIGNAL_LOST"))
+                # continue
 
             # 3. Check HURST filter (with tolerance for watches)
-            if self._check_hurst_exit(symbol, window_data, correlation_results):
-                print(f"❌ WATCH {symbol} HURST_TRENDING | spread became trending")
-                watches_to_remove.append((symbol, "HURST_TRENDING"))
-                continue
+            # MUTED: Like production orchestrator, we don't cancel watches on Hurst for now
+            # if self._check_hurst_exit(symbol, window_data, correlation_results):
+            #     print(f"❌ WATCH {symbol} HURST_TRENDING | spread became trending")
+            #     watches_to_remove.append((symbol, "HURST_TRENDING"))
+            #     continue
 
             # Signal still valid - KEEP FROZEN ANCHOR
             # beta, spread_mean, spread_std, z_entry_threshold stay frozen
@@ -2097,8 +2101,9 @@ class StatArbBacktest:
 
             # 3. Check false alarm with HYSTERESIS
             # Only cancel if Z dropped SIGNIFICANTLY below threshold
-            if abs_z < false_alarm_level:
-                return ("FALSE_ALARM", ts, live_z)
+            # MUTED: Like production orchestrator, we don't cancel on false alarm
+            # if abs_z < false_alarm_level:
+            #     return ("FALSE_ALARM", ts, live_z)
 
             # 4. Check SL hit
             if abs_z >= watch.z_sl_threshold:
