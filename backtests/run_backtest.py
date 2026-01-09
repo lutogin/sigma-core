@@ -334,10 +334,11 @@ class BacktestConfig:
 
     # Trailing Entry settings (simulation of live EntryObserverService)
     use_trailing_entry: bool = True  # Enable trailing entry simulation
-    trailing_pullback: float = 0.025  # Z-score pullback for reversal confirmation
-    trailing_timeout_minutes: int = 180  # Max watch duration before cancellation
+    # trailing_pullback: float = 0.15  # Z-score pullback for reversal confirmation
+    trailing_pullback: float = 0.25  # Z-score pullback for reversal confirmation
+    trailing_timeout_minutes: int = 90  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
-        0.25  # Cancel watch only if Z drops this much below threshold
+        0.50  # Cancel watch only if Z drops this much below threshold
     )
 
     use_adf_filter: bool = True  # Enable ADF filter
@@ -1885,110 +1886,66 @@ class StatArbBacktest:
                     watch.max_z = abs_z
 
             # =====================================================================
-            # 3. Re-Validate & Reset: Update parameters AFTER 1m simulation
-            #    This prepares max_z for the NEXT 15m bar
+            # 3. FROZEN ANCHOR VALIDATION (matches production EntryObserver)
+            #    We DO NOT update anchor params (beta, mean, std, max_z)
+            #    We only validate that signal is still alive
             # =====================================================================
-            # Check if we have z-score data for this symbol
-            # Like production Orchestrator._check_watched_pairs:
-            # If no z_result, treat as correlation = 0 (triggers removal)
             if not z_score_results or symbol not in z_score_results:
-                # No data for this symbol - remove watch (like production)
-                print(
-                    f"🔄❌ WATCH {symbol} NO_DATA | "
-                    f"symbol not in z_score_results (no correlation data?)"
-                )
+                print(f"❌ WATCH {symbol} NO_DATA | symbol not in z_score_results")
                 watches_to_remove.append((symbol, "NO_DATA"))
                 continue
 
-                z_result = z_score_results[symbol]
+            z_result = z_score_results[symbol]
 
-                # Store old values for logging
-                old_beta = watch.beta
-                old_std = watch.spread_std
-                old_max_z = watch.max_z
+            # LIVENESS CHECK: Is the signal still valid on new scan?
+            # Use the NEW Z-score from scan to check if signal disappeared
+            scan_z = z_result.current_z_score
+            abs_scan_z = abs(scan_z)
 
-                # Update calculation parameters
-                watch.beta = z_result.current_beta
-                watch.correlation = z_result.current_correlation
-                watch.z_entry_threshold = z_result.dynamic_entry_threshold
-
-                # Recalculate spread_mean and spread_std
-                lookback = min(len(z_result.spread_series), 288)
-                recent_spread = z_result.spread_series.tail(lookback).dropna()
-                if len(recent_spread) > 0:
-                    watch.spread_mean = float(recent_spread.mean())
-                if len(recent_spread) > 1:
-                    watch.spread_std = float(recent_spread.std())
-
-            # Update halflife for dynamic position sizing
-            if self.config.use_dynamic_position_size:
-                new_halflife = self._get_halflife_for_symbol(
-                    symbol, window_data, correlation_results
-                )
-                if new_halflife is not None:
-                    watch.halflife = new_halflife
-
-                # Recalculate Z with NEW parameters
-                coin_price = window_data[symbol]["close"].iloc[-1]
-                primary_price = window_data[self.primary_pair]["close"].iloc[-1]
-                new_z = self._calculate_live_z(
-                    coin_price,
-                    primary_price,
-                    watch.beta,
-                    watch.spread_mean,
-                    watch.spread_std,
-                )
-                abs_new_z = abs(new_z)
-
-                # RE-VALIDATE: Check if signal still valid
             # 1. Check correlation with hysteresis
-            if watch.correlation < self.config.correlation_watch_threshold:
+            if z_result.current_correlation < self.config.correlation_watch_threshold:
                 print(
-                    f"🔄❌ WATCH {symbol} CORRELATION_DROP | "
-                    f"corr={watch.correlation:.3f} < watch_threshold={self.config.correlation_watch_threshold} | "
-                    f"entry_threshold={self.config.min_correlation}"
+                    f"❌ WATCH {symbol} CORRELATION_DROP | "
+                    f"corr={z_result.current_correlation:.3f} < {self.config.correlation_watch_threshold}"
                 )
                 watches_to_remove.append((symbol, "CORRELATION_DROP"))
                 continue
 
             # 2. Check Z still above threshold (with hysteresis)
+            # Use FROZEN watch.z_entry_threshold, not new scan's threshold
+            # This prevents cancellation due to threshold drift
             invalidation_level = (
                 watch.z_entry_threshold - self.config.false_alarm_hysteresis
             )
-            if abs_new_z < invalidation_level:
+            if abs_scan_z < invalidation_level:
                 print(
-                    f"🔄❌ WATCH {symbol} INVALIDATED after param update | "
-                    f"new_Z={abs_new_z:.2f} < invalidation={invalidation_level:.2f} "
-                    f"(threshold={watch.z_entry_threshold:.2f} - hysteresis={self.config.false_alarm_hysteresis}) | "
-                    f"std: {old_std:.4f}→{watch.spread_std:.4f}"
+                    f"❌ WATCH {symbol} SIGNAL_LOST | "
+                    f"scan_Z={abs_scan_z:.2f} < invalidation={invalidation_level:.2f} "
+                    f"(frozen_threshold={watch.z_entry_threshold:.2f} - hysteresis={self.config.false_alarm_hysteresis}) | "
+                    f"Frozen anchor max_z={watch.max_z:.2f} abandoned"
                 )
-                watches_to_remove.append((symbol, "PARAM_INVALIDATED"))
+                watches_to_remove.append((symbol, "SIGNAL_LOST"))
                 continue
 
             # 3. Check HURST filter (with tolerance for watches)
             if self._check_hurst_exit(symbol, window_data, correlation_results):
-                print(
-                    f"🔄❌ WATCH {symbol} HURST_TRENDING | "
-                    f"spread became trending after param update"
-                )
+                print(f"❌ WATCH {symbol} HURST_TRENDING | spread became trending")
                 watches_to_remove.append((symbol, "HURST_TRENDING"))
                 continue
 
-                # RESET: Signal still valid - reset max_z for NEXT bar
-                # This prevents Parameter Jump false entries
-                watch.max_z = abs_new_z
+            # Signal still valid - KEEP FROZEN ANCHOR for params
+            # beta, spread_mean, spread_std, z_entry_threshold stay frozen
+            # BUT max_z CAN increase if scan Z is higher (it's a MAX tracker!)
+            old_max_z = watch.max_z
+            if abs_scan_z > watch.max_z:
+                watch.max_z = abs_scan_z
 
-                # Log significant parameter changes
-                if (
-                    abs(old_beta - watch.beta) > 0.01
-                    or abs(old_std - watch.spread_std) > 0.0001
-                ):
-                    print(
-                        f"🔄 Updated watch {symbol} | "
-                        f"β: {old_beta:.3f}→{watch.beta:.3f} | "
-                        f"std: {old_std:.4f}→{watch.spread_std:.4f} | "
-                        f"Z={new_z:.2f} | max_z: {old_max_z:.2f}→{watch.max_z:.2f} (RESET)"
-                    )
+            entry_target = watch.max_z - self.config.trailing_pullback
+            max_z_change = f"→{watch.max_z:.2f}" if watch.max_z != old_max_z else ""
+            print(
+                f"🛡️ WATCH {symbol} FROZEN | scan_Z={abs_scan_z:.2f} | "
+                f"max_z={old_max_z:.2f}{max_z_change} | entry_target={entry_target:.2f}"
+            )
 
         # Remove processed watches
         for symbol, reason in watches_to_remove:
@@ -1999,6 +1956,7 @@ class StatArbBacktest:
                 "SL_HIT",
                 "TIMEOUT",
                 "PARAM_INVALIDATED",
+                "SIGNAL_LOST",
                 "CORRELATION_DROP",
                 "HURST_TRENDING",
                 "NO_DATA",
@@ -2011,188 +1969,6 @@ class StatArbBacktest:
                     )
                     self.symbol_cooldowns[symbol] = current_time + timedelta(
                         minutes=cooldown_minutes
-                    )
-
-    async def _process_watches_gemini_gavno(
-        self,
-        current_time: datetime,
-        current_bar_idx: int,
-        window_data: Dict[str, pd.DataFrame],
-        correlation_results: Dict,
-        z_score_results: Optional[Dict[str, ZScoreResult]] = None,
-    ) -> None:
-        """
-        LOGIC:
-        1. 15m Boundary: Strict Reset of max_z (Safety against parameter jumps).
-        2. 1m Simulation: No downward reset (To catch pullbacks).
-        3. Increased Hurst Tolerance.
-        """
-        watches_to_remove = []
-
-        for symbol, watch in list(self.watch_candidates.items()):
-
-            # 1. Check timeout
-            watch_duration_minutes = (
-                current_time - watch.start_time
-            ).total_seconds() / 60
-            if watch_duration_minutes >= self.config.trailing_timeout_minutes:
-                # print(f"  ⏰ {symbol} TIMEOUT")
-                watches_to_remove.append((symbol, "TIMEOUT"))
-                continue
-
-            # 2. SIMULATE 1m TRAILING (Current 15m bar ONLY)
-            bar_start_time = current_time - timedelta(minutes=self._timeframe_minutes)
-
-            # Load 1m candles
-            coin_1m = await self._load_minute_candles_for_watch(
-                symbol, bar_start_time, current_time
-            )
-
-            # Флаг, проверили ли мы 1m данные
-            checked_1m = False
-
-            if coin_1m is not None and not coin_1m.empty:
-                primary_1m = await self._load_minute_candles_for_watch(
-                    self.primary_pair, bar_start_time, current_time
-                )
-
-                if primary_1m is not None and not primary_1m.empty:
-                    checked_1m = True
-                    # Внутри этой функции max_z обновляется ТОЛЬКО ВВЕРХ
-                    entry_result = self._simulate_trailing_on_minute_data(
-                        watch, coin_1m, primary_1m
-                    )
-
-                    if entry_result is not None:
-                        action, entry_time, entry_z = entry_result
-
-                        if action == "ENTER":
-                            await self._execute_watch_entry(
-                                watch, entry_time, entry_z, current_bar_idx, window_data
-                            )
-                            watches_to_remove.append((symbol, None))
-                            # Check intraday exit
-                            await self._check_intraday_exit_after_entry(
-                                symbol,
-                                entry_time,
-                                current_time,
-                                coin_1m,
-                                primary_1m,
-                                watch,
-                                window_data,
-                            )
-                            continue
-                        elif action == "TIMEOUT":
-                            watches_to_remove.append((symbol, "TIMEOUT"))
-                            continue
-                        elif action in ["FALSE_ALARM", "SL_HIT"]:
-                            watches_to_remove.append((symbol, action))
-                            continue
-
-            # Fallback (если нет 1m данных)
-            if not checked_1m:
-                coin_price = window_data[symbol]["close"].iloc[-1]
-                primary_price = window_data[self.primary_pair]["close"].iloc[-1]
-                live_z = self._calculate_live_z(
-                    coin_price,
-                    primary_price,
-                    watch.beta,
-                    watch.spread_mean,
-                    watch.spread_std,
-                )
-                if abs(live_z) <= watch.max_z - self.config.trailing_pullback:
-                    await self._execute_watch_entry(
-                        watch, current_time, live_z, current_bar_idx, window_data
-                    )
-                    watches_to_remove.append((symbol, None))
-                continue
-
-            # 3. RE-VALIDATE & RESET (Granitsa 15m svechi)
-            # =================================================================
-            # Вот тут мы ОБЯЗАНЫ обновить параметры и max_z
-            if z_score_results and symbol in z_score_results:
-                z_result = z_score_results[symbol]
-
-                # Обновляем параметры (Beta, Mean, Std)
-                watch.beta = z_result.current_beta
-                watch.correlation = z_result.current_correlation
-                watch.z_entry_threshold = z_result.dynamic_entry_threshold
-
-                # Обновляем статистику спреда
-                lookback = min(len(z_result.spread_series), 288)
-                recent_spread = z_result.spread_series.tail(lookback).dropna()
-                if len(recent_spread) > 0:
-                    watch.spread_mean = float(recent_spread.mean())
-                if len(recent_spread) > 1:
-                    watch.spread_std = float(recent_spread.std())
-
-                # Пересчитываем Z с НОВЫМИ параметрами (Reset Z)
-                coin_price = window_data[symbol]["close"].iloc[-1]
-                primary_price = window_data[self.primary_pair]["close"].iloc[-1]
-                new_z = self._calculate_live_z(
-                    coin_price,
-                    primary_price,
-                    watch.beta,
-                    watch.spread_mean,
-                    watch.spread_std,
-                )
-                abs_new_z = abs(new_z)
-
-                # Проверка корреляции
-                if watch.correlation < self.config.correlation_watch_threshold:
-                    watches_to_remove.append((symbol, "CORRELATION_DROP"))
-                continue
-
-                # Проверка Invalidation (Слишком сильное падение Z из-за смены параметров)
-                invalidation_level = (
-                    watch.z_entry_threshold - self.config.false_alarm_hysteresis
-                )
-                if abs_new_z < invalidation_level:
-                    watches_to_remove.append((symbol, "PARAM_INVALIDATED"))
-                    continue
-
-                # Копируем логику _check_hurst_exit, но с большим порогом
-                if self.hurst_filter_service:
-                    # Hurst считаем по спреду
-                    hurst = self.hurst_filter_service.calculate_for_spread(
-                        window_data[symbol]["close"].apply(np.log),
-                        window_data[self.primary_pair]["close"].apply(np.log),
-                        watch.beta,
-                    )
-                    # Если Hurst > 0.45 + 0.10 = 0.55 -> Выходим
-                    if hurst is not None and hurst >= (
-                        self.hurst_filter_service.threshold
-                        + self.config.hurst_watch_tolerance
-                    ):
-                        print(
-                            f"📈 {symbol} Hurst Trending: {hurst:.3f} >= {self.hurst_filter_service.threshold + self.config.hurst_watch_tolerance:.3f}"
-                        )
-                        watches_to_remove.append((symbol, "HURST_TRENDING"))
-                        continue
-
-                # === STRICT RESET (Ты был прав) ===
-                # Мы сбрасываем max_z на текущий Z.
-                # Это защищает от Parameter Jump, но делает вход сложнее (надо поймать откат внутри одной свечи).
-                # Чтобы это работало, Trailing Pullback должен быть разумным (0.1 - 0.15).
-                watch.max_z = abs_new_z
-                # print(f"  🔄 {symbol} Reset MaxZ to {watch.max_z:.2f}")
-
-        # Cleanup
-        for symbol, reason in watches_to_remove:
-            if symbol in self.watch_candidates:
-                del self.watch_candidates[symbol]
-            if reason in (
-                "FALSE_ALARM",
-                "SL_HIT",
-                "TIMEOUT",
-                "PARAM_INVALIDATED",
-                "CORRELATION_DROP",
-                "HURST_TRENDING",
-            ):
-                self.trailing_cancelled_count += 1
-                if self.config.cooldown_bars > 0:
-                    self.symbol_cooldowns[symbol] = current_time + timedelta(
-                        minutes=self.config.cooldown_bars * self._timeframe_minutes
                     )
 
     async def _load_minute_candles_for_watch(
@@ -2272,6 +2048,11 @@ class StatArbBacktest:
         # Align data
         common_index = coin_1m.index.intersection(primary_1m.index)
 
+        # Debug: check if we have data
+        if len(common_index) == 0:
+            print(f"    ⚠️ {watch.symbol} No 1m candles in common index")
+            return None
+
         for ts in common_index:
             coin_price = coin_1m.loc[ts, "close"]
             primary_price = primary_1m.loc[ts, "close"]
@@ -2311,6 +2092,15 @@ class StatArbBacktest:
 
         # Update max_z in watch for next iteration
         watch.max_z = max_z
+
+        # Debug: why no entry?
+        entry_target = max_z - self.config.trailing_pullback
+        print(
+            f"    📊 {watch.symbol} 1m simulation: {len(common_index)} candles | "
+            f"max_z={max_z:.2f} | entry_target={entry_target:.2f} | "
+            f"false_alarm={false_alarm_level:.2f}"
+        )
+
         return None
 
     def _update_trailing_sl_for_position(

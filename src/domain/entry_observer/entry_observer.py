@@ -192,12 +192,18 @@ class EntryObserverService:
         """
         Handle PendingEntrySignalEvent - start monitoring for reversal.
 
-        If already watching this symbol, validate and update the watch parameters.
-        Uses "Re-Validate & Reset" algorithm to avoid Parameter Jump trap:
-        1. Update calculation parameters (beta, spread_mean, spread_std)
-        2. Recalculate Z-score with new parameters
-        3. If new |Z| < entry_threshold → cancel watch (signal disappeared)
-        4. If new |Z| >= entry_threshold → reset max_z to new |Z| (avoid false pullback)
+        FROZEN ANCHOR TRAILING:
+        When already watching a symbol, we DO NOT update the anchor parameters
+        (beta, spread_mean, spread_std, max_z). We only validate that the signal
+        is still alive using the NEW scan's Z-score.
+
+        Why? Because trailing entry is a reaction to a SPECIFIC extremum,
+        not to a constantly updating model. Updating parameters every 15m
+        causes "moving goalposts" where the entry target keeps shifting
+        and trades never execute.
+
+        For NEW watches: anchor the parameters at detection time.
+        For EXISTING watches: only validate, don't update anchor.
 
         Args:
             event: Pending entry signal with initial Z-score and spread stats.
@@ -205,57 +211,48 @@ class EntryObserverService:
         coin = event.coin_symbol
 
         async with self._lock:
-            # Check if already watching this symbol
+            # =====================================================================
+            # EXISTING WATCH: Validate only, keep frozen anchor
+            # =====================================================================
             if coin in self._watches:
                 watch = self._watches[coin]
-                old_beta = watch.beta
-                old_mean = watch.spread_mean
-                old_std = watch.spread_std
-                old_max_z = watch.max_z
 
-                # Update calculation parameters (these change with new data)
-                watch.beta = event.beta
-                watch.spread_mean = event.spread_mean
-                watch.spread_std = event.spread_std
-                watch.correlation = event.correlation
-                watch.hurst = event.hurst
-                watch.halflife = event.halflife
-                watch.z_entry_threshold = event.z_entry_threshold
-                watch.z_tp_threshold = event.z_tp_threshold
-                watch.z_sl_threshold = event.z_sl_threshold
+                # LIVENESS CHECK: Is the signal still valid on new scan?
+                # We use the NEW Z-score from event, but FROZEN threshold from watch
+                # This prevents cancellation due to threshold drift
+                invalidation_level = (
+                    watch.z_entry_threshold - self._false_alarm_hysteresis
+                )
+                abs_event_z = abs(event.z_score)
 
-                # Recalculate Z-score with NEW parameters
-                new_z = watch.current_z_score
-                abs_new_z = abs(new_z)
-
-                # RE-VALIDATE: Check if signal still valid with new parameters
-                # Use hysteresis to prevent premature cancellation on minor Z drops
-                # Same logic as FALSE_ALARM check during trailing
-                invalidation_level = event.z_entry_threshold - self._false_alarm_hysteresis
-                if abs_new_z < invalidation_level:
-                    # Signal disappeared after parameter update - cancel watch
+                if abs_event_z < invalidation_level:
+                    # Signal disappeared on new scan - cancel watch
                     self._logger.info(
-                        f"🔄❌ Watch {coin} INVALIDATED after param update | "
-                        f"new_Z={new_z:.2f} < invalidation_level={invalidation_level:.2f} | "
-                        f"std: {old_std:.4f}→{event.spread_std:.4f}"
+                        f"❌ Watch {coin} CANCELLED by scan | "
+                        f"New scan Z={event.z_score:.2f} < invalidation={invalidation_level:.2f} "
+                        f"(frozen_threshold={watch.z_entry_threshold:.2f}) | "
+                        f"Signal lost, cancelling frozen anchor (max_z={watch.max_z:.2f})"
                     )
-                    # Release lock before cancelling
                     self._watches.pop(coin, None)
-                    # Cancel outside lock
                     asyncio.create_task(
-                        self._cancel_watch_after_param_update(coin, watch, new_z)
+                        self._cancel_watch_after_param_update(
+                            coin, watch, event.z_score
+                        )
                     )
                     return
 
-                # RESET: Signal still valid - reset max_z to avoid Parameter Jump
-                # This prevents false pullback detection when std changes
-                watch.max_z = abs_new_z
+                # Signal still valid - KEEP FROZEN ANCHOR for params
+                # beta, spread_mean, spread_std, z_entry_threshold stay frozen
+                # BUT max_z CAN increase if scan Z is higher (it's a MAX tracker!)
+                old_max_z = watch.max_z
+                if abs_event_z > watch.max_z:
+                    watch.max_z = abs_event_z
 
+                max_z_change = f"→{watch.max_z:.2f}" if watch.max_z != old_max_z else ""
                 self._logger.info(
-                    f"🔄 Updated watch {coin} | "
-                    f"β: {old_beta:.3f}→{event.beta:.3f} | "
-                    f"std: {old_std:.4f}→{event.spread_std:.4f} | "
-                    f"Z={new_z:.2f} | max_z: {old_max_z:.2f}→{watch.max_z:.2f} (RESET)"
+                    f"🛡️ Watch {coin} FROZEN | "
+                    f"scan_Z={abs_event_z:.2f} | max_z={old_max_z:.2f}{max_z_change} | "
+                    f"β={watch.beta:.3f} (frozen)"
                 )
                 return
 

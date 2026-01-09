@@ -595,3 +595,128 @@ class EntryObserverPlusRedisService:
             if status:
                 result[coin] = status
         return result
+
+    async def _on_pending_signal(self, event: PendingEntrySignalEvent) -> None:
+        """
+        Handle PendingEntrySignalEvent - start monitoring for reversal.
+
+        If already watching this symbol, validate and update the watch parameters.
+        Uses "Re-Validate & Reset" algorithm to avoid Parameter Jump trap:
+        1. Update calculation parameters (beta, spread_mean, spread_std)
+        2. Recalculate Z-score with new parameters
+        3. If new |Z| < entry_threshold → cancel watch (signal disappeared)
+        4. If new |Z| >= entry_threshold → reset max_z to new |Z| (avoid false pullback)
+
+        Args:
+            event: Pending entry signal with initial Z-score and spread stats.
+        """
+        coin = event.coin_symbol
+
+        async with self._lock:
+            # Check if already watching this symbol
+            if coin in self._watches:
+                watch = self._watches[coin]
+                old_beta = watch.beta
+                old_mean = watch.spread_mean
+                old_std = watch.spread_std
+                old_max_z = watch.max_z
+
+                # Update calculation parameters (these change with new data)
+                watch.beta = event.beta
+                watch.spread_mean = event.spread_mean
+                watch.spread_std = event.spread_std
+                watch.correlation = event.correlation
+                watch.hurst = event.hurst
+                watch.halflife = event.halflife
+                watch.z_entry_threshold = event.z_entry_threshold
+                watch.z_tp_threshold = event.z_tp_threshold
+                watch.z_sl_threshold = event.z_sl_threshold
+
+                # Recalculate Z-score with NEW parameters
+                new_z = watch.current_z_score
+                abs_new_z = abs(new_z)
+
+                # RE-VALIDATE: Check if signal still valid with new parameters
+                # Use hysteresis to prevent premature cancellation on minor Z drops
+                # Same logic as FALSE_ALARM check during trailing
+                invalidation_level = event.z_entry_threshold - self._false_alarm_hysteresis
+                if abs_new_z < invalidation_level:
+                    # Signal disappeared after parameter update - cancel watch
+                    self._logger.info(
+                        f"🔄❌ Watch {coin} INVALIDATED after param update | "
+                        f"new_Z={new_z:.2f} < invalidation_level={invalidation_level:.2f} | "
+                        f"std: {old_std:.4f}→{event.spread_std:.4f}"
+                    )
+                    # Release lock before cancelling
+                    self._watches.pop(coin, None)
+                    # Cancel outside lock
+                    asyncio.create_task(
+                        self._cancel_watch_after_param_update(coin, watch, new_z)
+                    )
+                    return
+
+                # RESET: Signal still valid - reset max_z to avoid Parameter Jump
+                # This prevents false pullback detection when std changes
+                watch.max_z = abs_new_z
+
+                self._logger.info(
+                    f"🔄 Updated watch {coin} | "
+                    f"β: {old_beta:.3f}→{event.beta:.3f} | "
+                    f"std: {old_std:.4f}→{event.spread_std:.4f} | "
+                    f"Z={new_z:.2f} | max_z: {old_max_z:.2f}→{watch.max_z:.2f} (RESET)"
+                )
+                return
+
+            # Check max watches limit
+            if len(self._watches) >= self._max_watches:
+                self._logger.warning(
+                    f"Max watches ({self._max_watches}) reached, skipping {coin}"
+                )
+                await self._emitter.emit(
+                    WatchCancelledEvent(
+                        coin_symbol=coin,
+                        primary_symbol=event.primary_symbol,
+                        reason=WatchCancelReason.MAX_WATCHES_REACHED,
+                        max_z_reached=abs(event.z_score),
+                        final_z=event.z_score,
+                        watch_duration_seconds=0,
+                    )
+                )
+                return
+
+            # Create WatchCandidate
+            watch = WatchCandidate(
+                coin_symbol=coin,
+                primary_symbol=event.primary_symbol,
+                spread_side=event.spread_side.value,
+                max_z=abs(event.z_score),
+                beta=event.beta,
+                spread_mean=event.spread_mean,
+                spread_std=event.spread_std,
+                initial_z=event.z_score,
+                correlation=event.correlation,
+                hurst=event.hurst,
+                halflife=event.halflife,
+                z_entry_threshold=event.z_entry_threshold,
+                z_tp_threshold=event.z_tp_threshold,
+                z_sl_threshold=event.z_sl_threshold,
+                coin_price=event.coin_price,
+                primary_price=event.primary_price,
+            )
+
+            # Store in memory
+            self._watches[coin] = watch
+
+            self._logger.info(
+                f"👀 Started watching {coin} | "
+                f"Z={event.z_score:.2f} | max_z={watch.max_z:.2f} | "
+                f"side={event.spread_side.value} | "
+                f"pullback_target={watch.max_z - self._pullback:.2f}"
+            )
+
+        # Subscribe to WebSocket feeds (outside lock to avoid blocking)
+        await self._subscribe_coin(coin)
+
+        # Subscribe to primary if not already
+        if self._primary_ws_task is None:
+            await self._subscribe_primary()
