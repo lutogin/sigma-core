@@ -342,15 +342,12 @@ class BacktestConfig:
         •	sqrt(1/15) ≈ 0.258
 
     Тогда:
-	    •	0.25 * 0.258 ≈ 0.065 ~ 0.07 || 0.06
+	    •	0.25 * 0.258 ≈ 0.065 ~ 0.07
     То есть, если “0.25 на реальных тиках” примерно соответствует “0.06 - 0.08 на 1m close”.
-
-    Реально, с учётом сглаживания close, можно ожидать диапазон:
-	    •	0.05 ~ 0.10 для backtest на 1m close.
     """
     use_trailing_entry: bool = True  # Enable trailing entry simulation
     trailing_pullback: float = 0.03  # Z-score pullback for reversal confirmation
-    trailing_timeout_minutes: int = 60  # Max watch duration before cancellation
+    trailing_timeout_minutes: int = 90  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
         0.45  # Cancel watch only if Z drops this much below threshold
     )
