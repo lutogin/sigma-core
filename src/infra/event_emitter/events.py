@@ -74,6 +74,12 @@ class ExitReason(str, Enum):
     CORRELATION_DROP = "correlation_drop"  # Pair decoupled from primary
     TIMEOUT = "timeout"  # Position held too long
     HURST_TRENDING = "hurst_trending"  # Spread became trending
+    ADF_NON_STATIONARY = (
+        "adf_non_stationary"  # Spread is not stationary (failed ADF test)
+    )
+    HALFLIFE_TOO_SLOW = (
+        "halflife_too_slow"  # Mean reversion too slow (half-life too long)
+    )
     MANUAL = "manual"  # Manual close
 
 
@@ -98,6 +104,10 @@ class WatchCancelReason(str, Enum):
     MAX_WATCHES_REACHED = "max_watches_reached"  # Too many concurrent watches
     CORRELATION_DROP = "correlation_drop"  # Correlation dropped below threshold
     HURST_TRENDING = "hurst_trending"  # Spread became trending (Hurst >= threshold)
+    ADF_NON_STATIONARY = "adf_non_stationary"  # Spread is not stationary (failed ADF)
+    HALFLIFE_TOO_SLOW = (
+        "halflife_too_slow"  # Mean reversion too slow (half-life too long)
+    )
 
 
 # =============================================================================

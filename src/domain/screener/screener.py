@@ -178,6 +178,27 @@ class ScreenerService:
         """Get Z-score service for threshold access."""
         return self._z_score_service
 
+    @property
+    def adf_threshold(self) -> Optional[float]:
+        """Get ADF p-value threshold for stationarity."""
+        if self._adf_filter_service and self._adf_filter_service.is_available:
+            return self._adf_filter_service.threshold
+        return None
+
+    @property
+    def halflife_threshold(self) -> Optional[float]:
+        """Get half-life threshold (max bars for mean reversion)."""
+        if self._halflife_filter_service and self._halflife_filter_service.is_available:
+            return self._halflife_filter_service.threshold
+        return None
+
+    @property
+    def hurst_threshold(self) -> Optional[float]:
+        """Get Hurst exponent threshold for mean reversion."""
+        if self._hurst_filter_service:
+            return self._hurst_filter_service.threshold
+        return None
+
     # =========================================================================
     # Trading Pairs
     # =========================================================================

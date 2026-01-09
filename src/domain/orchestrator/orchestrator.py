@@ -169,15 +169,21 @@ class OrchestratorService:
             z_score_results=scan_result.all_z_score_results,
             filtered_results=scan_result.filtered_results,
             raw_data=scan_result.raw_data,
-            min_correlation=min_correlation,
+            _min_correlation=min_correlation,
+            adf_pvalues=scan_result.adf_pvalues,
+            halflife_values=scan_result.halflife_values,
+            hurst_values=scan_result.hurst_values,
         )
 
         # 4. Check watched pairs in EntryObserver - remove if they failed filters
         await self._check_watched_pairs(
             z_score_results=scan_result.all_z_score_results,
             filtered_results=scan_result.filtered_results,
-            raw_data=scan_result.raw_data,
-            min_correlation=min_correlation,
+            _raw_data=scan_result.raw_data,
+            _min_correlation=min_correlation,
+            adf_pvalues=scan_result.adf_pvalues,
+            halflife_values=scan_result.halflife_values,
+            hurst_values=scan_result.hurst_values,
         )
 
         # 5. Check entry conditions for new positions
@@ -186,7 +192,7 @@ class OrchestratorService:
             hurst_values=scan_result.hurst_values,
             halflife_values=scan_result.halflife_values,
             raw_data=scan_result.raw_data,
-            z_entry=z_entry,
+            _z_entry=z_entry,
             z_sl=z_sl,
             z_tp=z_tp,
         )
@@ -216,17 +222,22 @@ class OrchestratorService:
         self,
         z_score_results: Dict[str, ZScoreResult],
         filtered_results: Dict[str, ZScoreResult],
-        raw_data: Dict[str, pd.DataFrame],
-        min_correlation: float,
+        _raw_data: Dict[str, pd.DataFrame],
+        _min_correlation: float,
+        adf_pvalues: Dict[str, float],
+        halflife_values: Dict[str, float],
+        hurst_values: Dict[str, float],
     ) -> None:
         """
         Check if any watched pairs in EntryObserver should be removed.
 
         A watched pair should be removed if:
-        1. CORRELATION_DROP: correlation < correlation_watch_threshold (with hysteresis)
-           Uses relaxed threshold (0.75) vs entry threshold (0.80)
-        2. HURST_TRENDING: Hurst >= hurst_threshold (spread became trending)
-        3. FALSE_ALARM: |Z| < dynamic_entry_threshold (signal disappeared)
+        1. Symbol is NOT in filtered_results - determine specific reason:
+           - ADF_NON_STATIONARY: failed ADF test
+           - HALFLIFE_TOO_SLOW: half-life too long
+           - HURST_TRENDING: spread became trending
+           - CORRELATION_DROP: correlation dropped
+        2. FALSE_ALARM: |Z| < dynamic_entry_threshold (signal disappeared)
 
         This prevents entering positions on pairs that no longer meet criteria.
         """
@@ -238,61 +249,30 @@ class OrchestratorService:
         if not watched:
             return
 
-        primary_df = raw_data.get(self._primary_pair)
-
-        for coin_symbol, watch_info in list(watched.items()):
+        for coin_symbol in list(watched.keys()):
             remove_reason = None
             z_result = z_score_results.get(coin_symbol)
 
-            # Check correlation with HYSTERESIS
-            # Entry requires >= MIN_CORRELATION (0.80)
-            # Remove watch only when correlation drops below relaxed threshold (0.75)
-            current_corr = z_result.current_correlation if z_result else 0.0
-            if current_corr < self._correlation_watch_threshold:
-                self._logger.info(
-                    f"🔻 Watch {coin_symbol} failed CORRELATION filter | "
-                    f"corr={current_corr:.3f} < watch_threshold={self._correlation_watch_threshold} "
-                    f"(entry_threshold={min_correlation})"
+            # FIRST CHECK: If symbol is NOT in filtered_results, determine which filter failed
+            if coin_symbol not in filtered_results:
+                # Determine specific filter that failed using data from ScanResult
+                remove_reason = self._determine_failed_filter(
+                    coin_symbol=coin_symbol,
+                    z_result=z_result,
+                    adf_pvalue=adf_pvalues.get(coin_symbol),
+                    halflife=halflife_values.get(coin_symbol),
+                    hurst=hurst_values.get(coin_symbol),
+                    is_watch=True,  # Use watch thresholds (with tolerance)
                 )
-                remove_reason = WatchCancelReason.CORRELATION_DROP
 
+            # Check if Z-score dropped below entry threshold (signal disappeared)
             elif z_result is not None:
-                # Check if Z-score dropped below entry threshold (signal disappeared)
-                current_z = z_result.current_z_score
-                dynamic_threshold = z_result.dynamic_entry_threshold
-
-                if abs(current_z) < dynamic_threshold:
+                if abs(z_result.current_z_score) < z_result.dynamic_entry_threshold:
                     self._logger.info(
                         f"❌ Watch {coin_symbol} signal DISAPPEARED | "
-                        f"|Z|={abs(current_z):.2f} < threshold={dynamic_threshold:.2f}"
+                        f"|Z|={abs(z_result.current_z_score):.2f} < threshold={z_result.dynamic_entry_threshold:.2f}"
                     )
                     remove_reason = WatchCancelReason.FALSE_ALARM
-
-                # Check Hurst filter (only if no other reason yet)
-                # Use TOLERANCE for watches - we allow Hurst to rise slightly
-                # Entry requires H < threshold, but holding allows H < threshold + tolerance
-                elif self._hurst_filter is not None:
-                    coin_df = raw_data.get(coin_symbol)
-
-                    if coin_df is not None and primary_df is not None:
-                        hurst = self._hurst_filter.calculate_for_spread(
-                            coin_log_prices=coin_df["close"].apply(np.log),
-                            primary_log_prices=primary_df["close"].apply(np.log),
-                            beta=z_result.current_beta,
-                        )
-
-                        # Use relaxed threshold for watches (threshold + tolerance)
-                        max_allowed_hurst = (
-                            self._hurst_filter.threshold + self._hurst_watch_tolerance
-                        )
-
-                        if hurst is not None and hurst >= max_allowed_hurst:
-                            self._logger.info(
-                                f"📈 Watch {coin_symbol} failed HURST filter (w/ tolerance) | "
-                                f"H={hurst:.3f} >= {max_allowed_hurst:.3f} "
-                                f"(entry_thresh={self._hurst_filter.threshold})"
-                            )
-                            remove_reason = WatchCancelReason.HURST_TRENDING
 
             # Remove from EntryObserver if failed any filter
             if remove_reason:
@@ -309,15 +289,20 @@ class OrchestratorService:
         z_score_results: Dict[str, ZScoreResult],
         filtered_results: Dict[str, ZScoreResult],
         raw_data: Dict[str, pd.DataFrame],
-        min_correlation: float,
+        _min_correlation: float,
+        adf_pvalues: Dict[str, float],
+        halflife_values: Dict[str, float],
+        hurst_values: Dict[str, float],
     ) -> List[ExitSignalEvent]:
         """
         Check STRUCTURAL exit conditions for all open positions.
 
         Orchestrator checks only structural failures that invalidate the spread:
-        1. CORRELATION_DROP: correlation < correlation_exit_threshold (spread relationship broken)
-           Uses relaxed threshold (0.70) vs entry threshold (0.80) for hysteresis.
-        2. HURST_TRENDING: Hurst >= threshold (spread became trending, not mean-reverting)
+        1. Symbol NOT in filtered_results - determine specific reason:
+           - ADF_NON_STATIONARY: failed ADF test
+           - HALFLIFE_TOO_SLOW: half-life too long
+           - HURST_TRENDING: spread became trending
+           - CORRELATION_DROP: correlation dropped
 
         Z-Score based exits (TP/SL) are handled ONLY by ExitObserver using
         the "frozen" parameters from position entry. This prevents the
@@ -352,43 +337,15 @@ class OrchestratorService:
             current_z = z_result.current_z_score
             current_corr = z_result.current_correlation
 
-            # 1. STRUCTURAL CHECK: Correlation drop with HYSTERESIS
-            # Entry requires >= MIN_CORRELATION (0.80)
-            # Exit only when correlation drops below relaxed threshold (0.70)
-            # This prevents premature exits due to temporary correlation dips
-            if current_corr < self._correlation_exit_threshold:
-                exit_reason = ExitReason.CORRELATION_DROP
-                self._logger.info(
-                    f"🔻 CORRELATION_DROP detected | {coin_symbol} | "
-                    f"corr={current_corr:.3f} < exit_threshold={self._correlation_exit_threshold} "
-                    f"(entry_threshold={min_correlation})"
+            # FILTER CHECK: If NOT in filtered_results, determine which filter failed
+            if coin_symbol not in filtered_results:
+                exit_reason = self._determine_failed_filter_for_exit(
+                    coin_symbol=coin_symbol,
+                    z_result=z_result,
+                    adf_pvalue=adf_pvalues.get(coin_symbol),
+                    halflife=halflife_values.get(coin_symbol),
+                    hurst=hurst_values.get(coin_symbol),
                 )
-
-            # 2. STRUCTURAL CHECK: Hurst trending
-            # If spread became trending, mean-reversion assumption is invalid
-            # Use TOLERANCE for open positions - we allow Hurst to rise slightly
-            # Entry requires H < threshold, but holding allows H < threshold + tolerance
-            if exit_reason is None and self._hurst_filter is not None:
-                coin_df = raw_data.get(coin_symbol)
-                if coin_df is not None and primary_df is not None:
-                    hurst = self._hurst_filter.calculate_for_spread(
-                        coin_log_prices=coin_df["close"].apply(np.log),
-                        primary_log_prices=primary_df["close"].apply(np.log),
-                        beta=z_result.current_beta,
-                    )
-
-                    # Use relaxed threshold for positions (threshold + tolerance)
-                    max_allowed_hurst = (
-                        self._hurst_filter.threshold + self._hurst_watch_tolerance
-                    )
-
-                    if hurst is not None and hurst >= max_allowed_hurst:
-                        exit_reason = ExitReason.HURST_TRENDING
-                        self._logger.info(
-                            f"📈 HURST_TRENDING detected | {coin_symbol} | "
-                            f"H={hurst:.3f} >= {max_allowed_hurst:.3f} "
-                            f"(entry_thresh={self._hurst_filter.threshold})"
-                        )
 
             # NOTE: Z-Score TP/SL checks are NOT done here!
             # ExitObserver handles TP/SL using frozen entry parameters (beta, std)
@@ -428,7 +385,7 @@ class OrchestratorService:
         hurst_values: Dict[str, float],
         halflife_values: Dict[str, float],
         raw_data: Dict[str, pd.DataFrame],
-        z_entry: float,
+        _z_entry: float,
         z_sl: float,
         z_tp: float,
     ) -> List[PendingEntrySignalEvent]:
@@ -597,6 +554,155 @@ class OrchestratorService:
     # =========================================================================
     # Helpers
     # =========================================================================
+
+    def _determine_failed_filter(
+        self,
+        coin_symbol: str,
+        z_result: Optional[ZScoreResult],
+        adf_pvalue: Optional[float],
+        halflife: Optional[float],
+        hurst: Optional[float],
+        is_watch: bool = True,
+    ) -> WatchCancelReason:
+        """
+        Determine which specific filter caused a symbol to be excluded.
+
+        Uses pre-calculated values from ScanResult (no direct filter calls).
+        Checks filters in order of priority:
+        1. ADF (non-stationary)
+        2. Half-life (too slow)
+        3. Hurst (trending)
+        4. Correlation (drop)
+
+        Args:
+            coin_symbol: Symbol being checked
+            z_result: Z-score result if available
+            adf_pvalue: Pre-calculated ADF p-value from ScanResult
+            halflife: Pre-calculated half-life from ScanResult
+            hurst: Pre-calculated Hurst exponent from ScanResult
+            is_watch: True for watches (use tolerance), False for positions
+
+        Returns:
+            Specific WatchCancelReason for the filter that failed
+        """
+        if z_result is None:
+            self._logger.info(f"⛔ Watch {coin_symbol} REMOVED | No Z-score data")
+            return WatchCancelReason.FALSE_ALARM
+
+        # Get thresholds from screener_service
+        adf_threshold = self._screener_service.adf_threshold
+        halflife_threshold = self._screener_service.halflife_threshold
+        hurst_threshold = self._screener_service.hurst_threshold
+
+        # 1. Check ADF filter
+        if adf_threshold is not None and adf_pvalue is not None:
+            if adf_pvalue >= adf_threshold:
+                self._logger.info(
+                    f"⛔ Watch {coin_symbol} failed ADF filter | "
+                    f"p-value={adf_pvalue:.4f} >= {adf_threshold:.2f} (non-stationary)"
+                )
+                return WatchCancelReason.ADF_NON_STATIONARY
+
+        # 2. Check Half-life filter
+        if halflife_threshold is not None and halflife is not None:
+            if halflife > halflife_threshold:
+                self._logger.info(
+                    f"⛔ Watch {coin_symbol} failed HALFLIFE filter | "
+                    f"HL={halflife:.1f} bars > {halflife_threshold:.1f} (too slow)"
+                )
+                return WatchCancelReason.HALFLIFE_TOO_SLOW
+
+        # 3. Check Hurst filter (with tolerance for watches)
+        if hurst_threshold is not None and hurst is not None:
+            tolerance = (
+                self._hurst_watch_tolerance if is_watch else self._hurst_watch_tolerance
+            )
+            max_allowed_hurst = hurst_threshold + tolerance
+            if hurst >= max_allowed_hurst:
+                self._logger.info(
+                    f"⛔ Watch {coin_symbol} failed HURST filter | "
+                    f"H={hurst:.3f} >= {max_allowed_hurst:.3f} (trending)"
+                )
+                return WatchCancelReason.HURST_TRENDING
+
+        # 4. Check Correlation
+        corr_threshold = (
+            self._correlation_watch_threshold
+            if is_watch
+            else self._correlation_exit_threshold
+        )
+        if z_result.current_correlation < corr_threshold:
+            self._logger.info(
+                f"⛔ Watch {coin_symbol} failed CORRELATION filter | "
+                f"corr={z_result.current_correlation:.3f} < {corr_threshold:.2f}"
+            )
+            return WatchCancelReason.CORRELATION_DROP
+
+        # Default: couldn't determine specific reason
+        self._logger.info(f"⛔ Watch {coin_symbol} REMOVED | Failed unknown filter")
+        return WatchCancelReason.FALSE_ALARM
+
+    def _determine_failed_filter_for_exit(
+        self,
+        coin_symbol: str,
+        z_result: Optional[ZScoreResult],
+        adf_pvalue: Optional[float],
+        halflife: Optional[float],
+        hurst: Optional[float],
+    ) -> ExitReason:
+        """
+        Determine which specific filter caused a position to require exit.
+
+        Uses pre-calculated values from ScanResult (no direct filter calls).
+        """
+        if z_result is None:
+            self._logger.info(f"⛔ Position {coin_symbol} EXIT | No Z-score data")
+            return ExitReason.CORRELATION_DROP  # Fallback when no data
+
+        # Get thresholds from screener_service
+        adf_threshold = self._screener_service.adf_threshold
+        halflife_threshold = self._screener_service.halflife_threshold
+        hurst_threshold = self._screener_service.hurst_threshold
+
+        # 1. Check ADF filter
+        if adf_threshold is not None and adf_pvalue is not None:
+            if adf_pvalue >= adf_threshold:
+                self._logger.info(
+                    f"⛔ Position {coin_symbol} EXIT (ADF) | "
+                    f"p-value={adf_pvalue:.4f} >= {adf_threshold:.2f} (non-stationary)"
+                )
+                # return ExitReason.ADF_NON_STATIONARY
+
+        # 2. Check Half-life filter
+        if halflife_threshold is not None and halflife is not None:
+            if halflife > halflife_threshold:
+                self._logger.info(
+                    f"⛔ Position {coin_symbol} EXIT (HALFLIFE) | "
+                    f"HL={halflife:.1f} bars > {halflife_threshold:.1f} (too slow)"
+                )
+                return ExitReason.HALFLIFE_TOO_SLOW
+
+        # 3. Check Hurst filter (with tolerance for positions)
+        if hurst_threshold is not None and hurst is not None:
+            max_allowed_hurst = hurst_threshold + self._hurst_watch_tolerance
+            if hurst >= max_allowed_hurst:
+                self._logger.info(
+                    f"⛔ Position {coin_symbol} EXIT (HURST) | "
+                    f"H={hurst:.3f} >= {max_allowed_hurst:.3f} (trending)"
+                )
+                return ExitReason.HURST_TRENDING
+
+        # 4. Check Correlation
+        if z_result.current_correlation < self._correlation_exit_threshold:
+            self._logger.info(
+                f"⛔ Position {coin_symbol} EXIT (CORRELATION) | "
+                f"corr={z_result.current_correlation:.3f} < {self._correlation_exit_threshold:.2f}"
+            )
+            return ExitReason.CORRELATION_DROP
+
+        # Default: couldn't determine specific reason
+        self._logger.info(f"⛔ Position {coin_symbol} EXIT | Failed unknown filter")
+        return ExitReason.CORRELATION_DROP
 
     async def _emit_market_unsafe_event(self, volatility_result) -> None:
         """Emit market unsafe event when volatility filter triggers."""

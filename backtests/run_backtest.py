@@ -285,7 +285,7 @@ class BacktestConfig:
     # Capital
     initial_balance: float = 40_000.0  # Starting capital in USDT
     position_size_pct: float = 0.35  # 3% of capital per spread
-    max_spreads: int = 4  # Maximum concurrent spread positions
+    max_spreads: int = 8  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
     z_entry_threshold: float = 2.1  # |Z| >= this to enter
@@ -347,7 +347,7 @@ class BacktestConfig:
     """
     use_trailing_entry: bool = True  # Enable trailing entry simulation
     trailing_pullback: float = 0.03  # Z-score pullback for reversal confirmation
-    trailing_timeout_minutes: int = 90  # Max watch duration before cancellation
+    trailing_timeout_minutes: int = 120  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
         0.45  # Cancel watch only if Z drops this much below threshold
     )

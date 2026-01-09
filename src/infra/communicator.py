@@ -92,9 +92,7 @@ class CommunicatorService:
             return
 
         # Subscribe to trade lifecycle events
-        self._event_emitter.on(
-            EventType.WATCH_STARTED, self._on_watch_started
-        )
+        self._event_emitter.on(EventType.WATCH_STARTED, self._on_watch_started)
         self._event_emitter.on(EventType.ENTRY_SIGNAL, self._on_entry_signal)
         self._event_emitter.on(EventType.EXIT_SIGNAL, self._on_exit_signal)
         self._event_emitter.on(EventType.WATCH_CANCELLED, self._on_watch_cancelled)
@@ -114,9 +112,7 @@ class CommunicatorService:
             return
 
         # Unsubscribe from trade lifecycle events
-        self._event_emitter.off(
-            EventType.WATCH_STARTED, self._on_watch_started
-        )
+        self._event_emitter.off(EventType.WATCH_STARTED, self._on_watch_started)
         self._event_emitter.off(EventType.ENTRY_SIGNAL, self._on_entry_signal)
         self._event_emitter.off(EventType.EXIT_SIGNAL, self._on_exit_signal)
         self._event_emitter.off(EventType.WATCH_CANCELLED, self._on_watch_cancelled)
@@ -898,6 +894,8 @@ _Sending to TradingService for execution..._
                 ExitReason.CORRELATION_DROP: ("📉", "CORRELATION DROP"),
                 ExitReason.TIMEOUT: ("⏰", "TIMEOUT"),
                 ExitReason.HURST_TRENDING: ("📈", "HURST TRENDING"),
+                ExitReason.ADF_NON_STATIONARY: ("⛔", "ADF NON-STATIONARY"),
+                ExitReason.HALFLIFE_TOO_SLOW: ("🐢", "HALFLIFE TOO SLOW"),
                 ExitReason.MANUAL: ("🔧", "MANUAL"),
             }
             reason_emoji, reason_text = reason_map.get(
@@ -935,6 +933,9 @@ _Sending to TradingService for position closure..._
                 "false_alarm": ("❌", "FALSE ALARM"),
                 "sl_hit": ("🛑", "SL HIT"),
                 "max_watches_reached": ("🚫", "MAX WATCHES"),
+                "correlation_drop": ("📉", "CORRELATION DROP"),
+                "hurst_trending": ("📈", "HURST TRENDING"),
+                "filter_failed": ("⛔", "FILTER FAILED"),
             }
             reason_emoji, reason_text = reason_map.get(
                 event.reason.value, ("❓", event.reason.value.upper())
@@ -1029,6 +1030,8 @@ _{explanation}_
                 ExitReason.CORRELATION_DROP: ("📉", "CORRELATION DROP"),
                 ExitReason.TIMEOUT: ("⏰", "TIMEOUT"),
                 ExitReason.HURST_TRENDING: ("📈", "HURST TRENDING"),
+                ExitReason.ADF_NON_STATIONARY: ("⛔", "ADF NON-STATIONARY"),
+                ExitReason.HALFLIFE_TOO_SLOW: ("🐢", "HALFLIFE TOO SLOW"),
                 ExitReason.MANUAL: ("🔧", "MANUAL"),
             }
             reason_emoji, reason_text = reason_map.get(
