@@ -14,6 +14,7 @@ NOTE: Z-Score TP/SL exits are handled ONLY by ExitObserver using frozen
 entry parameters to avoid the "moving goalposts" problem.
 """
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, List, Optional
 import numpy as np
 import pandas as pd
@@ -75,9 +76,12 @@ class OrchestratorService:
         primary_pair: str,
         entry_observer_service: Optional["EntryObserverService"] = None,
         funding_filter_service: Optional[FundingFilterService] = None,
-        hurst_watch_tolerance: float = 0.005,
-        correlation_exit_threshold: float = 0.70,
-        correlation_watch_threshold: float = 0.75,
+        hurst_watch_threshold: float = 0.46,
+        correlation_exit_threshold: float = 0.75,
+        correlation_watch_threshold: float = 0.77,
+        hurst_trending_for_exit: float = 0.46,
+        hurst_trending_confirm_scans: int = 2,
+        z_score_progress_exit_threshold: float = 0.30,
     ):
         """
         Initialize Orchestrator Service.
@@ -91,13 +95,12 @@ class OrchestratorService:
             primary_pair: Primary trading pair (e.g., "ETH/USDT:USDT").
             entry_observer_service: Optional service for trailing entry monitoring.
             funding_filter_service: Optional service for funding rate filtering.
-            hurst_watch_tolerance: Tolerance for Hurst threshold on watches/positions.
-                Entry requires H < threshold, but holding allows H < threshold + tolerance.
-                Default 0.02 means entry at 0.45, hold until 0.47.
+            hurst_watch_threshold: Threshold for Hurst threshold on watches.
+                Entry requires H < threshold
             correlation_exit_threshold: Relaxed correlation threshold for exiting positions.
-                Entry requires >= MIN_CORRELATION (0.8), exit only when < this (0.70).
+                Entry requires >= MIN_CORRELATION (0.8), exit only when < this (0.75).
             correlation_watch_threshold: Relaxed correlation threshold for watches.
-                Entry requires >= MIN_CORRELATION (0.8), remove watch only when < this (0.75).
+                Entry requires >= MIN_CORRELATION (0.8), remove watch only when < this (0.77).
         """
         self._logger = logger
         self._screener_service = screener_service
@@ -107,9 +110,16 @@ class OrchestratorService:
         self._primary_pair = primary_pair
         self._entry_observer = entry_observer_service
         self._funding_filter = funding_filter_service
-        self._hurst_watch_tolerance = hurst_watch_tolerance
+        self._hurst_watch_threshold = hurst_watch_threshold
         self._correlation_exit_threshold = correlation_exit_threshold
         self._correlation_watch_threshold = correlation_watch_threshold
+        self._hurst_trending_for_exit = hurst_trending_for_exit
+        self._hurst_trending_confirm_scans = hurst_trending_confirm_scans
+        self._z_score_progress_exit_threshold = z_score_progress_exit_threshold
+
+        # Internal state: track consecutive Hurst violations per symbol
+        # Key: coin_symbol, Value: consecutive count of hurst >= threshold
+        self._hurst_violation_counts: Dict[str, int] = {}
 
     async def run(self) -> None:
         """
@@ -324,7 +334,9 @@ class OrchestratorService:
         if not open_positions:
             return exit_signals
 
-        self._logger.info(f"🔍 Checking exit conditions for {len(open_positions)} open positions")
+        self._logger.info(
+            f"🔍 Checking exit conditions for {len(open_positions)} open positions"
+        )
 
         primary_df = raw_data.get(self._primary_pair)
         primary_price = primary_df["close"].iloc[-1] if primary_df is not None else 0.0
@@ -359,6 +371,9 @@ class OrchestratorService:
             # to avoid "moving goalposts" problem with recalculated values.
 
             if exit_reason:
+                # Clean up Hurst violation counter for this position
+                self._hurst_violation_counts.pop(coin_symbol, None)
+
                 coin_df = raw_data.get(coin_symbol)
                 coin_price = coin_df["close"].iloc[-1] if coin_df is not None else 0.0
 
@@ -629,14 +644,10 @@ class OrchestratorService:
 
         # 3. Check Hurst filter (with tolerance for watches)
         if hurst_threshold is not None and hurst is not None:
-            tolerance = (
-                self._hurst_watch_tolerance if is_watch else self._hurst_watch_tolerance
-            )
-            max_allowed_hurst = hurst_threshold + tolerance
-            if hurst >= max_allowed_hurst:
+            if hurst >= self._hurst_watch_threshold:
                 self._logger.info(
                     f"⛔ Watch {coin_symbol} failed HURST filter | "
-                    f"H={hurst:.3f} >= {max_allowed_hurst:.3f} (trending)"
+                    f"H={hurst:.3f} >= {self._hurst_watch_threshold:.3f} (trending)"
                 )
                 return WatchCancelReason.HURST_TRENDING
 
@@ -656,6 +667,165 @@ class OrchestratorService:
         # Default: couldn't determine specific reason
         self._logger.info(f"⛔ Watch {coin_symbol} REMOVED | Failed unknown filter")
         return WatchCancelReason.FALSE_ALARM
+
+    def _check_hurst_exit_with_confirmation(
+        self,
+        coin_symbol: str,
+        position: SpreadPosition,
+        hurst: float,
+        current_z: float,
+        current_corr: float,
+    ) -> bool:
+        """
+        Check if position should exit due to Hurst trending with confirmation logic.
+
+        Exit conditions (ALL must be true):
+        1. hurst >= hurst_trending_for_exit for hurst_confirm_scans consecutive scans
+        2. corr < correlation_exit_threshold
+        3. time_in_position >= 6h (24 bars for 15m)
+        4. progress < z_score_progress_exit_threshold
+        5. abs(z) > 1.2 (not close to normal TP)
+
+        Progress calculation:
+        - entry_abs = abs(position.entry_z_score)
+        - curr_abs = abs(current_z_score)
+        - progress = (entry_abs - curr_abs) / entry_abs
+
+        Returns:
+            True if should exit due to HURST_TRENDING, False otherwise
+        """
+        # Check if Hurst is above trending threshold
+        if hurst >= self._hurst_trending_for_exit:
+            # Increment consecutive counter
+            self._hurst_violation_counts[coin_symbol] = (
+                self._hurst_violation_counts.get(coin_symbol, 0) + 1
+            )
+
+            consecutive = self._hurst_violation_counts[coin_symbol]
+            self._logger.debug(
+                f"📊 {coin_symbol} Hurst violation #{consecutive}/{self._hurst_trending_confirm_scans} | "
+                f"H={hurst:.3f} >= {self._hurst_trending_for_exit:.3f}"
+            )
+
+            # Check if we have enough consecutive violations
+            if consecutive >= self._hurst_trending_confirm_scans:
+                # Now check additional conditions
+                should_exit, _ = self._evaluate_hurst_exit_conditions(
+                    coin_symbol=coin_symbol,
+                    position=position,
+                    hurst=hurst,
+                    current_z=current_z,
+                    current_corr=current_corr,
+                    consecutive=consecutive,
+                )
+                return bool(should_exit)
+            else:
+                self._logger.info(
+                    f"⚠️ {coin_symbol} Hurst trending ({consecutive}/{self._hurst_trending_confirm_scans}) | "
+                    f"H={hurst:.3f}, waiting for confirmation..."
+                )
+                return False
+        else:
+            # Hurst is below threshold - reset counter
+            if coin_symbol in self._hurst_violation_counts:
+                old_count = self._hurst_violation_counts[coin_symbol]
+                del self._hurst_violation_counts[coin_symbol]
+                if old_count > 0:
+                    self._logger.debug(
+                        f"✅ {coin_symbol} Hurst normalized | H={hurst:.3f} - reset counter from {old_count}"
+                    )
+            return False
+
+    def _evaluate_hurst_exit_conditions(
+        self,
+        coin_symbol: str,
+        position: SpreadPosition,
+        hurst: float,
+        current_z: float,
+        current_corr: float,
+        consecutive: int,
+    ) -> tuple[bool, str]:
+        """
+        Evaluate all conditions for Hurst-based exit.
+
+        Returns:
+            Tuple of (should_exit: bool, reason: str)
+        """
+        conditions_met = []
+        conditions_failed = []
+
+        # 1. ✅ Hurst trending confirmed (already checked)
+        conditions_met.append(
+            f"Hurst={hurst:.3f} >= {self._hurst_trending_for_exit:.3f} "
+            f"({consecutive}x consecutive)"
+        )
+
+        # 2. Check correlation < threshold
+        corr_ok = current_corr < self._correlation_exit_threshold
+        if corr_ok:
+            conditions_met.append(
+                f"corr={current_corr:.3f} < {self._correlation_exit_threshold:.2f}"
+            )
+        else:
+            conditions_failed.append(
+                f"corr={current_corr:.3f} >= {self._correlation_exit_threshold:.2f}"
+            )
+
+        # # 3. Check time_in_position >= 6h (24 bars for 15m)
+        # min_hours = 6
+        # now = datetime.now(timezone.utc)
+        # time_in_position = (now - position.opened_at).total_seconds() / 3600
+        # bars_in_position = int(time_in_position * 4)  # 4 bars per hour for 15m
+        # time_ok = time_in_position >= min_hours
+        # if time_ok:
+        #     conditions_met.append(
+        #         f"time={time_in_position:.1f}h >= {min_hours}h ({bars_in_position} bars)"
+        #     )
+        # else:
+        #     conditions_failed.append(f"time={time_in_position:.1f}h < {min_hours}h")
+
+        # # 4. Check progress < threshold
+        # entry_abs = abs(position.entry_z_score)
+        # curr_abs = abs(current_z)
+        # if entry_abs > 0:
+        #     progress = (entry_abs - curr_abs) / entry_abs
+        # else:
+        #     progress = 0.0
+        # progress_ok = progress < self._z_score_progress_exit_threshold
+        # if progress_ok:
+        #     conditions_met.append(
+        #         f"progress={progress:.1%} < {self._z_score_progress_exit_threshold:.1%}"
+        #     )
+        # else:
+        #     conditions_failed.append(
+        #         f"progress={progress:.1%} >= {self._z_score_progress_exit_threshold:.1%} (good progress)"
+        #     )
+
+        # # 5. Check abs(z) > 1.2 (not close to normal TP)
+        # z_not_near_tp = curr_abs > 1.2
+        # if z_not_near_tp:
+        #     conditions_met.append(f"|Z|={curr_abs:.2f} > 1.2")
+        # else:
+        #     conditions_failed.append(f"|Z|={curr_abs:.2f} <= 1.2 (near TP)")
+
+        # ALL conditions must be met for exit
+        # all_conditions_met = corr_ok and time_ok and progress_ok and z_not_near_tp
+        all_conditions_met = corr_ok
+
+        if all_conditions_met:
+            self._logger.warning(
+                f"⛔ {coin_symbol} HURST_TRENDING EXIT confirmed | "
+                + " | ".join(conditions_met)
+            )
+            # Reset counter after exit decision
+            self._hurst_violation_counts.pop(coin_symbol, None)
+            return True, "all_conditions_met"
+        else:
+            self._logger.info(
+                f"⚠️ {coin_symbol} Hurst trending but conditions not met | "
+                f"✅ {conditions_met} | ❌ {conditions_failed}"
+            )
+            return False, f"failed: {conditions_failed}"
 
     def _determine_failed_filter_for_exit(
         self,
@@ -678,7 +848,6 @@ class OrchestratorService:
         # Get thresholds from screener_service
         adf_threshold = self._screener_service.adf_threshold
         halflife_threshold = self._screener_service.halflife_threshold
-        hurst_threshold = self._screener_service.hurst_threshold
 
         # 1. Check ADF filter
         if adf_threshold is not None and adf_pvalue is not None:
@@ -700,15 +869,20 @@ class OrchestratorService:
                 # mute false alarm (when Half-life is too slow) for now
                 # return ExitReason.HALFLIFE_TOO_SLOW
 
-        # 3. Check Hurst filter (with tolerance for positions)
-        if hurst_threshold is not None and hurst is not None:
-            max_allowed_hurst = hurst_threshold + self._hurst_watch_tolerance
-            if hurst >= max_allowed_hurst:
-                self._logger.info(
-                    f"⛔ Position {coin_symbol} EXIT (HURST) | "
-                    f"H={hurst:.3f} >= {max_allowed_hurst:.3f} (trending)"
-                )
-                # return ExitReason.HURST_TRENDING
+        # 3. Check Hurst filter with confirmation logic
+        # Exit requires: consecutive violations + corr drop + time in position + poor progress + not near TP
+        if hurst is not None:
+            current_z = z_result.current_z_score
+            current_corr = z_result.current_correlation
+
+            if self._check_hurst_exit_with_confirmation(
+                coin_symbol=coin_symbol,
+                position=position,
+                hurst=hurst,
+                current_z=current_z,
+                current_corr=current_corr,
+            ):
+                return ExitReason.HURST_TRENDING
 
         # 4. Check Correlation
         if z_result.current_correlation < self._correlation_exit_threshold:

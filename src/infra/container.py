@@ -281,9 +281,11 @@ class Container:
                 primary_pair=self._settings.PRIMARY_PAIR,
                 entry_observer_service=self.entry_observer_service,
                 funding_filter_service=self.funding_filter_service,
-                hurst_watch_tolerance=self._settings.HURST_WATCH_TOLERANCE,
+                hurst_watch_threshold=self._settings.HURST_WATCH_THRESHOLD,
                 correlation_exit_threshold=self._settings.CORRELATION_EXIT_THRESHOLD,
                 correlation_watch_threshold=self._settings.CORRELATION_WATCH_THRESHOLD,
+                hurst_trending_for_exit=self._settings.HURST_TRENDING_FOR_EXIT,
+                hurst_trending_confirm_scans=self._settings.HURST_TRENDING_CONFIRM_SCANS,
             )
         return self._instances["orchestrator_service"]
 

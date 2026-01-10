@@ -60,19 +60,32 @@ class Settings:
     MIN_CORRELATION: float = 0.8  # Если корреляция упала ниже, пару не торгуем!
     # Correlation hysteresis thresholds (relaxed thresholds for existing positions/watches)
     # Entry requires >= MIN_CORRELATION, but holding/watching allows lower values
-    CORRELATION_EXIT_THRESHOLD: float = 0.70  # Exit position if correlation drops below this
-    CORRELATION_WATCH_THRESHOLD: float = 0.75  # Remove watch if correlation drops below this
+    CORRELATION_EXIT_THRESHOLD: float = (
+        0.70  # Exit position if correlation drops below this
+    )
+    CORRELATION_WATCH_THRESHOLD: float = (
+        0.75  # Remove watch if correlation drops below this
+    )
     # Z-Score settings
     Z_ENTRY_THRESHOLD: float = 0  # Воход в мониторинг PendingEntrySignalEvent
     Z_TP_THRESHOLD: float = 0.25  # Выход
     Z_SL_THRESHOLD: float = 4.0  # Стоп-лосс ExitSignalEvent
+    Z_SCORE_PROGRESS_EXIT_THRESHOLD: float = (
+        0.30  # Выход если Z-score прогрессирует ниже этого порога в совокупности с другими фильтрами
+    )
     # Beta settings
     MAX_BETA: float = 2.0
     MIN_BETA: float = 0.5
     # Hurst settings
     HURST_THRESHOLD: float = 0.45  # Максимальный Hurst для спрэдов (вход)
-    HURST_WATCH_TOLERANCE: float = (
-        0  # Tolerance для watches и открытых позиций (0.45 + 0.01 = 0.46)
+    HURST_WATCH_THRESHOLD: float = (
+        0.46  # Tolerance для watches и открытых позиций (0.45 + 0.01 = 0.46)
+    )
+    HURST_TRENDING_FOR_EXIT: float = (
+        0.46  # Threshold для выхода из позиции (0.45 + 0.02 = 0.47)
+    )
+    HURST_TRENDING_CONFIRM_SCANS: int = (
+        2  # Количество сканов для подтверждения trending
     )
     HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
     # ADF settings
@@ -195,12 +208,19 @@ class Settings:
         self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.0"))
         self.Z_TP_THRESHOLD = float(os.getenv("Z_TP_THRESHOLD", "0.25"))
         self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "0"))
+        self.Z_SCORE_PROGRESS_EXIT_THRESHOLD = float(
+            os.getenv("Z_SCORE_PROGRESS_EXIT_THRESHOLD", "0.30")
+        )
         # Beta
         self.MIN_BETA = float(os.getenv("MIN_BETA", "0.5"))
         self.MAX_BETA = float(os.getenv("MAX_BETA", "2"))
         # Hurst
         self.HURST_THRESHOLD = float(os.getenv("HURST_THRESHOLD", "0.45"))
-        self.HURST_WATCH_TOLERANCE = float(os.getenv("HURST_WATCH_TOLERANCE", "0"))
+        self.HURST_WATCH_THRESHOLD = float(os.getenv("HURST_WATCH_THRESHOLD", "0.46"))
+        self.HURST_TRENDING_FOR_EXIT = float(
+            os.getenv("HURST_TRENDING_FOR_EXIT", "0.47")
+        )
+        self.HURST_CONFIRM_SCANS = int(os.getenv("HURST_CONFIRM_SCANS", "2"))
         self.HURST_LOOKBACK_CANDLES = int(os.getenv("HURST_LOOKBACK_CANDLES", "300"))
         # ADF
         self.ADF_PVALUE_THRESHOLD = float(os.getenv("ADF_PVALUE_THRESHOLD", "0.05"))
@@ -335,6 +355,9 @@ class Settings:
             f"  DYNAMIC_THRESHOLD_WINDOW_BARS: {self.DYNAMIC_THRESHOLD_WINDOW_BARS}"
         )
         logger.info(f"  THRESHOLD_EMA_ALPHA: {self.THRESHOLD_EMA_ALPHA}")
+        logger.info(
+            f"  Z_SCORE_PROGRESS_EXIT_THRESHOLD: {self.Z_SCORE_PROGRESS_EXIT_THRESHOLD}"
+        )
         logger.info("-" * 40)
         logger.info("📉 Beta Settings:")
         logger.info(f"  MIN_BETA: {self.MIN_BETA}")
@@ -343,8 +366,10 @@ class Settings:
         logger.info("🔬 Hurst Settings:")
         logger.info(f"  HURST_THRESHOLD: {self.HURST_THRESHOLD}")
         logger.info(
-            f"  HURST_WATCH_TOLERANCE: {self.HURST_WATCH_TOLERANCE} (hold threshold: {self.HURST_THRESHOLD + self.HURST_WATCH_TOLERANCE})"
+            f"  HURST_WATCH_THRESHOLD: {self.HURST_WATCH_THRESHOLD} (hold threshold: {self.HURST_WATCH_THRESHOLD})"
         )
+        logger.info(f"  HURST_TRENDING_FOR_EXIT: {self.HURST_TRENDING_FOR_EXIT}")
+        logger.info(f"  HURST_TRENDING_CONFIRM_SCANS: {self.HURST_TRENDING_CONFIRM_SCANS}")
         logger.info(f"  HURST_LOOKBACK_CANDLES: {self.HURST_LOOKBACK_CANDLES}")
         logger.info("-" * 40)
         logger.info("📊 ADF Settings:")

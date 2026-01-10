@@ -326,9 +326,10 @@ class BacktestConfig:
 
     use_dynamic_tp: bool = True  # Use dynamic take profit
 
-    # Hurst tolerance for open positions (hysteresis)
-    # Entry requires H < threshold (0.45), holding allows H < threshold + tolerance(0.02) (0.47)
-    hurst_watch_tolerance: float = 0.005
+    # Hurst exit with confirmation (matching production OrchestratorService)
+    # Exit requires: hurst >= threshold for N scans + corr < threshold
+    hurst_trending_for_exit: float = 0.47
+    hurst_confirm_scans: int = 2  # Number of consecutive scans required
 
     halflife_max_bars: int = 48  # 12 hours
 
@@ -598,6 +599,10 @@ class StatArbBacktest:
         # Cache for 1m candles (loaded once at start for ExitObserver simulation)
         # symbol -> DataFrame with 1m OHLCV
         self._minute_data_cache: Dict[str, pd.DataFrame] = {}
+
+        # Internal state: track consecutive Hurst violations per symbol
+        # Key: symbol, Value: consecutive count of hurst >= threshold
+        self._hurst_violation_counts: Dict[str, int] = {}
 
     async def run(
         self,
@@ -1202,29 +1207,32 @@ class StatArbBacktest:
 
         return multiplier
 
-    def _check_hurst_exit(
+    def _check_hurst_exit_with_confirmation(
         self,
         symbol: str,
         window_data: Dict[str, pd.DataFrame],
         correlation_results: Dict,
+        z_score_results: Dict,
     ) -> bool:
         """
-        Check if an open position's spread became trending (Hurst >= threshold + tolerance).
+        Check if an open position should exit due to Hurst trending with confirmation.
 
-        Uses relaxed threshold (threshold + tolerance) for open positions to prevent
-        closing good trades due to micro-fluctuations in Hurst calculation.
-        Entry requires H < 0.45 (strict), holding allows H < 0.52 (with tolerance).
+        Matching production OrchestratorService logic:
+        Exit requires ALL conditions (simplified version):
+        1. hurst >= hurst_trending_for_exit for hurst_confirm_scans consecutive scans
+        2. corr < correlation_exit_threshold
 
         Args:
             symbol: Symbol to check
             window_data: OHLCV data
             correlation_results: Correlation results with beta values
+            z_score_results: Z-score results for correlation check
 
         Returns:
-            True if spread became trending (should exit), False otherwise
+            True if should exit due to HURST_TRENDING, False otherwise
         """
         if not self.hurst_filter_service:
-            return False  # No filter = don't exit
+            return False
 
         primary_df = window_data.get(self.primary_pair)
         coin_df = window_data.get(symbol)
@@ -1252,19 +1260,61 @@ class StatArbBacktest:
         if hurst is None:
             return False
 
-        # Use relaxed threshold for open positions (threshold + tolerance)
-        max_allowed_hurst = (
-            self.hurst_filter_service.threshold + self.config.hurst_watch_tolerance
-        )
-        is_trending = hurst >= max_allowed_hurst
+        # Check if Hurst is above trending threshold
+        if hurst >= self.config.hurst_trending_for_exit:
+            # Increment consecutive counter
+            self._hurst_violation_counts[symbol] = (
+                self._hurst_violation_counts.get(symbol, 0) + 1
+            )
+            consecutive = self._hurst_violation_counts[symbol]
 
-        if is_trending:
             print(
-                f"📈 {symbol} Hurst={hurst:.3f} >= {max_allowed_hurst:.3f} "
-                f"(spread became trending, exit position)"
+                f"📊 {symbol} Hurst violation #{consecutive}/{self.config.hurst_confirm_scans} | "
+                f"H={hurst:.3f} >= {self.config.hurst_trending_for_exit:.3f}"
             )
 
-        return is_trending
+            # Check if we have enough consecutive violations
+            if consecutive >= self.config.hurst_confirm_scans:
+                # Now check correlation condition
+                z_result = z_score_results.get(symbol)
+                if z_result is None:
+                    return False
+
+                current_corr = z_result.current_correlation
+                corr_ok = current_corr < self.config.correlation_exit_threshold
+
+                if corr_ok:
+                    print(
+                        f"⛔ {symbol} HURST_TRENDING EXIT confirmed | "
+                        f"H={hurst:.3f} ({consecutive}x) | "
+                        f"corr={current_corr:.3f} < {self.config.correlation_exit_threshold:.2f}"
+                    )
+                    # Reset counter after exit decision
+                    self._hurst_violation_counts.pop(symbol, None)
+                    return True
+                else:
+                    print(
+                        f"⚠️ {symbol} Hurst trending but corr OK | "
+                        f"H={hurst:.3f} ({consecutive}x) | "
+                        f"corr={current_corr:.3f} >= {self.config.correlation_exit_threshold:.2f}"
+                    )
+                    return False
+            else:
+                print(
+                    f"⚠️ {symbol} Hurst trending ({consecutive}/{self.config.hurst_confirm_scans}) | "
+                    f"H={hurst:.3f}, waiting for confirmation..."
+                )
+                return False
+        else:
+            # Hurst is below threshold - reset counter
+            if symbol in self._hurst_violation_counts:
+                old_count = self._hurst_violation_counts[symbol]
+                del self._hurst_violation_counts[symbol]
+                if old_count > 0:
+                    print(
+                        f"✅ {symbol} Hurst normalized | H={hurst:.3f} - reset counter from {old_count}"
+                    )
+            return False
 
     def _get_time_based_tp_coefficient(self, bars_held: int) -> float:
         """
@@ -1343,11 +1393,13 @@ class StatArbBacktest:
             elif z_result.current_correlation < self.config.correlation_exit_threshold:
                 exit_reason = "CORRELATION_DROP"
 
-            # 4. STRUCTURAL: Hurst became trending
-            # MUTED: Like production orchestrator, we don't close positions on Hurst for now
-            # if exit_reason is None and self.hurst_filter_service is not None:
-            #     if self._check_hurst_exit(symbol, window_data, correlation_results):
-            #         exit_reason = "HURST_TRENDING"
+            # 4. STRUCTURAL: Hurst became trending (with confirmation logic)
+            # Exit requires: consecutive violations + corr < threshold
+            if exit_reason is None and self.hurst_filter_service is not None:
+                if self._check_hurst_exit_with_confirmation(
+                    symbol, window_data, correlation_results, all_results
+                ):
+                    exit_reason = "HURST_TRENDING"
 
             # 5. Z-Score TP/SL on 15m candles (when use_live_exit=False)
             # When use_live_exit=True, this is handled by _simulate_exit_observer on 1m
@@ -2355,6 +2407,9 @@ class StatArbBacktest:
         """
         position = self.positions.pop(symbol)
 
+        # Clean up Hurst violation counter for this position
+        self._hurst_violation_counts.pop(symbol, None)
+
         # Calculate PnL for each leg
         coin_pct_change = (
             coin_price - position.coin_entry_price
@@ -2575,6 +2630,9 @@ class StatArbBacktest:
         Also includes funding PnL accumulated during position lifetime.
         """
         position = self.positions.pop(symbol)
+
+        # Clean up Hurst violation counter for this position
+        self._hurst_violation_counts.pop(symbol, None)
 
         # Get exit prices
         coin_exit_price = window_data[symbol]["close"].iloc[-1]
