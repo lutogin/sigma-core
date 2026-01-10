@@ -55,7 +55,8 @@ class ZScoreService:
         z_sl_threshold: float = 4.0,
         adaptive_percentile: int = 95,
         dynamic_threshold_window: int = 440,
-        threshold_ema_alpha: float = 0.1,
+        threshold_ema_alpha_up: float = 0.01,
+        threshold_ema_alpha_down: float = 0.05,
     ):
         """
         Initialize ZScoreService.
@@ -69,7 +70,8 @@ class ZScoreService:
             z_sl_threshold: Z-score threshold for stop loss.
             adaptive_percentile: Percentile for adaptive threshold calculation (default 95).
             dynamic_threshold_window: Number of candles for dynamic threshold calculation (default 440 ~4.5 days @ 15m).
-            threshold_ema_alpha: EMA smoothing factor for threshold (0.1 = 10% new, 90% old).
+            threshold_ema_alpha_up: EMA alpha when threshold is rising (slow, 0.01 = 1% new).
+            threshold_ema_alpha_down: EMA alpha when threshold is falling (faster, 0.05 = 5% new).
         """
         self._logger = logger
         self._lookback_window_days = lookback_window_days
@@ -82,7 +84,8 @@ class ZScoreService:
         self._z_sl_threshold = z_sl_threshold
         self._adaptive_percentile = adaptive_percentile
         self._dynamic_threshold_window = dynamic_threshold_window
-        self._threshold_ema_alpha = threshold_ema_alpha
+        self._threshold_ema_alpha_up = threshold_ema_alpha_up
+        self._threshold_ema_alpha_down = threshold_ema_alpha_down
 
         # Store smoothed thresholds per symbol for EMA calculation
         self._smoothed_thresholds: Dict[str, float] = {}
@@ -326,9 +329,14 @@ class ZScoreService:
         # Step 2: Apply floor at minimum threshold
         raw_threshold = max(self._z_entry_threshold, raw_threshold)
 
-        # Step 3: Apply EMA smoothing
+        # Step 3: Apply asymmetric EMA smoothing
+        # - Rising threshold: use slow alpha (don't miss opportunities)
+        # - Falling threshold: use faster alpha (capture more entries)
         previous_threshold = self._smoothed_thresholds[symbol]
-        alpha = self._threshold_ema_alpha
+        if raw_threshold > previous_threshold:
+            alpha = self._threshold_ema_alpha_up  # Slow rise
+        else:
+            alpha = self._threshold_ema_alpha_down  # Faster fall
         smoothed_threshold = (alpha * raw_threshold) + ((1 - alpha) * previous_threshold)
 
         # Step 4: Final floor check (ensure never below min threshold after EMA)
@@ -337,9 +345,11 @@ class ZScoreService:
         # Store for next iteration
         self._smoothed_thresholds[symbol] = smoothed_threshold
 
+        direction = "↑" if raw_threshold > previous_threshold else "↓"
         self._logger.debug(
             f"[DynThreshold] {symbol}: raw_p{self._adaptive_percentile}={raw_threshold:.4f}, "
-            f"prev_ema={previous_threshold:.4f}, new_ema={smoothed_threshold:.4f}"
+            f"prev_ema={previous_threshold:.4f}, new_ema={smoothed_threshold:.4f} "
+            f"({direction} α={alpha:.3f})"
         )
 
         return smoothed_threshold
@@ -379,9 +389,7 @@ class ZScoreService:
         ema_threshold = float(np.percentile(first_window.abs(), self._adaptive_percentile))
         ema_threshold = max(self._z_entry_threshold, ema_threshold)
 
-        alpha = self._threshold_ema_alpha
-
-        # Roll through history, updating EMA at each step
+        # Roll through history, updating EMA at each step (with asymmetric alpha)
         for i in range(1, warmup_steps):
             end_idx = min(window_size + (i * step_size), len(z_series))
             start_idx = end_idx - window_size
@@ -393,7 +401,11 @@ class ZScoreService:
             raw_threshold = float(np.percentile(window.abs(), self._adaptive_percentile))
             raw_threshold = max(self._z_entry_threshold, raw_threshold)
 
-            # Apply EMA
+            # Apply asymmetric EMA
+            if raw_threshold > ema_threshold:
+                alpha = self._threshold_ema_alpha_up  # Slow rise
+            else:
+                alpha = self._threshold_ema_alpha_down  # Faster fall
             ema_threshold = (alpha * raw_threshold) + ((1 - alpha) * ema_threshold)
 
         # Final floor check

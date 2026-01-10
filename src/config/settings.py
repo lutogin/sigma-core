@@ -118,7 +118,11 @@ class Settings:
         95  # Percentile for dynamic Z-score threshold (95 = top 5%)
     )
     DYNAMIC_THRESHOLD_WINDOW_BARS: int = 440
-    THRESHOLD_EMA_ALPHA: float = 0.1  # EMA smoothing factor (0.1 = 10% new, 90% old)
+    # Asymmetric EMA for threshold smoothing
+    # alpha_up = slow increase (don't miss opportunities when vol spikes)
+    # alpha_down = faster decrease (capture more entries when vol drops)
+    THRESHOLD_EMA_ALPHA_UP: float = 0.01  # Slow rise: 1% new, 99% old
+    THRESHOLD_EMA_ALPHA_DOWN: float = 0.05  # Faster fall: 5% new, 95% old
     # Trailing Entry settings (Smart Entry)
     TRAILING_ENTRY_PULLBACK: float = 0.2  # Z-score pullback for reversal confirmation
     TRAILING_ENTRY_TIMEOUT_MINUTES: int = 45  # Max watch duration before cancellation
@@ -258,7 +262,11 @@ class Settings:
         self.DYNAMIC_THRESHOLD_WINDOW_BARS = int(
             os.getenv("DYNAMIC_THRESHOLD_WINDOW_BARS", "440")
         )
-        self.THRESHOLD_EMA_ALPHA = float(os.getenv("THRESHOLD_EMA_ALPHA", "0.1"))
+        # Asymmetric EMA for threshold smoothing
+        self.THRESHOLD_EMA_ALPHA_UP = float(os.getenv("THRESHOLD_EMA_ALPHA_UP", "0.01"))
+        self.THRESHOLD_EMA_ALPHA_DOWN = float(
+            os.getenv("THRESHOLD_EMA_ALPHA_DOWN", "0.05")
+        )
 
         # Trailing Entry (Smart Entry)
         self.TRAILING_ENTRY_PULLBACK = float(
@@ -354,7 +362,9 @@ class Settings:
         logger.info(
             f"  DYNAMIC_THRESHOLD_WINDOW_BARS: {self.DYNAMIC_THRESHOLD_WINDOW_BARS}"
         )
-        logger.info(f"  THRESHOLD_EMA_ALPHA: {self.THRESHOLD_EMA_ALPHA}")
+        logger.info(
+            f"  THRESHOLD_EMA_ALPHA: ↑{self.THRESHOLD_EMA_ALPHA_UP} / ↓{self.THRESHOLD_EMA_ALPHA_DOWN}"
+        )
         logger.info(
             f"  Z_SCORE_PROGRESS_EXIT_THRESHOLD: {self.Z_SCORE_PROGRESS_EXIT_THRESHOLD}"
         )
@@ -369,7 +379,9 @@ class Settings:
             f"  HURST_WATCH_THRESHOLD: {self.HURST_WATCH_THRESHOLD} (hold threshold: {self.HURST_WATCH_THRESHOLD})"
         )
         logger.info(f"  HURST_TRENDING_FOR_EXIT: {self.HURST_TRENDING_FOR_EXIT}")
-        logger.info(f"  HURST_TRENDING_CONFIRM_SCANS: {self.HURST_TRENDING_CONFIRM_SCANS}")
+        logger.info(
+            f"  HURST_TRENDING_CONFIRM_SCANS: {self.HURST_TRENDING_CONFIRM_SCANS}"
+        )
         logger.info(f"  HURST_LOOKBACK_CANDLES: {self.HURST_LOOKBACK_CANDLES}")
         logger.info("-" * 40)
         logger.info("📊 ADF Settings:")

@@ -407,7 +407,8 @@ class Container:
                 z_sl_threshold=self._settings.Z_SL_THRESHOLD,
                 adaptive_percentile=self._settings.ADAPTIVE_PERCENTILE,
                 dynamic_threshold_window=self._settings.DYNAMIC_THRESHOLD_WINDOW_BARS,
-                threshold_ema_alpha=self._settings.THRESHOLD_EMA_ALPHA,
+                threshold_ema_alpha_up=self._settings.THRESHOLD_EMA_ALPHA_UP,
+                threshold_ema_alpha_down=self._settings.THRESHOLD_EMA_ALPHA_DOWN,
             )
         return self._instances["z_score_service"]
 
