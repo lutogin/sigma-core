@@ -709,15 +709,17 @@ class OrchestratorService:
 
             # Check if we have enough consecutive violations
             if consecutive >= self._hurst_trending_confirm_scans:
-                # Now check additional conditions
-                should_exit, _ = self._evaluate_hurst_exit_conditions(
-                    coin_symbol=coin_symbol,
-                    position=position,
-                    hurst=hurst,
-                    current_z=current_z,
-                    current_corr=current_corr,
-                    consecutive=consecutive,
-                )
+                # # Now check additional conditions
+                # should_exit, _ = self._evaluate_hurst_exit_conditions(
+                #     coin_symbol=coin_symbol,
+                #     position=position,
+                #     hurst=hurst,
+                #     current_z=current_z,
+                #     current_corr=current_corr,
+                #     consecutive=consecutive,
+                # )
+
+                should_exit = True  # Simplified for now: exit after confirmation! without extra checks
                 return bool(should_exit)
             else:
                 self._logger.info(

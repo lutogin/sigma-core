@@ -1325,36 +1325,37 @@ class StatArbBacktest:
 
             # Check if we have enough consecutive violations
             if consecutive >= self.config.hurst_confirm_scans:
-                # Now check correlation condition
-                z_result = z_score_results.get(symbol)
-                if z_result is None:
-                    return False
+                #     # Now check correlation condition
+                #     z_result = z_score_results.get(symbol)
+                #     if z_result is None:
+                #         return False
 
-                current_corr = z_result.current_correlation
-                corr_ok = current_corr < self.config.correlation_exit_threshold
+                #     current_corr = z_result.current_correlation
+                #     corr_ok = current_corr < self.config.correlation_exit_threshold
 
-                if corr_ok:
-                    print(
-                        f"⛔ {symbol} HURST_TRENDING EXIT confirmed | "
-                        f"H={hurst:.3f} ({consecutive}x) | "
-                        f"corr={current_corr:.3f} < {self.config.correlation_exit_threshold:.2f}"
-                    )
-                    # Reset counter after exit decision
-                    self._hurst_violation_counts.pop(symbol, None)
-                    return True
-                else:
-                    print(
-                        f"⚠️ {symbol} Hurst trending but corr OK | "
-                        f"H={hurst:.3f} ({consecutive}x) | "
-                        f"corr={current_corr:.3f} >= {self.config.correlation_exit_threshold:.2f}"
-                    )
-                    return False
-            else:
-                print(
-                    f"⚠️ {symbol} Hurst trending ({consecutive}/{self.config.hurst_confirm_scans}) | "
-                    f"H={hurst:.3f}, waiting for confirmation..."
-                )
-                return False
+                #     if corr_ok:
+                #         print(
+                #             f"⛔ {symbol} HURST_TRENDING EXIT confirmed | "
+                #             f"H={hurst:.3f} ({consecutive}x) | "
+                #             f"corr={current_corr:.3f} < {self.config.correlation_exit_threshold:.2f}"
+                #         )
+                #         # Reset counter after exit decision
+                #         self._hurst_violation_counts.pop(symbol, None)
+                #         return True
+                #     else:
+                #         print(
+                #             f"⚠️ {symbol} Hurst trending but corr OK | "
+                #             f"H={hurst:.3f} ({consecutive}x) | "
+                #             f"corr={current_corr:.3f} >= {self.config.correlation_exit_threshold:.2f}"
+                #         )
+                #         return False
+                # else:
+                #     print(
+                #         f"⚠️ {symbol} Hurst trending ({consecutive}/{self.config.hurst_confirm_scans}) | "
+                #         f"H={hurst:.3f}, waiting for confirmation..."
+                #     )
+                #     return False
+                return True
         else:
             # Hurst is below threshold - reset counter
             if symbol in self._hurst_violation_counts:
