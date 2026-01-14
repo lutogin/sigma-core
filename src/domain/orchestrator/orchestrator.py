@@ -82,6 +82,7 @@ class OrchestratorService:
         hurst_trending_for_exit: float = 0.46,
         hurst_trending_confirm_scans: int = 2,
         z_score_progress_exit_threshold: float = 0.30,
+        z_extreme_level: float = 5.0,
     ):
         """
         Initialize Orchestrator Service.
@@ -101,6 +102,8 @@ class OrchestratorService:
                 Entry requires >= MIN_CORRELATION (0.8), exit only when < this (0.75).
             correlation_watch_threshold: Relaxed correlation threshold for watches.
                 Entry requires >= MIN_CORRELATION (0.8), remove watch only when < this (0.77).
+            z_extreme_level: Maximum Z-score to allow entry (replaces z_sl check).
+                Allows signals above z_sl (4.0) up to this level (5.0) to enter trailing entry.
         """
         self._logger = logger
         self._screener_service = screener_service
@@ -116,6 +119,7 @@ class OrchestratorService:
         self._hurst_trending_for_exit = hurst_trending_for_exit
         self._hurst_trending_confirm_scans = hurst_trending_confirm_scans
         self._z_score_progress_exit_threshold = z_score_progress_exit_threshold
+        self._z_extreme_level = z_extreme_level
 
         # Internal state: track consecutive Hurst violations per symbol
         # Key: coin_symbol, Value: consecutive count of hurst >= threshold
@@ -416,7 +420,7 @@ class OrchestratorService:
 
         Entry conditions:
         - |Z| >= dynamic_entry_threshold (adaptive per-symbol threshold)
-        - |Z| < z_sl (not too extreme)
+        - |Z| < z_extreme_level (not too extreme, allows signals above z_sl)
         - Symbol not already in position
         - Symbol not in cooldown
         - Funding cost is acceptable (not toxic)
@@ -447,8 +451,9 @@ class OrchestratorService:
             # Use dynamic threshold for this symbol (adaptive upper bound)
             dynamic_threshold = result.dynamic_entry_threshold
 
-            # Check entry condition: |Z| >= dynamic_threshold AND |Z| < sl
-            if not (abs(z) >= dynamic_threshold and abs(z) < z_sl):
+            # Check entry condition: |Z| >= dynamic_threshold AND |Z| < z_extreme_level
+            # Note: z_extreme_level (5.0) > z_sl (4.0) to allow extreme signals
+            if not (abs(z) >= dynamic_threshold and abs(z) < self._z_extreme_level):
                 continue
 
             # Check if already have position for this symbol

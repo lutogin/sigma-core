@@ -58,24 +58,34 @@ class Settings:
     LOOKBACK_WINDOW_DAYS: int = 3  # 3 days (244 candles for 15m timeframe)
     # Correlation settings
     MIN_CORRELATION: float = 0.8  # Если корреляция упала ниже, пару не торгуем!
+    CORRELATION_WATCH_THRESHOLD: float = (
+        0.77  # Remove watch if correlation drops below this
+    )
     # Correlation hysteresis thresholds (relaxed thresholds for existing positions/watches)
     # Entry requires >= MIN_CORRELATION, but holding/watching allows lower values
     CORRELATION_EXIT_THRESHOLD: float = (
-        0.70  # Exit position if correlation drops below this
+        0.75  # Exit position if correlation drops below this
     )
-    CORRELATION_WATCH_THRESHOLD: float = (
-        0.75  # Remove watch if correlation drops below this
-    )
+
     # Z-Score settings
-    Z_ENTRY_THRESHOLD: float = 0  # Воход в мониторинг PendingEntrySignalEvent
+    Z_ENTRY_THRESHOLD: float = (
+        2.1  # Воход в мониторинг PendingEntrySignalEvent, минимальный порог для входа. Далее он расчитывается динамически по 95-му перцентилю за последние 440 баров.
+    )
     Z_TP_THRESHOLD: float = 0.25  # Выход
-    Z_SL_THRESHOLD: float = 4.0  # Стоп-лосс ExitSignalEvent
+    Z_SL_THRESHOLD: float = (
+        4.0  # Стоп-лосс ExitSignalEvent. Так же служит как safe z-score при всплесках
+    )
+    Z_SL_EXTREME_OFFSET: float = (
+        0.5  # Offset для экстремальных входов: если entry_z > Z_SL_THRESHOLD, то SL = entry_z + offset
+    )
     Z_SCORE_PROGRESS_EXIT_THRESHOLD: float = (
         0.30  # Выход если Z-score прогрессирует ниже этого порога в совокупности с другими фильтрами
     )
+
     # Beta settings
     MAX_BETA: float = 2.0
     MIN_BETA: float = 0.5
+
     # Hurst settings
     HURST_THRESHOLD: float = 0.45  # Максимальный Hurst для спрэдов (вход)
     HURST_WATCH_THRESHOLD: float = (
@@ -88,9 +98,11 @@ class Settings:
         2  # Количество сканов для подтверждения trending
     )
     HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
+
     # ADF settings
     ADF_PVALUE_THRESHOLD: float = 0.08  # Максимальный p-value для стационарности
     ADF_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета ADF
+
     # Half-Life settings
     HALFLIFE_MAX_BARS: float = 48.0  # 0.5 * MAX_POSITION_BARS (96) = 48 bars = 12h
     HALFLIFE_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Half-Life
@@ -104,7 +116,7 @@ class Settings:
 
     # Volatility filter
     VOLATILITY_WINDOW: int = 24  # 6 hours (24 x 15min candles)
-    VOLATILITY_THRESHOLD: float = 0.008
+    VOLATILITY_THRESHOLD: float = 0.012
     VOLATILITY_CRASH_WINDOW: int = 16  # 4 hours (16 x 15min candles)
     VOLATILITY_CRASH_THRESHOLD: float = 0.05
 
@@ -123,28 +135,33 @@ class Settings:
     # alpha_down = faster decrease (capture more entries when vol drops)
     THRESHOLD_EMA_ALPHA_UP: float = 0.01  # Slow rise: 1% new, 99% old
     THRESHOLD_EMA_ALPHA_DOWN: float = 0.05  # Faster fall: 5% new, 95% old
+
     # Trailing Entry settings (Smart Entry)
     TRAILING_ENTRY_PULLBACK: float = 0.2  # Z-score pullback for reversal confirmation
+    TRAILING_ENTRY_PULLBACK_EXTREME: float = (
+        0.6  # Z-score pullback for extreme signals (when |Z| > z_sl)
+    )
     TRAILING_ENTRY_TIMEOUT_MINUTES: int = 45  # Max watch duration before cancellation
     FALSE_ALARM_HYSTERESIS: float = (
         0.2  # Cancel watch only if Z drops this much below threshold
     )
+    Z_EXTREME_LEVEL: float = 5.0  # Maximum Z-score to allow entry (replaces z_sl check)
 
     # Trailing Stop Loss settings (smart SL that follows favorable moves)
     # When Z-score moves in our favor, we tighten the SL to lock in gains
-    TRAILING_SL_OFFSET: float = 1.0  # Offset from min_z_reached for new SL
-    TRAILING_SL_ACTIVATION: float = (
-        1.4  # Min Z recovery from entry before trailing SL activates
-    )
     # Example: Entry at Z=3.0, activation=1.0 → trail starts when Z drops to 2.0
     # If Z drops to 1.0, new SL = max(entry_threshold, 1.0 + 1.5) = 2.5
+    TRAILING_SL_OFFSET: float = 1.0  # Offset from min_z_reached for new SL
+    TRAILING_SL_ACTIVATION: float = (
+        1.0  # Min Z recovery from entry before trailing SL activates
+    )
 
     # Position sizing
-    POSITION_SIZE_USDT: float = 100.0  # USDT размер позиции на COIN ногу
+    POSITION_SIZE_USDT: float = 1000.0  # USDT размер позиции на COIN ногу
 
     # Trading settings
     ALLOW_TRADING: bool = True  # Enable/disable real trading
-    MAX_OPEN_SPREADS: int = 5  # Maximum number of open spread positions
+    MAX_OPEN_SPREADS: int = 6  # Maximum number of open spread positions
 
     # Position state settings
     COOLDOWN_BARS: int = 16  # Cooldown after SL/CORRELATION_DROP (16 bars = 4h for 15m)
@@ -212,6 +229,7 @@ class Settings:
         self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.0"))
         self.Z_TP_THRESHOLD = float(os.getenv("Z_TP_THRESHOLD", "0.25"))
         self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "0"))
+        self.Z_SL_EXTREME_OFFSET = float(os.getenv("Z_SL_EXTREME_OFFSET", "0.5"))
         self.Z_SCORE_PROGRESS_EXIT_THRESHOLD = float(
             os.getenv("Z_SCORE_PROGRESS_EXIT_THRESHOLD", "0.30")
         )
@@ -272,10 +290,14 @@ class Settings:
         self.TRAILING_ENTRY_PULLBACK = float(
             os.getenv("TRAILING_ENTRY_PULLBACK", "0.2")
         )
+        self.TRAILING_ENTRY_PULLBACK_EXTREME = float(
+            os.getenv("TRAILING_ENTRY_PULLBACK_EXTREME", "0.6")
+        )
         self.TRAILING_ENTRY_TIMEOUT_MINUTES = int(
             os.getenv("TRAILING_ENTRY_TIMEOUT_MINUTES", "60")
         )
         self.FALSE_ALARM_HYSTERESIS = float(os.getenv("FALSE_ALARM_HYSTERESIS", "0.3"))
+        self.Z_EXTREME_LEVEL = float(os.getenv("Z_EXTREME_LEVEL", "5.0"))
 
         # Position sizing
         self.POSITION_SIZE_USDT = float(os.getenv("POSITION_SIZE_USDT", "100.0"))

@@ -286,6 +286,7 @@ class Container:
                 correlation_watch_threshold=self._settings.CORRELATION_WATCH_THRESHOLD,
                 hurst_trending_for_exit=self._settings.HURST_TRENDING_FOR_EXIT,
                 hurst_trending_confirm_scans=self._settings.HURST_TRENDING_CONFIRM_SCANS,
+                z_extreme_level=self._settings.Z_EXTREME_LEVEL,
             )
         return self._instances["orchestrator_service"]
 
@@ -304,6 +305,7 @@ class Container:
                 z_entry_threshold=self._settings.Z_ENTRY_THRESHOLD,
                 z_sl_threshold=self._settings.Z_SL_THRESHOLD,
                 pullback=self._settings.TRAILING_ENTRY_PULLBACK,
+                pullback_extreme=self._settings.TRAILING_ENTRY_PULLBACK_EXTREME,
                 watch_timeout_seconds=self._settings.TRAILING_ENTRY_TIMEOUT_MINUTES
                 * 60,
                 max_watches=self._settings.MAX_OPEN_SPREADS,
@@ -334,6 +336,8 @@ class Container:
                 trailing_sl_offset=self._settings.TRAILING_SL_OFFSET,
                 trailing_sl_activation=self._settings.TRAILING_SL_ACTIVATION,
                 z_entry_threshold=self._settings.Z_ENTRY_THRESHOLD,
+                z_sl_threshold=self._settings.Z_SL_THRESHOLD,
+                z_sl_extreme_offset=self._settings.Z_SL_EXTREME_OFFSET,
             )
         return self._instances["exit_observer_service"]
 

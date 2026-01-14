@@ -12,10 +12,12 @@ Logic:
 3. Recalculate Z-score in real-time (every 1 second with debounce)
 4. Track maximum |Z| reached
 5. Enter when |Z| pulls back by PULLBACK points from maximum
+   - Normal pullback: used when max_z <= z_sl
+   - Extreme pullback: used when max_z > z_sl (larger pullback for extreme signals)
 6. Cancel if:
    - Timeout (45 minutes) exceeded
    - Z returns to normal (< entry_threshold) - false alarm
-   - Z exceeds SL threshold
+   - Z exceeds extreme level threshold
 
 This improves Sharpe Ratio by avoiding "catching falling knives".
 """
@@ -58,6 +60,7 @@ class EntryObserverService:
         z_entry_threshold: float = 2.0,
         z_sl_threshold: float = 4.0,
         pullback: float = 0.2,
+        pullback_extreme: float = 0.6,  # Pullback for extreme signals (|Z| > z_sl)
         watch_timeout_seconds: int = 2700,  # 45 minutes
         debounce_seconds: float = 1.0,
         max_watches: int = 10,
@@ -73,7 +76,8 @@ class EntryObserverService:
             primary_symbol: Primary trading pair (e.g., "ETH/USDT:USDT").
             z_entry_threshold: Z-score threshold for entry.
             z_sl_threshold: Z-score stop-loss threshold.
-            pullback: Pullback in Z-score points to confirm reversal.
+            pullback: Pullback in Z-score points to confirm reversal (normal signals).
+            pullback_extreme: Pullback in Z-score points for extreme signals (when |Z| > z_sl).
             watch_timeout_seconds: Maximum watch duration before cancellation.
             debounce_seconds: Minimum time between Z-score recalculations.
             max_watches: Maximum concurrent watches (limit WebSocket connections).
@@ -88,6 +92,7 @@ class EntryObserverService:
         self._z_entry = z_entry_threshold
         self._z_sl = z_sl_threshold
         self._pullback = pullback
+        self._pullback_extreme = pullback_extreme
         self._timeout = watch_timeout_seconds
         self._debounce = debounce_seconds
         self._max_watches = max_watches
@@ -251,10 +256,15 @@ class EntryObserverService:
                 old_halflife = watch.halflife
                 watch.halflife = event.halflife
 
-                entry_target = watch.max_z - self._pullback
+                # Determine pullback amount based on max_z
+                pullback_amount = (
+                    self._pullback_extreme if watch.max_z > watch.z_sl_threshold else self._pullback
+                )
+                entry_target = watch.max_z - pullback_amount
                 self._logger.info(
                     f"🛡️ Watch {coin} FROZEN | scan_Z={abs_event_z:.2f} | "
-                    f"max_z={watch.max_z:.2f} | entry_target={entry_target:.2f} | "
+                    f"max_z={watch.max_z:.2f} | entry_target={entry_target:.2f} "
+                    f"(using {'extreme' if watch.max_z > watch.z_sl_threshold else 'normal'} pullback={pullback_amount:.2f}) | "
                     f"HL: {old_halflife:.1f}→{watch.halflife:.1f}"
                 )
                 return
@@ -299,11 +309,20 @@ class EntryObserverService:
             # Store in memory
             self._watches[coin] = watch
 
+            # Determine pullback amount based on initial signal strength
+            initial_pullback = (
+                self._pullback_extreme
+                if abs(event.z_score) > watch.z_sl_threshold
+                else self._pullback
+            )
+            pullback_target = watch.max_z - initial_pullback
+
             self._logger.info(
                 f"👀 Started watching {coin} | "
                 f"Z={event.z_score:.2f} | max_z={watch.max_z:.2f} | "
                 f"side={event.spread_side.value} | "
-                f"pullback_target={watch.max_z - self._pullback:.2f}"
+                f"pullback_target={pullback_target:.2f} "
+                f"(using {'extreme' if abs(event.z_score) > watch.z_sl_threshold else 'normal'} pullback={initial_pullback:.2f})"
             )
 
             # Emit WatchStartedEvent for notifications (only on NEW watch)
@@ -540,8 +559,15 @@ class EntryObserverService:
         z_entry = watch.z_entry_threshold
         z_sl = watch.z_sl_threshold
 
+        # Calculate dynamic pullback based on signal strength
+        # If max_z exceeded z_sl, use extreme pullback (larger), otherwise use normal pullback
+        if watch.max_z > z_sl:
+            pullback_amount = self._pullback_extreme
+        else:
+            pullback_amount = self._pullback
+
         # Calculate pullback target for this watch
-        pullback_target = watch.max_z - self._pullback
+        pullback_target = watch.max_z - pullback_amount
 
         # 1. FIRST: Check for reversal (pullback from max) - ENTRY CONDITION
         # This must be checked first to capture the entry moment
@@ -549,7 +575,8 @@ class EntryObserverService:
             self._logger.info(
                 f"✅ {coin} reversal confirmed! | "
                 f"peak={watch.max_z:.2f}, current={abs_z:.2f}, "
-                f"pullback={watch.max_z - abs_z:.2f}"
+                f"pullback={watch.max_z - abs_z:.2f} "
+                f"(using {'extreme' if watch.max_z > z_sl else 'normal'} pullback={pullback_amount:.2f})"
             )
             await self._execute_entry(watch, live_z)
             return
@@ -599,9 +626,14 @@ class EntryObserverService:
         # 5. Check if spread is still widening (update max)
         if abs_z > watch.max_z:
             watch.max_z = abs_z
+            # Determine pullback amount based on new max_z
+            new_pullback = (
+                self._pullback_extreme if abs_z > z_sl else self._pullback
+            )
             self._logger.debug(
                 f"📈 {coin} new peak Z: {abs_z:.2f} | "
-                f"pullback_target={abs_z - self._pullback:.2f}"
+                f"pullback_target={abs_z - new_pullback:.2f} "
+                f"(using {'extreme' if abs_z > z_sl else 'normal'} pullback={new_pullback:.2f})"
             )
 
     # =========================================================================

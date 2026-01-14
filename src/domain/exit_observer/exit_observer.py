@@ -56,6 +56,8 @@ class ExitObserverService:
         trailing_sl_offset: float = 1.5,  # Offset from min_z for trailing SL
         trailing_sl_activation: float = 1.0,  # Min Z recovery to activate trailing
         z_entry_threshold: float = 2.1,  # Entry threshold floor for trailing SL
+        z_sl_threshold: float = 4.0,  # Base SL threshold
+        z_sl_extreme_offset: float = 0.5,  # Offset for extreme entries (entry_z > z_sl_threshold)
     ):
         """
         Initialize Exit Observer Service.
@@ -71,6 +73,9 @@ class ExitObserverService:
             trailing_sl_offset: How much to add to min_z_reached for new SL.
             trailing_sl_activation: Minimum Z recovery from entry to activate trailing SL.
             z_entry_threshold: Entry threshold floor for trailing SL calculation.
+            z_sl_threshold: Base SL threshold (default 4.0).
+            z_sl_extreme_offset: Offset for extreme entries. If entry_z > z_sl_threshold,
+                                then SL = abs(entry_z) + offset (e.g., entry_z=4.3 → SL=4.8).
         """
         self._emitter = event_emitter
         self._exchange = exchange_client
@@ -83,6 +88,8 @@ class ExitObserverService:
         self._trailing_sl_offset = trailing_sl_offset
         self._trailing_sl_activation = trailing_sl_activation
         self._z_entry_threshold = z_entry_threshold
+        self._z_sl_threshold = z_sl_threshold
+        self._z_sl_extreme_offset = z_sl_extreme_offset
 
         # Active watches: coin_symbol -> ExitWatch
         self._watches: Dict[str, ExitWatch] = {}
@@ -163,6 +170,13 @@ class ExitObserverService:
                     )
                     continue
 
+                # Calculate SL threshold (may be extended for extreme entries)
+                # Use stored z_sl_threshold as base, but recalculate to ensure consistency
+                calculated_sl_threshold = self._calculate_sl_threshold(
+                    entry_z_score=position.entry_z_score,
+                    base_sl_threshold=position.z_sl_threshold,
+                )
+
                 # Create ExitWatch from stored position
                 # For restored positions, use entry Z as min_z_reached
                 # (we don't know the true min during downtime)
@@ -180,8 +194,8 @@ class ExitObserverService:
                     halflife=position.entry_halflife,
                     z_entry_threshold=self._z_entry_threshold,
                     z_tp_threshold=position.z_tp_threshold,
-                    z_sl_threshold=position.z_sl_threshold,
-                    initial_sl_threshold=position.z_sl_threshold,
+                    z_sl_threshold=calculated_sl_threshold,
+                    initial_sl_threshold=calculated_sl_threshold,
                     min_z_reached=entry_abs_z,  # Start from entry
                     coin_price=position.coin_entry_price,
                     primary_price=position.primary_entry_price,
@@ -195,7 +209,8 @@ class ExitObserverService:
                 self._logger.info(
                     f"✅ Restored exit monitoring for {coin} | "
                     f"entry_Z={position.entry_z_score:.2f} | "
-                    f"TP={position.z_tp_threshold:.2f} | SL={position.z_sl_threshold:.2f}"
+                    f"TP={position.z_tp_threshold:.2f} | SL={calculated_sl_threshold:.2f} "
+                    f"{'(extended)' if calculated_sl_threshold > position.z_sl_threshold else ''}"
                 )
 
             # Subscribe to primary if we have watches
@@ -245,6 +260,43 @@ class ExitObserverService:
         return dict(self._watches)
 
     # =========================================================================
+    # Helpers
+    # =========================================================================
+
+    def _calculate_sl_threshold(
+        self, entry_z_score: float, base_sl_threshold: float
+    ) -> float:
+        """
+        Calculate SL threshold for a position, accounting for extreme entries.
+
+        If entry Z-score exceeds base SL threshold, use extended SL:
+        SL = abs(entry_z) + z_sl_extreme_offset
+
+        This prevents immediate SL hit for positions entered after extreme pullback.
+
+        Args:
+            entry_z_score: Z-score at position entry.
+            base_sl_threshold: Base SL threshold from event/config.
+
+        Returns:
+            Adjusted SL threshold for this position.
+        """
+        entry_abs_z = abs(entry_z_score)
+
+        # If entry Z exceeds base SL threshold, use extended SL
+        if entry_abs_z > self._z_sl_threshold:
+            extended_sl = entry_abs_z + self._z_sl_extreme_offset
+            self._logger.info(
+                f"🔧 Extreme entry detected | entry_Z={entry_z_score:.2f} > "
+                f"base_SL={self._z_sl_threshold:.2f} | "
+                f"using extended_SL={extended_sl:.2f} (entry + {self._z_sl_extreme_offset})"
+            )
+            return extended_sl
+
+        # Normal entry: use base SL threshold
+        return base_sl_threshold
+
+    # =========================================================================
     # Event Handlers
     # =========================================================================
 
@@ -264,6 +316,12 @@ class ExitObserverService:
                 # Update existing watch
                 await self._cleanup_watch(coin)
 
+            # Calculate SL threshold (may be extended for extreme entries)
+            calculated_sl_threshold = self._calculate_sl_threshold(
+                entry_z_score=event.z_score,
+                base_sl_threshold=event.z_sl_threshold,
+            )
+
             # Create ExitWatch
             entry_abs_z = abs(event.z_score)
             watch = ExitWatch(
@@ -279,8 +337,8 @@ class ExitObserverService:
                 halflife=event.halflife,
                 z_entry_threshold=self._z_entry_threshold,
                 z_tp_threshold=event.z_tp_threshold,
-                z_sl_threshold=event.z_sl_threshold,
-                initial_sl_threshold=event.z_sl_threshold,
+                z_sl_threshold=calculated_sl_threshold,
+                initial_sl_threshold=calculated_sl_threshold,
                 min_z_reached=entry_abs_z,  # Start from entry Z
                 coin_price=event.coin_price,
                 primary_price=event.primary_price,
@@ -292,7 +350,8 @@ class ExitObserverService:
             self._logger.info(
                 f"👁️ Started exit monitoring {coin} | "
                 f"entry_Z={event.z_score:.2f} | "
-                f"TP={event.z_tp_threshold:.2f} | SL={event.z_sl_threshold:.2f} | "
+                f"TP={event.z_tp_threshold:.2f} | SL={calculated_sl_threshold:.2f} "
+                f"{'(extended)' if calculated_sl_threshold > event.z_sl_threshold else ''} | "
                 f"side={event.spread_side.value}"
             )
 

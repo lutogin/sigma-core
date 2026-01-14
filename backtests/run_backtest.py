@@ -394,10 +394,18 @@ class BacktestConfig:
 
     Тогда:
 	    •	0.25 * 0.258 ≈ 0.065 ~ 0.07
-    То есть, если “0.25 на реальных тиках” примерно соответствует “0.06 - 0.08 на 1m close”.
+    То есть, если "0.25 на реальных тиках" примерно соответствует "0.06 - 0.08 на 1m close".
+    
+    Extreme pullback:
+        •   0.6 * 0.258 ≈ 0.155 ~ 0.15
     """
     use_trailing_entry: bool = True  # Enable trailing entry simulation
-    trailing_pullback: float = 0.06  # Z-score pullback for reversal confirmation
+    trailing_pullback: float = (
+        0.06  # Z-score pullback for reversal confirmation (normal)
+    )
+    trailing_pullback_extreme: float = (
+        0.15  # Z-score pullback for extreme signals (|Z| > z_sl)
+    )
     trailing_timeout_minutes: int = 90  # Max watch duration before cancellation
     false_alarm_hysteresis: float = (
         0.45  # Cancel watch only if Z drops this much below threshold
@@ -428,7 +436,12 @@ class BacktestConfig:
     # When Z-score moves in our favor, we tighten the SL to lock in gains
     use_trailing_sl: bool = True  # Enable trailing SL
     trailing_sl_offset: float = 1.0  # Offset from min_z_reached for new SL
-    trailing_sl_activation: float = 1.4  # Min Z recovery from entry to activate
+    trailing_sl_activation: float = 1.5  # Min Z recovery from entry to activate
+
+    # Extreme entry settings (for signals with |Z| > z_sl_threshold)
+    # Extended SL = abs(entry_z) + z_sl_extreme_offset
+    # This prevents immediate SL hit for positions entered after extreme pullback
+    z_sl_extreme_offset: float = 0.4  # Offset for extreme entries
 
 
 @dataclass
@@ -1899,9 +1912,21 @@ class StatArbBacktest:
         )
         self.watch_candidates[symbol] = watch
         hl_str = f" | HL={halflife:.1f}" if halflife else ""
+        # Use dynamic pullback based on initial signal strength
+        initial_pullback = (
+            self.config.trailing_pullback_extreme
+            if abs(z_result.current_z_score) > self.config.z_sl_threshold
+            else self.config.trailing_pullback
+        )
+        pullback_type = (
+            "extreme"
+            if abs(z_result.current_z_score) > self.config.z_sl_threshold
+            else "normal"
+        )
         print(
             f"👀 WATCH START {symbol} | Z={z_result.current_z_score:.2f} | "
-            f"side={side} | pullback_target={watch.max_z - self.config.trailing_pullback:.2f}{hl_str}"
+            f"side={side} | pullback_target={watch.max_z - initial_pullback:.2f} "
+            f"({pullback_type} pullback={initial_pullback}){hl_str}"
         )
 
     async def _process_watches(
@@ -2003,8 +2028,15 @@ class StatArbBacktest:
                 )
                 abs_z = abs(live_z)
 
+                # Dynamic pullback: use extreme if max_z > z_sl
+                current_pullback = (
+                    self.config.trailing_pullback_extreme
+                    if watch.max_z > watch.z_sl_threshold
+                    else self.config.trailing_pullback
+                )
+
                 # Check pullback on 15m (ENTRY - first priority)
-                if abs_z <= watch.max_z - self.config.trailing_pullback:
+                if abs_z <= watch.max_z - current_pullback:
                     await self._execute_watch_entry(
                         watch, current_time, live_z, current_bar_idx, window_data
                     )
@@ -2070,10 +2102,19 @@ class StatArbBacktest:
             # max_z is updated ONLY from real-time data (1m simulation or 15m fallback with frozen params)
             # NOT from scan (which uses new params)
 
-            entry_target = watch.max_z - self.config.trailing_pullback
+            # Dynamic pullback: use extreme if max_z > z_sl
+            current_pullback = (
+                self.config.trailing_pullback_extreme
+                if watch.max_z > watch.z_sl_threshold
+                else self.config.trailing_pullback
+            )
+            entry_target = watch.max_z - current_pullback
+            pullback_type = (
+                "extreme" if watch.max_z > watch.z_sl_threshold else "normal"
+            )
             print(
                 f"🛡️ WATCH {symbol} FROZEN | scan_Z={abs_scan_z:.2f} | "
-                f"max_z={watch.max_z:.2f} | entry_target={entry_target:.2f}"
+                f"max_z={watch.max_z:.2f} | entry_target={entry_target:.2f} ({pullback_type})"
             )
 
         # Remove processed watches
@@ -2132,6 +2173,7 @@ class StatArbBacktest:
 
         Uses same logic as EntryObserverService._process_price_update():
         1. Check pullback (ENTRY) - FIRST priority
+           - Uses dynamic pullback: extreme if max_z > z_sl, normal otherwise
         2. Check timeout (must be checked on each 1m candle like production)
         3. Check false alarm with HYSTERESIS
         4. Check SL hit
@@ -2150,11 +2192,12 @@ class StatArbBacktest:
             - None: Still watching
         """
         max_z = watch.max_z
+        z_sl = watch.z_sl_threshold
 
         # Track peak and min-after-peak for accurate debug output
         # Trailing entry requires: peak (max_z) -> then pullback (min after peak)
-        peak_abs = max_z
-        peak_ts = watch.start_time
+        _peak_abs = max_z  # Track for debug
+        _peak_ts = watch.start_time  # Track for debug
         min_after_peak = float("inf")  # Reset when new peak found
 
         # Calculate false alarm level with hysteresis
@@ -2212,7 +2255,13 @@ class StatArbBacktest:
             abs_z = abs(live_z)
 
             # 1. Check pullback (ENTRY) - FIRST priority
-            if abs_z <= max_z - self.config.trailing_pullback:
+            # Dynamic pullback: use extreme pullback if max_z > z_sl (like production)
+            current_pullback = (
+                self.config.trailing_pullback_extreme
+                if max_z > z_sl
+                else self.config.trailing_pullback
+            )
+            if abs_z <= max_z - current_pullback:
                 # Update watch.max_z before returning so logs show correct peak
                 watch.max_z = max_z
                 return ("ENTER", ts, live_z)
@@ -2236,8 +2285,8 @@ class StatArbBacktest:
             if abs_z > max_z:
                 max_z = abs_z
                 # New peak found - reset min_after_peak tracking
-                peak_abs = abs_z
-                peak_ts = ts
+                _peak_abs = abs_z
+                _peak_ts = ts
                 min_after_peak = float("inf")
             else:
                 # Track min AFTER peak for accurate debug output
@@ -2248,7 +2297,13 @@ class StatArbBacktest:
         watch.max_z = max_z
 
         # Debug: show peak and min-after-peak for accurate trailing entry analysis
-        entry_target = max_z - self.config.trailing_pullback
+        # Use dynamic pullback for correct entry_target calculation
+        final_pullback = (
+            self.config.trailing_pullback_extreme
+            if max_z > z_sl
+            else self.config.trailing_pullback
+        )
+        entry_target = max_z - final_pullback
         gap = (
             min_after_peak - entry_target
             if min_after_peak != float("inf")
@@ -2258,11 +2313,12 @@ class StatArbBacktest:
         # Format gap string
         gap_str = f"{gap:+.2f}" if gap != float("inf") else "∞ (no pullback yet)"
         min_str = f"{min_after_peak:.2f}" if min_after_peak != float("inf") else "—"
+        pullback_type = "extreme" if max_z > z_sl else "normal"
 
         print(
             f"    📊 {watch.symbol} 1m: {len(common_minutes)} min ({len(coin_ticks)} ticks) | "
             f"peak={max_z:.2f} | min_after_peak={min_str} | "
-            f"entry_target={entry_target:.2f} | gap={gap_str}"
+            f"entry_target={entry_target:.2f} ({pullback_type}) | gap={gap_str}"
         )
 
         return None
@@ -2339,8 +2395,20 @@ class StatArbBacktest:
         coin_size = position_size
         primary_size = position_size * beta
 
-        # Create position with peak_z from trailing watch and frozen parameters
+        # Calculate SL threshold (may be extended for extreme entries)
+        # If entry Z exceeds base SL threshold, use extended SL: entry_z + offset
         entry_abs_z = abs(entry_z)
+        if entry_abs_z > self.config.z_sl_threshold:
+            calculated_sl_threshold = entry_abs_z + self.config.z_sl_extreme_offset
+            print(
+                f"🔧 Extreme entry detected | entry_Z={entry_z:.2f} > "
+                f"base_SL={self.config.z_sl_threshold:.2f} | "
+                f"using extended_SL={calculated_sl_threshold:.2f} (entry + {self.config.z_sl_extreme_offset})"
+            )
+        else:
+            calculated_sl_threshold = watch.z_sl_threshold
+
+        # Create position with peak_z from trailing watch and frozen parameters
         position = Position(
             symbol=symbol,
             side=watch.side,
@@ -2358,8 +2426,8 @@ class StatArbBacktest:
             spread_mean=watch.spread_mean,
             spread_std=watch.spread_std,
             z_tp_threshold=self.config.z_tp_threshold,
-            z_sl_threshold=watch.z_sl_threshold,
-            initial_sl_threshold=watch.z_sl_threshold,
+            z_sl_threshold=calculated_sl_threshold,
+            initial_sl_threshold=calculated_sl_threshold,
             min_z_reached=entry_abs_z,  # Start from entry Z
         )
 
@@ -2626,8 +2694,20 @@ class StatArbBacktest:
         spread_mean = self._get_spread_mean(z_result)
         spread_std = self._get_spread_std(z_result)
 
-        # Create position with frozen parameters for ExitObserver
+        # Calculate SL threshold (may be extended for extreme entries)
+        # If entry Z exceeds base SL threshold, use extended SL: entry_z + offset
         entry_abs_z = abs(z_result.current_z_score)
+        if entry_abs_z > self.config.z_sl_threshold:
+            calculated_sl_threshold = entry_abs_z + self.config.z_sl_extreme_offset
+            print(
+                f"🔧 Extreme entry detected | entry_Z={z_result.current_z_score:.2f} > "
+                f"base_SL={self.config.z_sl_threshold:.2f} | "
+                f"using extended_SL={calculated_sl_threshold:.2f}"
+            )
+        else:
+            calculated_sl_threshold = self.config.z_sl_threshold
+
+        # Create position with frozen parameters for ExitObserver
         position = Position(
             symbol=symbol,
             side=side,
@@ -2645,8 +2725,8 @@ class StatArbBacktest:
             spread_mean=spread_mean,
             spread_std=spread_std,
             z_tp_threshold=self.config.z_tp_threshold,
-            z_sl_threshold=self.config.z_sl_threshold,
-            initial_sl_threshold=self.config.z_sl_threshold,
+            z_sl_threshold=calculated_sl_threshold,
+            initial_sl_threshold=calculated_sl_threshold,
             min_z_reached=entry_abs_z,  # Start from entry Z
         )
 
