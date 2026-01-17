@@ -304,6 +304,7 @@ class Container:
                 primary_symbol=self._settings.PRIMARY_PAIR,
                 z_entry_threshold=self._settings.Z_ENTRY_THRESHOLD,
                 z_sl_threshold=self._settings.Z_SL_THRESHOLD,
+                z_extreme_level=self._settings.Z_EXTREME_LEVEL,
                 pullback=self._settings.TRAILING_ENTRY_PULLBACK,
                 pullback_extreme=self._settings.TRAILING_ENTRY_PULLBACK_EXTREME,
                 watch_timeout_seconds=self._settings.TRAILING_ENTRY_TIMEOUT_MINUTES

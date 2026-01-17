@@ -59,6 +59,7 @@ class EntryObserverService:
         primary_symbol: str = "ETH/USDT:USDT",
         z_entry_threshold: float = 2.0,
         z_sl_threshold: float = 4.0,
+        z_extreme_level: float = 6.0,  # Max Z for watch cancellation (above z_sl)
         pullback: float = 0.2,
         pullback_extreme: float = 0.6,  # Pullback for extreme signals (|Z| > z_sl)
         watch_timeout_seconds: int = 2700,  # 45 minutes
@@ -75,7 +76,9 @@ class EntryObserverService:
             logger: Logger instance.
             primary_symbol: Primary trading pair (e.g., "ETH/USDT:USDT").
             z_entry_threshold: Z-score threshold for entry.
-            z_sl_threshold: Z-score stop-loss threshold.
+            z_sl_threshold: Z-score threshold for determining pullback type (normal vs extreme).
+            z_extreme_level: Maximum Z-score before watch is cancelled (SL HIT).
+                             Allows signals above z_sl (4.0) up to this level (6.0) to continue.
             pullback: Pullback in Z-score points to confirm reversal (normal signals).
             pullback_extreme: Pullback in Z-score points for extreme signals (when |Z| > z_sl).
             watch_timeout_seconds: Maximum watch duration before cancellation.
@@ -91,6 +94,7 @@ class EntryObserverService:
         self._primary_symbol = primary_symbol
         self._z_entry = z_entry_threshold
         self._z_sl = z_sl_threshold
+        self._z_extreme_level = z_extreme_level
         self._pullback = pullback
         self._pullback_extreme = pullback_extreme
         self._timeout = watch_timeout_seconds
@@ -258,7 +262,9 @@ class EntryObserverService:
 
                 # Determine pullback amount based on max_z
                 pullback_amount = (
-                    self._pullback_extreme if watch.max_z > watch.z_sl_threshold else self._pullback
+                    self._pullback_extreme
+                    if watch.max_z > watch.z_sl_threshold
+                    else self._pullback
                 )
                 entry_target = watch.max_z - pullback_amount
                 self._logger.info(
@@ -614,11 +620,14 @@ class EntryObserverService:
             await self._cancel_watch(coin, WatchCancelReason.FALSE_ALARM, live_z)
             return
 
-        # 4. Check SL hit - Z exceeded stop-loss
-        if abs_z >= z_sl:
+        # 4. Check SL hit - Z exceeded extreme level (not z_sl!)
+        # We allow signals above z_sl (4.0) up to z_extreme_level (6.0)
+        # Only cancel if Z exceeds the extreme level
+        if abs_z >= self._z_extreme_level:
             self._logger.info(
-                f"🛑 {coin} SL hit - Z exceeded threshold | "
-                f"max_z={watch.max_z:.2f}, final_z={live_z:.2f}, sl={z_sl}"
+                f"🛑 {coin} SL hit - Z exceeded extreme level | "
+                f"max_z={watch.max_z:.2f}, final_z={live_z:.2f}, "
+                f"extreme_level={self._z_extreme_level}"
             )
             await self._cancel_watch(coin, WatchCancelReason.SL_HIT, live_z)
             return
@@ -627,9 +636,7 @@ class EntryObserverService:
         if abs_z > watch.max_z:
             watch.max_z = abs_z
             # Determine pullback amount based on new max_z
-            new_pullback = (
-                self._pullback_extreme if abs_z > z_sl else self._pullback
-            )
+            new_pullback = self._pullback_extreme if abs_z > z_sl else self._pullback
             self._logger.debug(
                 f"📈 {coin} new peak Z: {abs_z:.2f} | "
                 f"pullback_target={abs_z - new_pullback:.2f} "

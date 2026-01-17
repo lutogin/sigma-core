@@ -439,8 +439,10 @@ class BacktestConfig:
     trailing_sl_activation: float = 1.5  # Min Z recovery from entry to activate
 
     # Extreme entry settings (for signals with |Z| > z_sl_threshold)
+    # z_extreme_level: Max Z for watch (cancel if exceeded), allows entry above z_sl
     # Extended SL = abs(entry_z) + z_sl_extreme_offset
     # This prevents immediate SL hit for positions entered after extreme pullback
+    z_extreme_level: float = 6.0  # Max Z before watch is cancelled (SL_HIT)
     z_sl_extreme_offset: float = 0.4  # Offset for extreme entries
 
 
@@ -1776,8 +1778,9 @@ class StatArbBacktest:
             dyn_threshold = z_result.dynamic_entry_threshold
 
             # Check if signal is valid entry candidate using dynamic threshold
-            # Entry: |Z| >= dynamic_threshold AND |Z| <= sl_threshold
-            if abs(z) >= dyn_threshold and abs(z) <= self.config.z_sl_threshold:
+            # Entry: |Z| >= dynamic_threshold AND |Z| < z_extreme_level
+            # Note: z_extreme_level (6.0) > z_sl (4.0) to allow extreme signals
+            if abs(z) >= dyn_threshold and abs(z) < self.config.z_extreme_level:
                 side = "short" if z >= dyn_threshold else "long"
                 entry_candidates.append((abs(z), symbol, side, z_result, dyn_threshold))
 
@@ -2277,8 +2280,10 @@ class StatArbBacktest:
             if abs_z < false_alarm_level:
                 return ("FALSE_ALARM", ts, live_z)
 
-            # 4. Check SL hit
-            if abs_z >= watch.z_sl_threshold:
+            # 4. Check SL hit - Z exceeded extreme level (not z_sl!)
+            # We allow signals above z_sl (4.0) up to z_extreme_level (6.0)
+            # Only cancel if Z exceeds the extreme level
+            if abs_z >= self.config.z_extreme_level:
                 return ("SL_HIT", ts, live_z)
 
             # 5. Update max_z if still widening
