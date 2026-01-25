@@ -14,10 +14,10 @@
 
 ### Разделение ответственности:
 
-| Компонент               | Частота               | Проверяет                        | Причины выхода                                     |
-| ----------------------- | --------------------- | -------------------------------- | -------------------------------------------------- |
-| **ExitObserverService** | Real-time (WebSocket) | TP/SL/TIMEOUT + **Trailing SL** | TAKE_PROFIT, STOP_LOSS (trailing), **TIMEOUT**     |
-| **OrchestratorService** | Каждые 15 минут       | Структурные сломы            | CORRELATION_DROP, HURST_TRENDING, TIMEOUT (backup) |
+| Компонент               | Частота               | Проверяет                       | Причины выхода                                 |
+| ----------------------- | --------------------- | ------------------------------- | ---------------------------------------------- |
+| **ExitObserverService** | Real-time (WebSocket) | TP/SL/TIMEOUT + **Trailing SL** | TAKE_PROFIT, STOP_LOSS (trailing), **TIMEOUT** |
+| **OrchestratorService** | Каждые 15 минут       | Структурные сломы               | CORRELATION_DROP, HURST_TRENDING               |
 
 ### Почему такое разделение?
 
@@ -27,7 +27,10 @@
 
 - При входе "замораживаем" параметры (beta, spread_mean, spread_std)
 - ExitObserver использует **frozen параметры** для расчёта Z-score
-- Orchestrator проверяет только **структурные условия** (корреляция, Hurst, таймаут как fallback)
+- Orchestrator проверяет только **структурные условия** (корреляция, Hurst)
+- **TIMEOUT проверяется только в ExitObserver** — в реальном времени, точно в момент истечения
+
+**Важно:** Orchestrator больше НЕ проверяет TP/SL/TIMEOUT. Это полностью ответственность ExitObserver.
 
 ---
 
@@ -75,11 +78,11 @@
 
 Для предотвращения преждевременных выходов при небольших флуктуациях корреляции используются **разные пороги** для входа и выхода:
 
-| Действие              | Порог                            | Описание                                   |
-| --------------------- | -------------------------------- | ------------------------------------------ |
-| **Вход в позицию**    | MIN_CORRELATION (0.80)           | Строгий порог для новых позиций            |
-| **Выход из позиции**  | CORRELATION_EXIT_THRESHOLD (0.70) | Смягчённый порог для открытых позиций      |
-| **Удаление из watch** | CORRELATION_WATCH_THRESHOLD (0.75) | Смягчённый порог для наблюдаемых пар       |
+| Действие              | Порог                              | Описание                              |
+| --------------------- | ---------------------------------- | ------------------------------------- |
+| **Вход в позицию**    | MIN_CORRELATION (0.80)             | Строгий порог для новых позиций       |
+| **Выход из позиции**  | CORRELATION_EXIT_THRESHOLD (0.70)  | Смягчённый порог для открытых позиций |
+| **Удаление из watch** | CORRELATION_WATCH_THRESHOLD (0.75) | Смягчённый порог для наблюдаемых пар  |
 
 **Логика:** Вход требует высокой корреляции, но небольшое временное снижение не должно вызывать немедленный выход.
 
@@ -89,11 +92,11 @@
 
 Orchestrator проверяет **только структурные условия**:
 
-| Условие              | Порог                              | Описание                        |
-| -------------------- | ---------------------------------- | ------------------------------- |
-| **CORRELATION_DROP** | corr < CORRELATION_EXIT_THRESHOLD  | Пара декоррелировалась          |
-| **HURST_TRENDING**   | H >= HURST_THRESHOLD + tolerance   | Спред стал трендовым            |
-| **TIMEOUT**          | bars >= MAX_POSITION_BARS          | Позиция > 24 часов (fallback)   |
+| Условие              | Порог                             | Описание                      |
+| -------------------- | --------------------------------- | ----------------------------- |
+| **CORRELATION_DROP** | corr < CORRELATION_EXIT_THRESHOLD | Пара декоррелировалась        |
+| **HURST_TRENDING**   | H >= HURST_THRESHOLD + tolerance  | Спред стал трендовым          |
+| **TIMEOUT**          | bars >= MAX_POSITION_BARS         | Позиция > 24 часов (fallback) |
 
 **TP/SL НЕ проверяются здесь** — это делает ExitObserver в реальном времени.
 
@@ -111,12 +114,12 @@ Orchestrator проверяет **только структурные услов
 
 **Фильтры качества спреда:**
 
-| Фильтр          | Условие               | Описание                           |
-| --------------- | --------------------- | ---------------------------------- |
-| **Hurst**       | H < 0.45              | Mean-reverting spread              |
-| **Half-Life**   | HL <= 48 bars         | Быстрый возврат к среднему         |
-| **ADF**         | p-value < 0.08        | Стационарность спреда              |
-| **Funding**     | net cost > -0.05%/8h  | Приемлемый расход на фандинг       |
+| Фильтр        | Условие              | Описание                     |
+| ------------- | -------------------- | ---------------------------- |
+| **Hurst**     | H < 0.45             | Mean-reverting spread        |
+| **Half-Life** | HL <= 48 bars        | Быстрый возврат к среднему   |
+| **ADF**       | p-value < 0.08       | Стационарность спреда        |
+| **Funding**   | net cost > -0.05%/8h | Приемлемый расход на фандинг |
 
 При прохождении → emit `PendingEntrySignalEvent`
 
@@ -164,6 +167,7 @@ Orchestrator проверяет **только структурные услов
 ### Volatility Filter
 
 При получении `MarketUnsafeEvent` (высокая волатильность ETH):
+
 - **Все активные watches отменяются**
 - Cooldown применяется к каждому символу
 
@@ -191,13 +195,13 @@ Size = BaseSize × sqrt(TargetHalfLife / CurrentHalfLife)
 
 Использование `sqrt` сглаживает экстремальные значения:
 
-| Half-Life (bars) | sqrt Multiplier | Описание                           |
-| ---------------- | --------------- | ---------------------------------- |
-| 3 bars (45min)   | 2.0x (capped)   | Очень быстрая ревёрсия             |
-| 6 bars (1.5h)    | 1.41x           | Быстрая ревёрсия                   |
-| 12 bars (3h)     | 1.0x            | Эталон (TARGET_HALFLIFE_BARS)      |
-| 24 bars (6h)     | 0.71x           | Медленная ревёрсия                 |
-| 48 bars (12h)    | 0.5x (floor)    | Очень медленная ревёрсия           |
+| Half-Life (bars) | sqrt Multiplier | Описание                      |
+| ---------------- | --------------- | ----------------------------- |
+| 3 bars (45min)   | 2.0x (capped)   | Очень быстрая ревёрсия        |
+| 6 bars (1.5h)    | 1.41x           | Быстрая ревёрсия              |
+| 12 bars (3h)     | 1.0x            | Эталон (TARGET_HALFLIFE_BARS) |
+| 24 bars (6h)     | 0.71x           | Медленная ревёрсия            |
+| 48 bars (12h)    | 0.5x (floor)    | Очень медленная ревёрсия      |
 
 **Лимиты:** MIN_SIZE_MULTIPLIER (0.5x) – MAX_SIZE_MULTIPLIER (2.0x)
 
@@ -274,13 +278,13 @@ if watch.watch_duration_minutes >= max_position_minutes:
 
 **Пример:**
 
-| Событие | Entry Z | Current Z | min_z | SL |
-| ------- | ------- | --------- | ----- | --- |
-| Вход | 3.0 | 3.0 | 3.0 | 4.0 |
-| Z идёт в нашу сторону | 3.0 | 2.5 | 2.5 | 4.0 (не активирован) |
-| Z продолжает | 3.0 | 1.8 | 1.8 | 4.0 → 3.3 (активирован!) |
-| Z достиг минимума | 3.0 | 1.0 | 1.0 | 3.3 → 2.5 |
-| Z развернулся | 3.0 | 2.6 | 1.0 | 2.5 (SL hit!) |
+| Событие               | Entry Z | Current Z | min_z | SL                       |
+| --------------------- | ------- | --------- | ----- | ------------------------ |
+| Вход                  | 3.0     | 3.0       | 3.0   | 4.0                      |
+| Z идёт в нашу сторону | 3.0     | 2.5       | 2.5   | 4.0 (не активирован)     |
+| Z продолжает          | 3.0     | 1.8       | 1.8   | 4.0 → 3.3 (активирован!) |
+| Z достиг минимума     | 3.0     | 1.0       | 1.0   | 3.3 → 2.5                |
+| Z развернулся         | 3.0     | 2.6       | 1.0   | 2.5 (SL hit!)            |
 
 **Конфигурация:**
 
@@ -437,19 +441,19 @@ Parallel:
 
 ### Режимы работы:
 
-| Параметр             | Описание                                              |
-| -------------------- | ----------------------------------------------------- |
-| `use_trailing_entry` | Эмуляция EntryObserver на 1m свечах                   |
-| `use_live_exit`      | Эмуляция ExitObserver (TP/SL/TIMEOUT) на 1m свечах    |
+| Параметр             | Описание                                           |
+| -------------------- | -------------------------------------------------- |
+| `use_trailing_entry` | Эмуляция EntryObserver на 1m свечах                |
+| `use_live_exit`      | Эмуляция ExitObserver (TP/SL/TIMEOUT) на 1m свечах |
 
 ### Комбинации:
 
-| trailing_entry | live_exit | Entry            | Exit              | Скорость   |
-| -------------- | --------- | ---------------- | ----------------- | ---------- |
-| True           | True      | 1m trailing      | 1m TP/SL/TIMEOUT  | Медленно   |
-| True           | False     | 1m trailing      | 15m TP/SL         | Средне     |
-| False          | True      | Immediate        | 1m TP/SL/TIMEOUT  | Средне     |
-| False          | False     | Immediate        | 15m TP/SL         | Быстро     |
+| trailing_entry | live_exit | Entry       | Exit             | Скорость |
+| -------------- | --------- | ----------- | ---------------- | -------- |
+| True           | True      | 1m trailing | 1m TP/SL/TIMEOUT | Медленно |
+| True           | False     | 1m trailing | 15m TP/SL        | Средне   |
+| False          | True      | Immediate   | 1m TP/SL/TIMEOUT | Средне   |
+| False          | False     | Immediate   | 15m TP/SL        | Быстро   |
 
 ### Walk-Forward тесты:
 
@@ -459,38 +463,38 @@ Parallel:
 
 ## Сводка параметров
 
-| Параметр                       | Значение  | Описание                                     |
-| ------------------------------ | --------- | -------------------------------------------- |
-| TIMEFRAME                      | 15m       | Таймфрейм свечей                             |
-| LOOKBACK_WINDOW_DAYS           | 3         | Окно для rolling расчётов                    |
-| MIN_CORRELATION                | 0.8       | Минимальная корреляция для входа             |
-| CORRELATION_EXIT_THRESHOLD     | 0.7       | Порог выхода из позиции (гистерезис)         |
-| CORRELATION_WATCH_THRESHOLD    | 0.75      | Порог удаления из watch (гистерезис)         |
-| MIN_BETA / MAX_BETA            | 0.5 / 2.0 | Диапазон допустимых бет                      |
-| Z_ENTRY_THRESHOLD              | 2.0       | Базовый порог входа (dynamic override)       |
-| Z_TP_THRESHOLD                 | 0.25      | Базовый порог TP                             |
-| Z_SL_THRESHOLD                 | 4.0       | Порог SL                                     |
-| ADAPTIVE_PERCENTILE            | 95        | Перцентиль для dynamic threshold             |
-| DYNAMIC_THRESHOLD_WINDOW_BARS  | 440       | Окно для dynamic threshold                   |
-| THRESHOLD_EMA_ALPHA            | 0.1       | Сглаживание dynamic threshold                |
-| HURST_THRESHOLD                | 0.45      | Порог Hurst (вход)                           |
-| HURST_WATCH_TOLERANCE          | 0.005     | Tolerance для watches/позиций                |
-| HALFLIFE_MAX_BARS              | 48        | Макс. Half-Life (~12h)                       |
-| TARGET_HALFLIFE_BARS           | 12        | Эталон Half-Life для sizing                  |
-| MIN_SIZE_MULTIPLIER            | 0.5       | Мин. множитель размера позиции               |
-| MAX_SIZE_MULTIPLIER            | 2.0       | Макс. множитель размера позиции              |
-| ADF_PVALUE_THRESHOLD           | 0.08      | Макс. p-value для стационарности             |
-| MAX_FUNDING_COST_THRESHOLD     | -0.0005   | Макс. расход на фандинг (-0.05% за 8h)       |
-| TRAILING_ENTRY_PULLBACK        | 0.2       | Откат Z для подтверждения разворота          |
-| TRAILING_ENTRY_TIMEOUT_MINUTES | 45        | Таймаут trailing entry                       |
-| FALSE_ALARM_HYSTERESIS         | 0.2       | Гистерезис для отмены watch                  |
-| TRAILING_SL_OFFSET             | 1.5       | Offset от min_z для trailing SL              |
-| TRAILING_SL_ACTIVATION         | 1.0       | Min Z recovery для активации trailing SL     |
-| POSITION_SIZE_USDT             | 100       | Размер позиции COIN leg                      |
-| MAX_OPEN_SPREADS               | 5         | Максимум спредов                             |
-| COOLDOWN_BARS                  | 16        | Cooldown после неудачного выхода (~4h)       |
-| MAX_POSITION_BARS              | 96        | Макс. длительность позиции (~24h)            |
-| EXCHANGE_DEFAULT_LEVERAGE      | 5         | Плечо                                        |
+| Параметр                       | Значение  | Описание                                 |
+| ------------------------------ | --------- | ---------------------------------------- |
+| TIMEFRAME                      | 15m       | Таймфрейм свечей                         |
+| LOOKBACK_WINDOW_DAYS           | 3         | Окно для rolling расчётов                |
+| MIN_CORRELATION                | 0.8       | Минимальная корреляция для входа         |
+| CORRELATION_EXIT_THRESHOLD     | 0.7       | Порог выхода из позиции (гистерезис)     |
+| CORRELATION_WATCH_THRESHOLD    | 0.75      | Порог удаления из watch (гистерезис)     |
+| MIN_BETA / MAX_BETA            | 0.5 / 2.0 | Диапазон допустимых бет                  |
+| Z_ENTRY_THRESHOLD              | 2.0       | Базовый порог входа (dynamic override)   |
+| Z_TP_THRESHOLD                 | 0.25      | Базовый порог TP                         |
+| Z_SL_THRESHOLD                 | 4.0       | Порог SL                                 |
+| ADAPTIVE_PERCENTILE            | 95        | Перцентиль для dynamic threshold         |
+| DYNAMIC_THRESHOLD_WINDOW_BARS  | 440       | Окно для dynamic threshold               |
+| THRESHOLD_EMA_ALPHA            | 0.1       | Сглаживание dynamic threshold            |
+| HURST_THRESHOLD                | 0.45      | Порог Hurst (вход)                       |
+| HURST_WATCH_TOLERANCE          | 0.005     | Tolerance для watches/позиций            |
+| HALFLIFE_MAX_BARS              | 48        | Макс. Half-Life (~12h)                   |
+| TARGET_HALFLIFE_BARS           | 12        | Эталон Half-Life для sizing              |
+| MIN_SIZE_MULTIPLIER            | 0.5       | Мин. множитель размера позиции           |
+| MAX_SIZE_MULTIPLIER            | 2.0       | Макс. множитель размера позиции          |
+| ADF_PVALUE_THRESHOLD           | 0.08      | Макс. p-value для стационарности         |
+| MAX_FUNDING_COST_THRESHOLD     | -0.0005   | Макс. расход на фандинг (-0.05% за 8h)   |
+| TRAILING_ENTRY_PULLBACK        | 0.2       | Откат Z для подтверждения разворота      |
+| TRAILING_ENTRY_TIMEOUT_MINUTES | 45        | Таймаут trailing entry                   |
+| FALSE_ALARM_HYSTERESIS         | 0.2       | Гистерезис для отмены watch              |
+| TRAILING_SL_OFFSET             | 1.5       | Offset от min_z для trailing SL          |
+| TRAILING_SL_ACTIVATION         | 1.0       | Min Z recovery для активации trailing SL |
+| POSITION_SIZE_USDT             | 100       | Размер позиции COIN leg                  |
+| MAX_OPEN_SPREADS               | 5         | Максимум спредов                         |
+| COOLDOWN_BARS                  | 16        | Cooldown после неудачного выхода (~4h)   |
+| MAX_POSITION_BARS              | 96        | Макс. длительность позиции (~24h)        |
+| EXCHANGE_DEFAULT_LEVERAGE      | 5         | Плечо                                    |
 
 ---
 

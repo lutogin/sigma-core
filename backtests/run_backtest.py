@@ -395,7 +395,7 @@ class BacktestConfig:
     Тогда:
 	    •	0.25 * 0.258 ≈ 0.065 ~ 0.07
     То есть, если "0.25 на реальных тиках" примерно соответствует "0.06 - 0.08 на 1m close".
-    
+
     Extreme pullback:
         •   0.6 * 0.258 ≈ 0.155 ~ 0.15
     """
@@ -1535,6 +1535,18 @@ class StatArbBacktest:
             print(f"  ⚠️ No 1m data cache available for ExitObserver simulation")
             return  # No 1m data available
 
+        # Debug: log cache status on first call
+        if len(self.trades) == 0 and len(self.positions) > 0:
+            print(f"\n🔍 DEBUG: ExitObserver simulation starting")
+            print(f"  Cache has {len(self._minute_data_cache)} symbols")
+            print(f"  Open positions: {len(self.positions)}")
+            for sym in list(self.positions.keys())[:3]:  # Show first 3
+                if sym in self._minute_data_cache:
+                    df = self._minute_data_cache[sym]
+                    print(f"    {sym}: {len(df)} candles, range {df.index.min()} to {df.index.max()}")
+                else:
+                    print(f"    {sym}: NOT IN CACHE")
+
         positions_to_close = []
 
         for symbol, position in list(self.positions.items()):
@@ -1562,20 +1574,25 @@ class StatArbBacktest:
             ]
 
             if coin_1m.empty or primary_1m.empty:
-                # Debug: check why no data
-                if coin_1m.empty:
-                    print(
-                        f"  ⚠️ No 1m candles for {symbol} in bar {bar_start} - {bar_end}"
-                    )
-                    print(
-                        f"      coin_1m_full range: {coin_1m_full.index.min()} - {coin_1m_full.index.max()}"
-                    )
-                    print(f"      coin_1m_full timezone: {coin_1m_full.index.tz}")
-                    print(f"      bar_start timezone: {bar_start.tzinfo}")
+                # Debug: check why no data (only log first few times)
+                if len(self.trades) < 3:
+                    if coin_1m.empty:
+                        print(
+                            f"  ⚠️ No 1m candles for {symbol} in bar {bar_start} - {bar_end}"
+                        )
+                        print(
+                            f"      coin_1m_full range: {coin_1m_full.index.min()} - {coin_1m_full.index.max()}"
+                        )
+                        print(f"      coin_1m_full timezone: {coin_1m_full.index.tz}")
+                        print(f"      bar_start timezone: {bar_start.tzinfo}")
+                    if primary_1m.empty:
+                        print(
+                            f"  ⚠️ No 1m candles for {self.primary_pair} in bar {bar_start} - {bar_end}"
+                        )
                 continue
 
-            # Debug: enable for first few checks
-            debug_this = len(self.trades) < 3
+            # Debug: enable for first few positions
+            debug_this = len(self.trades) < 5
 
             # Check TP/SL on 1m candles using frozen parameters
             exit_result = self._check_exit_on_minute_data(
@@ -1640,6 +1657,8 @@ class StatArbBacktest:
         # Align indices
         common_index = coin_1m.index.intersection(primary_1m.index)
         if common_index.empty:
+            if debug:
+                print(f"    ⚠️ No common index between coin and primary 1m data")
             return None
 
         # Calculate bars held for dynamic TP
@@ -1665,6 +1684,12 @@ class StatArbBacktest:
 
         z_scores_seen = []
 
+        if debug:
+            print(f"\n    🔍 Checking {position.symbol} on {len(common_index)} 1m candles")
+            print(f"      Entry Z: {position.entry_z_score:.2f}, TP: {dynamic_tp:.2f}, SL: {z_sl:.2f}")
+            print(f"      Frozen params: beta={position.entry_beta:.4f}, mean={position.spread_mean:.4f}, std={position.spread_std:.4f}")
+            print(f"      Bars held: {bars_held}, time_coef: {time_coef if self.config.use_dynamic_tp else 'N/A'}")
+
         for ts in common_index:
             coin_price = coin_1m.loc[ts, "close"]
             primary_price = primary_1m.loc[ts, "close"]
@@ -1680,6 +1705,8 @@ class StatArbBacktest:
                     position.spread_mean,
                     position.spread_std,
                 )
+                if debug:
+                    print(f"      ⏰ TIMEOUT hit at {ts}, Z={live_z:.2f}")
                 return (ts, "TIMEOUT", live_z, coin_price, primary_price)
 
             # Calculate Z-score using FROZEN parameters from entry
@@ -1705,13 +1732,18 @@ class StatArbBacktest:
                 exit_reason = "SL"
 
             if exit_reason:
+                if debug:
+                    print(f"      ✅ {exit_reason} hit at {ts}, Z={live_z:.2f} (abs={abs_z:.2f})")
                 return (ts, exit_reason, live_z, coin_price, primary_price)
 
             # Trailing SL: update min_z and tighten SL if favorable
             if self.config.use_trailing_sl:
+                old_sl = z_sl
                 self._update_trailing_sl_for_position(position, abs_z)
                 # Update local z_sl for next iteration
                 z_sl = position.z_sl_threshold
+                if debug and z_sl < old_sl:
+                    print(f"      📈 Trailing SL tightened: {old_sl:.2f} → {z_sl:.2f} (min_z={position.min_z_reached:.2f})")
 
         # Debug: print Z-score range if no exit found
         if debug and z_scores_seen:
@@ -1719,8 +1751,9 @@ class StatArbBacktest:
             max_z = max(z_scores_seen)
             min_abs_z = min(abs(z) for z in z_scores_seen)
             print(
-                f"    DEBUG Z-scores ({position.symbol}): min={min_z:.2f}, max={max_z:.2f}, min_abs={min_abs_z:.2f}"
+                f"      📊 Z-score range: min={min_z:.2f}, max={max_z:.2f}, min_abs={min_abs_z:.2f}"
             )
+            print(f"      ❌ No exit found (TP={dynamic_tp:.2f}, SL={z_sl:.2f})")
 
         return None
 
