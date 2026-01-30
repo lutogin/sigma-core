@@ -1,0 +1,4425 @@
+{
+  "metadata": {
+    "start_date": "2025-11-01",
+    "end_date": "2026-01-27",
+    "total_coins_requested": 98,
+    "total_coins_tested": 98,
+    "total_coins_failed": 0,
+    "initial_balance": 10000.0,
+    "workers": 10,
+    "generated_at": "2026-01-27T10:53:46.413570+00:00"
+  },
+  "failed_coins": [],
+  "coins": [
+    {
+      "coin": "OKB",
+      "symbol": "OKB/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "BGB",
+      "symbol": "BGB/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "LEO",
+      "symbol": "LEO/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "SHIB",
+      "symbol": "SHIB/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "MNT",
+      "symbol": "MNT/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "XAUt",
+      "symbol": "XAUt/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "PEPE",
+      "symbol": "PEPE/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "LINK",
+      "symbol": "LINK/USDT:USDT",
+      "total_pnl": -118.41941048063529,
+      "total_pnl_pct": -1.184194104806353,
+      "total_trades": 9,
+      "overall_win_rate": 0.6666666666666666,
+      "profitable_months": 1,
+      "losing_months": 2,
+      "max_drawdown": -1302.4098764108476,
+      "max_drawdown_pct": -13.014943655421654,
+      "avg_sharpe": 0.5973707016371673,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -362.3637708882434,
+          "pnl_pct": -3.6236377088824336,
+          "trades": 2,
+          "win_rate": 0.5,
+          "max_drawdown": -1302.4098764108476,
+          "max_drawdown_pct": -13.014943655421654,
+          "sharpe_ratio": -0.4821984252600678
+        },
+        {
+          "period": "2025-December",
+          "pnl": 408.7930309712629,
+          "pnl_pct": 4.087930309712629,
+          "trades": 2,
+          "win_rate": 1.0,
+          "max_drawdown": -278.1642263525937,
+          "max_drawdown_pct": -2.6578644834740737,
+          "sharpe_ratio": 2.61577239229874
+        },
+        {
+          "period": "2026-January",
+          "pnl": -164.84867056365482,
+          "pnl_pct": -1.648486705636551,
+          "trades": 5,
+          "win_rate": 0.6,
+          "max_drawdown": -625.0247441717092,
+          "max_drawdown_pct": -6.0416171225076125,
+          "sharpe_ratio": -0.34146186212717006
+        }
+      ]
+    },
+    {
+      "coin": "WLFI",
+      "symbol": "WLFI/USDT:USDT",
+      "total_pnl": 3098.1372356569145,
+      "total_pnl_pct": 30.981372356569146,
+      "total_trades": 1,
+      "overall_win_rate": 1.0,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -545.4534232626975,
+      "max_drawdown_pct": -4.927748654703048,
+      "avg_sharpe": 1.499595106368558,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 3098.1372356569145,
+          "pnl_pct": 30.981372356569153,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -545.4534232626975,
+          "max_drawdown_pct": -4.927748654703048,
+          "sharpe_ratio": 4.498785319105674
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "KCS",
+      "symbol": "KCS/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "AAVE",
+      "symbol": "AAVE/USDT:USDT",
+      "total_pnl": 1239.0621563015427,
+      "total_pnl_pct": 12.390621563015427,
+      "total_trades": 6,
+      "overall_win_rate": 0.6666666666666666,
+      "profitable_months": 2,
+      "losing_months": 0,
+      "max_drawdown": -643.8603957260148,
+      "max_drawdown_pct": -5.884510968485254,
+      "avg_sharpe": 1.5137556938155763,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 773.6439884738127,
+          "pnl_pct": 7.736439884738119,
+          "trades": 2,
+          "win_rate": 1.0,
+          "max_drawdown": -626.7149085203491,
+          "max_drawdown_pct": -5.639743865151683,
+          "sharpe_ratio": 2.3942111007027247
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 465.41816782773,
+          "pnl_pct": 4.654181678277291,
+          "trades": 4,
+          "win_rate": 0.5,
+          "max_drawdown": -643.8603957260148,
+          "max_drawdown_pct": -5.884510968485254,
+          "sharpe_ratio": 2.147055980744004
+        }
+      ]
+    },
+    {
+      "coin": "DOT",
+      "symbol": "DOT/USDT:USDT",
+      "total_pnl": -291.7458563448799,
+      "total_pnl_pct": -2.917458563448799,
+      "total_trades": 1,
+      "overall_win_rate": 0.0,
+      "profitable_months": 0,
+      "losing_months": 1,
+      "max_drawdown": -346.337561636994,
+      "max_drawdown_pct": -3.4516687239760686,
+      "avg_sharpe": -1.3342352926524403,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": -291.7458563448799,
+          "pnl_pct": -2.9174585634487995,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -346.337561636994,
+          "max_drawdown_pct": -3.4516687239760686,
+          "sharpe_ratio": -4.002705877957321
+        }
+      ]
+    },
+    {
+      "coin": "UNI",
+      "symbol": "UNI/USDT:USDT",
+      "total_pnl": -676.176978639438,
+      "total_pnl_pct": -6.76176978639438,
+      "total_trades": 3,
+      "overall_win_rate": 0.3333333333333333,
+      "profitable_months": 1,
+      "losing_months": 2,
+      "max_drawdown": -1495.4519402292535,
+      "max_drawdown_pct": -14.513532914555274,
+      "avg_sharpe": 0.041011034807425815,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 674.5605348156765,
+          "pnl_pct": 6.745605348156769,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -86.85716056839738,
+          "max_drawdown_pct": -0.8073445840663412,
+          "sharpe_ratio": 4.381317668153711
+        },
+        {
+          "period": "2025-December",
+          "pnl": -159.1306055370548,
+          "pnl_pct": -1.591306055370551,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -646.7228748607395,
+          "max_drawdown_pct": -6.16655241978095,
+          "sharpe_ratio": -0.9981104812669969
+        },
+        {
+          "period": "2026-January",
+          "pnl": -1191.6069079180597,
+          "pnl_pct": -11.916069079180597,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1495.4519402292535,
+          "max_drawdown_pct": -14.513532914555274,
+          "sharpe_ratio": -3.2601740824644367
+        }
+      ]
+    },
+    {
+      "coin": "GT",
+      "symbol": "GT/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "SKY",
+      "symbol": "SKY/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "ENA",
+      "symbol": "ENA/USDT:USDT",
+      "total_pnl": -145.65581902860492,
+      "total_pnl_pct": -1.4565581902860492,
+      "total_trades": 3,
+      "overall_win_rate": 0.3333333333333333,
+      "profitable_months": 1,
+      "losing_months": 2,
+      "max_drawdown": -1002.9014678920903,
+      "max_drawdown_pct": -9.250174737580203,
+      "avg_sharpe": -1.3470357283807493,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 637.3947308339763,
+          "pnl_pct": 6.3739473083397575,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -575.5380949817445,
+          "max_drawdown_pct": -5.132806054600395,
+          "sharpe_ratio": 2.409924024045488
+        },
+        {
+          "period": "2025-December",
+          "pnl": -135.17332198874854,
+          "pnl_pct": -1.3517332198874827,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1002.9014678920903,
+          "max_drawdown_pct": -9.250174737580203,
+          "sharpe_ratio": -0.6013664897305674
+        },
+        {
+          "period": "2026-January",
+          "pnl": -647.8772278738327,
+          "pnl_pct": -6.478772278738325,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -712.4154123519165,
+          "max_drawdown_pct": -7.101005666727976,
+          "sharpe_ratio": -5.849664719457168
+        }
+      ]
+    },
+    {
+      "coin": "PAXG",
+      "symbol": "PAXG/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "BONK",
+      "symbol": "BONK/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "WLD",
+      "symbol": "WLD/USDT:USDT",
+      "total_pnl": -412.7497909514087,
+      "total_pnl_pct": -4.127497909514087,
+      "total_trades": 2,
+      "overall_win_rate": 0.5,
+      "profitable_months": 0,
+      "losing_months": 1,
+      "max_drawdown": -1154.42855977609,
+      "max_drawdown_pct": -11.350893111424591,
+      "avg_sharpe": -0.3987239452353175,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": -412.7497909514087,
+          "pnl_pct": -4.127497909514095,
+          "trades": 2,
+          "win_rate": 0.5,
+          "max_drawdown": -1154.42855977609,
+          "max_drawdown_pct": -11.350893111424591,
+          "sharpe_ratio": -1.1961718357059525
+        }
+      ]
+    },
+    {
+      "coin": "NEXO",
+      "symbol": "NEXO/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "ONDO",
+      "symbol": "ONDO/USDT:USDT",
+      "total_pnl": 1156.6501638458485,
+      "total_pnl_pct": 11.566501638458485,
+      "total_trades": 3,
+      "overall_win_rate": 0.6666666666666666,
+      "profitable_months": 2,
+      "losing_months": 0,
+      "max_drawdown": -552.4374632168929,
+      "max_drawdown_pct": -5.137436901270795,
+      "avg_sharpe": 3.1731950484722895,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 287.7275037970406,
+          "pnl_pct": 2.877275037970412,
+          "trades": 2,
+          "win_rate": 0.5,
+          "max_drawdown": -552.4374632168929,
+          "max_drawdown_pct": -5.137436901270795,
+          "sharpe_ratio": 1.5388376879408356
+        },
+        {
+          "period": "2025-December",
+          "pnl": 868.9226600488079,
+          "pnl_pct": 8.689226600488073,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -133.7535241677051,
+          "max_drawdown_pct": -1.3106503754202354,
+          "sharpe_ratio": 7.980747457476033
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "QNT",
+      "symbol": "QNT/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "ARB",
+      "symbol": "ARB/USDT:USDT",
+      "total_pnl": 564.052620084872,
+      "total_pnl_pct": 5.64052620084872,
+      "total_trades": 5,
+      "overall_win_rate": 0.6,
+      "profitable_months": 2,
+      "losing_months": 1,
+      "max_drawdown": -859.1851081063724,
+      "max_drawdown_pct": -8.439552258706225,
+      "avg_sharpe": 2.1150677616411833,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -678.726693146757,
+          "pnl_pct": -6.787266931467566,
+          "trades": 2,
+          "win_rate": 0.5,
+          "max_drawdown": -859.1851081063724,
+          "max_drawdown_pct": -8.439552258706225,
+          "sharpe_ratio": -3.056777371222071
+        },
+        {
+          "period": "2025-December",
+          "pnl": 607.0254269366592,
+          "pnl_pct": 6.070254269366596,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -155.04327644415207,
+          "max_drawdown_pct": -1.4887747484209557,
+          "sharpe_ratio": 5.235438524517746
+        },
+        {
+          "period": "2026-January",
+          "pnl": 635.7538862949699,
+          "pnl_pct": 6.357538862949695,
+          "trades": 2,
+          "win_rate": 0.5,
+          "max_drawdown": -261.93631777002156,
+          "max_drawdown_pct": -2.403594824821829,
+          "sharpe_ratio": 4.166542131627875
+        }
+      ]
+    },
+    {
+      "coin": "ATOM",
+      "symbol": "ATOM/USDT:USDT",
+      "total_pnl": 594.3032151924975,
+      "total_pnl_pct": 5.943032151924975,
+      "total_trades": 2,
+      "overall_win_rate": 0.5,
+      "profitable_months": 1,
+      "losing_months": 1,
+      "max_drawdown": -1359.2216206832563,
+      "max_drawdown_pct": -13.167365756808502,
+      "avg_sharpe": 0.24010124929807386,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 1528.96108691136,
+          "pnl_pct": 15.289610869113604,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -456.6298515597646,
+          "max_drawdown_pct": -4.475990743956002,
+          "sharpe_ratio": 6.530720997228707
+        },
+        {
+          "period": "2025-December",
+          "pnl": -934.6578717188626,
+          "pnl_pct": -9.346578717188622,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1359.2216206832563,
+          "max_drawdown_pct": -13.167365756808502,
+          "sharpe_ratio": -5.810417249334486
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "POL",
+      "symbol": "POL/USDT:USDT",
+      "total_pnl": -823.5444496331178,
+      "total_pnl_pct": -8.235444496331178,
+      "total_trades": 2,
+      "overall_win_rate": 0.0,
+      "profitable_months": 0,
+      "losing_months": 2,
+      "max_drawdown": -892.698441207036,
+      "max_drawdown_pct": -8.813315209624605,
+      "avg_sharpe": -1.846638121358558,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -232.50890743914212,
+          "pnl_pct": -2.3250890743914168,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -513.1419261332358,
+          "max_drawdown_pct": -4.99134562239649,
+          "sharpe_ratio": -2.448311627809122
+        },
+        {
+          "period": "2025-December",
+          "pnl": -591.0355421939756,
+          "pnl_pct": -5.910355421939748,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -892.698441207036,
+          "max_drawdown_pct": -8.813315209624605,
+          "sharpe_ratio": -3.0916027362665517
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "RENDER",
+      "symbol": "RENDER/USDT:USDT",
+      "total_pnl": 512.9691050607315,
+      "total_pnl_pct": 5.129691050607315,
+      "total_trades": 3,
+      "overall_win_rate": 0.6666666666666666,
+      "profitable_months": 1,
+      "losing_months": 1,
+      "max_drawdown": -1232.1389805300114,
+      "max_drawdown_pct": -11.954877466092979,
+      "avg_sharpe": -0.5081523988876043,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 1438.528331639558,
+          "pnl_pct": 14.385283316395581,
+          "trades": 2,
+          "win_rate": 1.0,
+          "max_drawdown": -975.9005230179246,
+          "max_drawdown_pct": -8.994200959663184,
+          "sharpe_ratio": 3.320343619429609
+        },
+        {
+          "period": "2025-December",
+          "pnl": -925.5592265788265,
+          "pnl_pct": -9.255592265788273,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1232.1389805300114,
+          "max_drawdown_pct": -11.954877466092979,
+          "sharpe_ratio": -4.844800816092422
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "CAKE",
+      "symbol": "CAKE/USDT:USDT",
+      "total_pnl": 157.93911832201047,
+      "total_pnl_pct": 1.5793911832201049,
+      "total_trades": 2,
+      "overall_win_rate": 0.5,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -746.70698692308,
+      "max_drawdown_pct": -7.4670698692308,
+      "avg_sharpe": 0.23629045968377627,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 157.93911832201047,
+          "pnl_pct": 1.5793911832201049,
+          "trades": 2,
+          "win_rate": 0.5,
+          "max_drawdown": -746.70698692308,
+          "max_drawdown_pct": -7.4670698692308,
+          "sharpe_ratio": 0.7088713790513288
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "CRV",
+      "symbol": "CRV/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "FET",
+      "symbol": "FET/USDT:USDT",
+      "total_pnl": -198.62086671592257,
+      "total_pnl_pct": -1.9862086671592258,
+      "total_trades": 1,
+      "overall_win_rate": 0.0,
+      "profitable_months": 0,
+      "losing_months": 1,
+      "max_drawdown": -306.4291613774294,
+      "max_drawdown_pct": -3.0329699012818336,
+      "avg_sharpe": -0.9251345338284193,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": -198.62086671592257,
+          "pnl_pct": -1.9862086671592258,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -306.4291613774294,
+          "max_drawdown_pct": -3.0329699012818336,
+          "sharpe_ratio": -2.775403601485258
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "LDO",
+      "symbol": "LDO/USDT:USDT",
+      "total_pnl": -1844.2989333471594,
+      "total_pnl_pct": -18.442989333471594,
+      "total_trades": 8,
+      "overall_win_rate": 0.375,
+      "profitable_months": 1,
+      "losing_months": 2,
+      "max_drawdown": -1979.7075997724987,
+      "max_drawdown_pct": -19.38885008697875,
+      "avg_sharpe": -2.687212860352578,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -1769.1608634189092,
+          "pnl_pct": -17.691608634189087,
+          "trades": 2,
+          "win_rate": 0.0,
+          "max_drawdown": -1979.7075997724987,
+          "max_drawdown_pct": -19.38885008697875,
+          "sharpe_ratio": -6.933407968415407
+        },
+        {
+          "period": "2025-December",
+          "pnl": 584.9421553156086,
+          "pnl_pct": 5.849421553156063,
+          "trades": 4,
+          "win_rate": 0.5,
+          "max_drawdown": -527.0828361197746,
+          "max_drawdown_pct": -4.98378743020548,
+          "sharpe_ratio": 2.1593710535177277
+        },
+        {
+          "period": "2026-January",
+          "pnl": -660.0802252438586,
+          "pnl_pct": -6.600802252438588,
+          "trades": 2,
+          "win_rate": 0.5,
+          "max_drawdown": -1336.7644314369136,
+          "max_drawdown_pct": -13.208399999613984,
+          "sharpe_ratio": -3.287601666160054
+        }
+      ]
+    },
+    {
+      "coin": "ETHFI",
+      "symbol": "ETHFI/USDT:USDT",
+      "total_pnl": -165.34906901018059,
+      "total_pnl_pct": -1.6534906901018058,
+      "total_trades": 5,
+      "overall_win_rate": 0.2,
+      "profitable_months": 1,
+      "losing_months": 2,
+      "max_drawdown": -1798.6170967917933,
+      "max_drawdown_pct": -16.05578189839275,
+      "avg_sharpe": 0.1838096192737367,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -297.0733724002641,
+          "pnl_pct": -2.9707337240026392,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1798.6170967917933,
+          "max_drawdown_pct": -16.05578189839275,
+          "sharpe_ratio": -0.8274639746369656
+        },
+        {
+          "period": "2025-December",
+          "pnl": 613.3195480296528,
+          "pnl_pct": 6.133195480296527,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -536.4813743917584,
+          "max_drawdown_pct": -4.946369485733614,
+          "sharpe_ratio": 3.109788523476473
+        },
+        {
+          "period": "2026-January",
+          "pnl": -481.5952446395693,
+          "pnl_pct": -4.815952446395695,
+          "trades": 3,
+          "win_rate": 0.0,
+          "max_drawdown": -1187.2629841662292,
+          "max_drawdown_pct": -11.645491762950835,
+          "sharpe_ratio": -1.730895691018297
+        }
+      ]
+    },
+    {
+      "coin": "MERL",
+      "symbol": "MERL/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "VIRTUAL",
+      "symbol": "VIRTUAL/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "SPX",
+      "symbol": "SPX/USDT:USDT",
+      "total_pnl": 590.2495178471312,
+      "total_pnl_pct": 5.902495178471312,
+      "total_trades": 1,
+      "overall_win_rate": 1.0,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -888.0714549377044,
+      "max_drawdown_pct": -8.161063566449364,
+      "avg_sharpe": 0.647113036527656,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 590.2495178471312,
+          "pnl_pct": 5.902495178471309,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -888.0714549377044,
+          "max_drawdown_pct": -8.161063566449364,
+          "sharpe_ratio": 1.941339109582968
+        }
+      ]
+    },
+    {
+      "coin": "MORPHO",
+      "symbol": "MORPHO/USDT:USDT",
+      "total_pnl": 242.01950536843808,
+      "total_pnl_pct": 2.420195053684381,
+      "total_trades": 1,
+      "overall_win_rate": 1.0,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -520.3620708010785,
+      "max_drawdown_pct": -5.136787275449901,
+      "avg_sharpe": 0.5141350238368625,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 242.01950536843808,
+          "pnl_pct": 2.4201950536843833,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -520.3620708010785,
+          "max_drawdown_pct": -5.136787275449901,
+          "sharpe_ratio": 1.5424050715105875
+        }
+      ]
+    },
+    {
+      "coin": "BTT",
+      "symbol": "BTT/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "FLOKI",
+      "symbol": "FLOKI/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "TEL",
+      "symbol": "TEL/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "NFT",
+      "symbol": "NFT/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "IMX",
+      "symbol": "IMX/USDT:USDT",
+      "total_pnl": 989.1494173697713,
+      "total_pnl_pct": 9.891494173697712,
+      "total_trades": 3,
+      "overall_win_rate": 0.6666666666666666,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -1780.9652943805886,
+      "max_drawdown_pct": -17.644236250632193,
+      "avg_sharpe": 0.7103645811119484,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 989.1494173697713,
+          "pnl_pct": 9.891494173697701,
+          "trades": 3,
+          "win_rate": 0.6666666666666666,
+          "max_drawdown": -1780.9652943805886,
+          "max_drawdown_pct": -17.644236250632193,
+          "sharpe_ratio": 2.1310937433358452
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "STRK",
+      "symbol": "STRK/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "VSN",
+      "symbol": "VSN/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "GRT",
+      "symbol": "GRT/USDT:USDT",
+      "total_pnl": 532.0426740785924,
+      "total_pnl_pct": 5.3204267407859245,
+      "total_trades": 1,
+      "overall_win_rate": 1.0,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -272.1478464970496,
+      "max_drawdown_pct": -2.721478464970496,
+      "avg_sharpe": 1.392481157811446,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 532.0426740785924,
+          "pnl_pct": 5.320426740785915,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -272.1478464970496,
+          "max_drawdown_pct": -2.721478464970496,
+          "sharpe_ratio": 4.177443473434338
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "SYRUP",
+      "symbol": "SYRUP/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "ZRO",
+      "symbol": "ZRO/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "ENS",
+      "symbol": "ENS/USDT:USDT",
+      "total_pnl": 700.1568322559085,
+      "total_pnl_pct": 7.001568322559085,
+      "total_trades": 8,
+      "overall_win_rate": 0.75,
+      "profitable_months": 2,
+      "losing_months": 0,
+      "max_drawdown": -1705.6102974936966,
+      "max_drawdown_pct": -16.170121384936643,
+      "avg_sharpe": 1.8416961594332608,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 340.2143570012818,
+          "pnl_pct": 3.402143570012813,
+          "trades": 7,
+          "win_rate": 0.7142857142857143,
+          "max_drawdown": -1705.6102974936966,
+          "max_drawdown_pct": -16.170121384936643,
+          "sharpe_ratio": 0.9792456643692644
+        },
+        {
+          "period": "2025-December",
+          "pnl": 359.94247525462674,
+          "pnl_pct": 3.599424752546274,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -96.65148867255812,
+          "max_drawdown_pct": -0.9243113867286351,
+          "sharpe_ratio": 4.545842813930518
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "BAT",
+      "symbol": "BAT/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "SAND",
+      "symbol": "SAND/USDT:USDT",
+      "total_pnl": -1733.967946805633,
+      "total_pnl_pct": -17.339679468056328,
+      "total_trades": 6,
+      "overall_win_rate": 0.3333333333333333,
+      "profitable_months": 0,
+      "losing_months": 1,
+      "max_drawdown": -2363.8072302249802,
+      "max_drawdown_pct": -22.61894786450633,
+      "avg_sharpe": -1.305872864923147,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -1733.967946805633,
+          "pnl_pct": -17.339679468056346,
+          "trades": 6,
+          "win_rate": 0.3333333333333333,
+          "max_drawdown": -2363.8072302249802,
+          "max_drawdown_pct": -22.61894786450633,
+          "sharpe_ratio": -3.9176185947694413
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "PENDLE",
+      "symbol": "PENDLE/USDT:USDT",
+      "total_pnl": -550.0093774982014,
+      "total_pnl_pct": -5.500093774982013,
+      "total_trades": 2,
+      "overall_win_rate": 0.5,
+      "profitable_months": 1,
+      "losing_months": 1,
+      "max_drawdown": -1373.6138542968074,
+      "max_drawdown_pct": -13.124626042362195,
+      "avg_sharpe": -0.7672795895656269,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": -907.6862929079288,
+          "pnl_pct": -9.07686292907929,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1373.6138542968074,
+          "max_drawdown_pct": -13.124626042362195,
+          "sharpe_ratio": -4.674895462862706
+        },
+        {
+          "period": "2026-January",
+          "pnl": 357.67691540972737,
+          "pnl_pct": 3.5767691540972737,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -613.086631346514,
+          "max_drawdown_pct": -5.91722943124039,
+          "sharpe_ratio": 2.373056694165825
+        }
+      ]
+    },
+    {
+      "coin": "JASMY",
+      "symbol": "JASMY/USDT:USDT",
+      "total_pnl": -544.8995590413933,
+      "total_pnl_pct": -5.448995590413933,
+      "total_trades": 3,
+      "overall_win_rate": 0.6666666666666666,
+      "profitable_months": 1,
+      "losing_months": 1,
+      "max_drawdown": -1621.5683519106697,
+      "max_drawdown_pct": -15.422951877430283,
+      "avg_sharpe": -0.13289123731589125,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 378.44019317569996,
+          "pnl_pct": 3.7844019317570017,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -263.8257924441332,
+          "max_drawdown_pct": -2.5558217738337277,
+          "sharpe_ratio": 3.115656893945342
+        },
+        {
+          "period": "2025-December",
+          "pnl": -923.3397522170933,
+          "pnl_pct": -9.233397522170945,
+          "trades": 2,
+          "win_rate": 0.5,
+          "max_drawdown": -1621.5683519106697,
+          "max_drawdown_pct": -15.422951877430283,
+          "sharpe_ratio": -3.514330605893016
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "ZK",
+      "symbol": "ZK/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "LUNC",
+      "symbol": "LUNC/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "DEXE",
+      "symbol": "DEXE/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "H",
+      "symbol": "H/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "TRAC",
+      "symbol": "TRAC/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "MANA",
+      "symbol": "MANA/USDT:USDT",
+      "total_pnl": 3333.3501523281543,
+      "total_pnl_pct": 33.33350152328155,
+      "total_trades": 4,
+      "overall_win_rate": 1.0,
+      "profitable_months": 2,
+      "losing_months": 0,
+      "max_drawdown": -851.4960723253462,
+      "max_drawdown_pct": -8.032499825361498,
+      "avg_sharpe": 3.7334563376352334,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 3251.4285482287887,
+          "pnl_pct": 32.51428548228789,
+          "trades": 3,
+          "win_rate": 1.0,
+          "max_drawdown": -851.4960723253462,
+          "max_drawdown_pct": -8.032499825361498,
+          "sharpe_ratio": 6.938777317210559
+        },
+        {
+          "period": "2025-December",
+          "pnl": 81.92160409936554,
+          "pnl_pct": 0.8192160409936514,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -25.415829990408383,
+          "max_drawdown_pct": -0.25321033897647094,
+          "sharpe_ratio": 4.26159169569514
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "FF",
+      "symbol": "FF/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "COMP",
+      "symbol": "COMP/USDT:USDT",
+      "total_pnl": 30.56026594070378,
+      "total_pnl_pct": 0.3056026594070378,
+      "total_trades": 2,
+      "overall_win_rate": 1.0,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -1537.3022190484662,
+      "max_drawdown_pct": -14.138817340485845,
+      "avg_sharpe": 0.10680065531214188,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 30.56026594070378,
+          "pnl_pct": 0.30560265940703174,
+          "trades": 2,
+          "win_rate": 1.0,
+          "max_drawdown": -1537.3022190484662,
+          "max_drawdown_pct": -14.138817340485845,
+          "sharpe_ratio": 0.3204019659364256
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "MX",
+      "symbol": "MX/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "1INCH",
+      "symbol": "1INCH/USDT:USDT",
+      "total_pnl": -934.1011493212932,
+      "total_pnl_pct": -9.341011493212932,
+      "total_trades": 2,
+      "overall_win_rate": 0.0,
+      "profitable_months": 0,
+      "losing_months": 2,
+      "max_drawdown": -1062.372508306329,
+      "max_drawdown_pct": -10.150964631915782,
+      "avg_sharpe": -2.059428537165148,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": -450.29156780151425,
+          "pnl_pct": -4.5029156780151425,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -710.3320257176674,
+          "max_drawdown_pct": -6.9360734024612,
+          "sharpe_ratio": -3.175163405492158
+        },
+        {
+          "period": "2026-January",
+          "pnl": -483.8095815197789,
+          "pnl_pct": -4.838095815197794,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1062.372508306329,
+          "max_drawdown_pct": -10.150964631915782,
+          "sharpe_ratio": -3.003122206003286
+        }
+      ]
+    },
+    {
+      "coin": "GLM",
+      "symbol": "GLM/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "FLUID",
+      "symbol": "FLUID/USDT:USDT",
+      "total_pnl": -211.88054179696468,
+      "total_pnl_pct": -2.118805417969647,
+      "total_trades": 2,
+      "overall_win_rate": 0.5,
+      "profitable_months": 1,
+      "losing_months": 1,
+      "max_drawdown": -518.1142560069238,
+      "max_drawdown_pct": -5.181142560069238,
+      "avg_sharpe": -1.7104827110053702,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -475.4443668002886,
+          "pnl_pct": -4.754443668002878,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -518.1142560069238,
+          "max_drawdown_pct": -5.181142560069238,
+          "sharpe_ratio": -7.1251505910767765
+        },
+        {
+          "period": "2025-December",
+          "pnl": 263.5638250033239,
+          "pnl_pct": 2.635638250033244,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -471.29532105476756,
+          "max_drawdown_pct": -4.469951665941466,
+          "sharpe_ratio": 1.993702458060666
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "AMP",
+      "symbol": "AMP/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "EIGEN",
+      "symbol": "EIGEN/USDT:USDT",
+      "total_pnl": -1182.496578003905,
+      "total_pnl_pct": -11.824965780039049,
+      "total_trades": 2,
+      "overall_win_rate": 0.5,
+      "profitable_months": 1,
+      "losing_months": 1,
+      "max_drawdown": -1465.7192644600018,
+      "max_drawdown_pct": -14.657192644600018,
+      "avg_sharpe": -1.0036369774315603,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 167.9106015795331,
+          "pnl_pct": 1.6791060157953324,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -235.24712539264146,
+          "max_drawdown_pct": -2.274404876608173,
+          "sharpe_ratio": 2.4683089542701304
+        },
+        {
+          "period": "2025-December",
+          "pnl": -1350.407179583438,
+          "pnl_pct": -13.504071795834388,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1465.7192644600018,
+          "max_drawdown_pct": -14.657192644600018,
+          "sharpe_ratio": -5.479219886564811
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "BARD",
+      "symbol": "BARD/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "W",
+      "symbol": "W/USDT:USDT",
+      "total_pnl": -1268.345592108186,
+      "total_pnl_pct": -12.68345592108186,
+      "total_trades": 4,
+      "overall_win_rate": 0.25,
+      "profitable_months": 1,
+      "losing_months": 2,
+      "max_drawdown": -1854.9290021774923,
+      "max_drawdown_pct": -18.084962950013598,
+      "avg_sharpe": -1.579053517825599,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -1598.1814085856695,
+          "pnl_pct": -15.981814085856694,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1854.9290021774923,
+          "max_drawdown_pct": -18.084962950013598,
+          "sharpe_ratio": -5.971654922666175
+        },
+        {
+          "period": "2025-December",
+          "pnl": -39.38240808676582,
+          "pnl_pct": -0.39382408086765286,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -231.11307785141253,
+          "max_drawdown_pct": -2.2975555484565224,
+          "sharpe_ratio": -0.3142808016377651
+        },
+        {
+          "period": "2026-January",
+          "pnl": 369.21822456424917,
+          "pnl_pct": 3.6921822456424893,
+          "trades": 2,
+          "win_rate": 0.5,
+          "max_drawdown": -984.1296372114411,
+          "max_drawdown_pct": -8.69722132324813,
+          "sharpe_ratio": 1.5487751708271429
+        }
+      ]
+    },
+    {
+      "coin": "CVX",
+      "symbol": "CVX/USDT:USDT",
+      "total_pnl": 1319.2475315296606,
+      "total_pnl_pct": 13.192475315296607,
+      "total_trades": 6,
+      "overall_win_rate": 0.5,
+      "profitable_months": 1,
+      "losing_months": 1,
+      "max_drawdown": -1165.5320218938705,
+      "max_drawdown_pct": -11.655320218938705,
+      "avg_sharpe": 0.7653409596264974,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 1885.708525837298,
+          "pnl_pct": 18.85708525837299,
+          "trades": 5,
+          "win_rate": 0.6,
+          "max_drawdown": -477.76958497856685,
+          "max_drawdown_pct": -4.686835213531494,
+          "sharpe_ratio": 4.450613424254246
+        },
+        {
+          "period": "2025-December",
+          "pnl": -566.4609943076376,
+          "pnl_pct": -5.664609943076375,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1165.5320218938705,
+          "max_drawdown_pct": -11.655320218938705,
+          "sharpe_ratio": -2.1545905453747536
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "FTT",
+      "symbol": "FTT/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "SUPER",
+      "symbol": "SUPER/USDT:USDT",
+      "total_pnl": 3916.948345179787,
+      "total_pnl_pct": 39.16948345179787,
+      "total_trades": 2,
+      "overall_win_rate": 1.0,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -714.393125002849,
+      "max_drawdown_pct": -7.074069440641222,
+      "avg_sharpe": 1.4260360414455544,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 3916.948345179787,
+          "pnl_pct": 39.16948345179786,
+          "trades": 2,
+          "win_rate": 1.0,
+          "max_drawdown": -714.393125002849,
+          "max_drawdown_pct": -7.074069440641222,
+          "sharpe_ratio": 4.278108124336663
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "RSR",
+      "symbol": "RSR/USDT:USDT",
+      "total_pnl": -599.6697864227789,
+      "total_pnl_pct": -5.996697864227789,
+      "total_trades": 1,
+      "overall_win_rate": 0.0,
+      "profitable_months": 0,
+      "losing_months": 1,
+      "max_drawdown": -1433.0763443104297,
+      "max_drawdown_pct": -13.457815884080079,
+      "avg_sharpe": -0.4240492008392866,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -599.6697864227789,
+          "pnl_pct": -5.99669786422779,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1433.0763443104297,
+          "max_drawdown_pct": -13.457815884080079,
+          "sharpe_ratio": -1.2721476025178597
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "BEAM",
+      "symbol": "BEAM/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "ATH",
+      "symbol": "ATH/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "APE",
+      "symbol": "APE/USDT:USDT",
+      "total_pnl": -22.49915165392588,
+      "total_pnl_pct": -0.2249915165392588,
+      "total_trades": 5,
+      "overall_win_rate": 0.4,
+      "profitable_months": 1,
+      "losing_months": 1,
+      "max_drawdown": -706.4893110924659,
+      "max_drawdown_pct": -6.975595109643254,
+      "avg_sharpe": -0.9261829984727963,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 555.9752734283746,
+          "pnl_pct": 5.559752734283756,
+          "trades": 4,
+          "win_rate": 0.5,
+          "max_drawdown": -574.7731534148043,
+          "max_drawdown_pct": -5.47294577920059,
+          "sharpe_ratio": 2.049374349129303
+        },
+        {
+          "period": "2025-December",
+          "pnl": -578.4744250823005,
+          "pnl_pct": -5.784744250823006,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -706.4893110924659,
+          "max_drawdown_pct": -6.975595109643254,
+          "sharpe_ratio": -4.827923344547692
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "LPT",
+      "symbol": "LPT/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "SFP",
+      "symbol": "SFP/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "BORG",
+      "symbol": "BORG/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "ZBU",
+      "symbol": "ZBU/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "AXS",
+      "symbol": "AXS/USDT:USDT",
+      "total_pnl": -723.0899090900812,
+      "total_pnl_pct": -7.230899090900812,
+      "total_trades": 5,
+      "overall_win_rate": 0.4,
+      "profitable_months": 0,
+      "losing_months": 2,
+      "max_drawdown": -1528.0420377653409,
+      "max_drawdown_pct": -14.814984013336243,
+      "avg_sharpe": -0.7566520729705286,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -650.1005289249767,
+          "pnl_pct": -6.501005289249752,
+          "trades": 4,
+          "win_rate": 0.5,
+          "max_drawdown": -1528.0420377653409,
+          "max_drawdown_pct": -14.814984013336243,
+          "sharpe_ratio": -1.7984650771271777
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": -72.98938016510445,
+          "pnl_pct": -0.729893801651051,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -360.91247608559024,
+          "max_drawdown_pct": -3.600317011279055,
+          "sharpe_ratio": -0.4714911417844082
+        }
+      ]
+    },
+    {
+      "coin": "UDS",
+      "symbol": "UDS/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "SOSO",
+      "symbol": "SOSO/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "BMX",
+      "symbol": "BMX/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "SNX",
+      "symbol": "SNX/USDT:USDT",
+      "total_pnl": 773.1162246863717,
+      "total_pnl_pct": 7.7311622468637164,
+      "total_trades": 1,
+      "overall_win_rate": 1.0,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -949.6807261596532,
+      "max_drawdown_pct": -8.80601668952022,
+      "avg_sharpe": 0.7586499171041029,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 773.1162246863717,
+          "pnl_pct": 7.731162246863714,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -949.6807261596532,
+          "max_drawdown_pct": -8.80601668952022,
+          "sharpe_ratio": 2.2759497513123086
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "GOMINING",
+      "symbol": "GOMINING/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "PROM",
+      "symbol": "PROM/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "TURBO",
+      "symbol": "TURBO/USDT:USDT",
+      "total_pnl": 15.160360524965196,
+      "total_pnl_pct": 0.15160360524965197,
+      "total_trades": 1,
+      "overall_win_rate": 1.0,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -169.8785639686139,
+      "max_drawdown_pct": -1.6679225796582864,
+      "avg_sharpe": 0.09876172888762029,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 15.160360524965196,
+          "pnl_pct": 0.15160360524965655,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -169.8785639686139,
+          "max_drawdown_pct": -1.6679225796582864,
+          "sharpe_ratio": 0.29628518666286086
+        }
+      ]
+    },
+    {
+      "coin": "FLZ",
+      "symbol": "FLZ/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "RLB",
+      "symbol": "RLB/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "SHFL",
+      "symbol": "SHFL/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "YFI",
+      "symbol": "YFI/USDT:USDT",
+      "total_pnl": 443.5191363317892,
+      "total_pnl_pct": 4.435191363317892,
+      "total_trades": 1,
+      "overall_win_rate": 1.0,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -176.48850437864712,
+      "max_drawdown_pct": -1.6866521308950888,
+      "avg_sharpe": 1.4212994455361585,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 443.5191363317892,
+          "pnl_pct": 4.4351913633179,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -176.48850437864712,
+          "max_drawdown_pct": -1.6866521308950888,
+          "sharpe_ratio": 4.2638983366084755
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "CTM",
+      "symbol": "CTM/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "KEEP",
+      "symbol": "KEEP/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "VCNT",
+      "symbol": "VCNT/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "DHN",
+      "symbol": "DHN/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "COW",
+      "symbol": "COW/USDT:USDT",
+      "total_pnl": -753.1660917037625,
+      "total_pnl_pct": -7.531660917037625,
+      "total_trades": 1,
+      "overall_win_rate": 0.0,
+      "profitable_months": 0,
+      "losing_months": 1,
+      "max_drawdown": -1429.0748336294455,
+      "max_drawdown_pct": -13.703622085357992,
+      "avg_sharpe": -0.7307113710877058,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -753.1660917037625,
+          "pnl_pct": -7.531660917037625,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1429.0748336294455,
+          "max_drawdown_pct": -13.703622085357992,
+          "sharpe_ratio": -2.1921341132631174
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "T",
+      "symbol": "T/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "ZRX",
+      "symbol": "ZRX/USDT:USDT",
+      "total_pnl": -997.0556356280931,
+      "total_pnl_pct": -9.97055635628093,
+      "total_trades": 1,
+      "overall_win_rate": 0.0,
+      "profitable_months": 0,
+      "losing_months": 1,
+      "max_drawdown": -1323.2505587147662,
+      "max_drawdown_pct": -12.814503004938672,
+      "avg_sharpe": -1.1023796155088263,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": -997.0556356280931,
+          "pnl_pct": -9.970556356280941,
+          "trades": 1,
+          "win_rate": 0.0,
+          "max_drawdown": -1323.2505587147662,
+          "max_drawdown_pct": -12.814503004938672,
+          "sharpe_ratio": -3.3071388465264793
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "MOVE",
+      "symbol": "MOVE/USDT:USDT",
+      "total_pnl": 114.42170042917837,
+      "total_pnl_pct": 1.1442170042917836,
+      "total_trades": 1,
+      "overall_win_rate": 1.0,
+      "profitable_months": 1,
+      "losing_months": 0,
+      "max_drawdown": -1098.2021230457376,
+      "max_drawdown_pct": -10.650167362635818,
+      "avg_sharpe": 0.18006947994527012,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 114.42170042917837,
+          "pnl_pct": 1.144217004291786,
+          "trades": 1,
+          "win_rate": 1.0,
+          "max_drawdown": -1098.2021230457376,
+          "max_drawdown_pct": -10.650167362635818,
+          "sharpe_ratio": 0.5402084398358104
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    },
+    {
+      "coin": "EDU",
+      "symbol": "EDU/USDT:USDT",
+      "total_pnl": 0,
+      "total_pnl_pct": 0.0,
+      "total_trades": 0,
+      "overall_win_rate": 0,
+      "profitable_months": 0,
+      "losing_months": 0,
+      "max_drawdown": 0.0,
+      "max_drawdown_pct": 0.0,
+      "avg_sharpe": 0.0,
+      "monthly_results": [
+        {
+          "period": "2025-November",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2025-December",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        },
+        {
+          "period": "2026-January",
+          "pnl": 0,
+          "pnl_pct": 0.0,
+          "trades": 0,
+          "win_rate": 0,
+          "max_drawdown": 0.0,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 0
+        }
+      ]
+    }
+  ]
+}

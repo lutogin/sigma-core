@@ -9,6 +9,8 @@ Features:
 - Funding rates (current and historical)
 - Trading (open/close positions, TP/SL)
 - Precision handling for amounts and prices
+- Rate limiting for API requests
+- Retry logic for transient failures
 
 All operations are async to avoid blocking the event loop.
 """
@@ -23,6 +25,52 @@ from enum import Enum
 import pandas as pd
 from binance import AsyncClient, BinanceSocketManager
 from binance.exceptions import BinanceAPIException
+
+
+# =============================================================================
+# Rate Limiter
+# =============================================================================
+
+
+class RateLimiter:
+    """
+    Token bucket rate limiter for API requests.
+
+    Binance Futures limits:
+    - 2400 request weight per minute
+    - Most endpoints cost 1-5 weight
+    - OHLCV (klines) costs 5 weight
+
+    We use conservative limits to avoid hitting the cap.
+    """
+
+    def __init__(
+        self,
+        requests_per_second: float = 10.0,
+        burst_size: int = 20,
+    ):
+        self._rate = requests_per_second
+        self._burst = burst_size
+        self._tokens = float(burst_size)
+        self._last_update = asyncio.get_event_loop().time()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, weight: int = 1) -> None:
+        """Acquire tokens, waiting if necessary."""
+        async with self._lock:
+            while True:
+                now = asyncio.get_event_loop().time()
+                elapsed = now - self._last_update
+                self._tokens = min(self._burst, self._tokens + elapsed * self._rate)
+                self._last_update = now
+
+                if self._tokens >= weight:
+                    self._tokens -= weight
+                    return
+
+                # Wait for tokens to replenish
+                wait_time = (weight - self._tokens) / self._rate
+                await asyncio.sleep(wait_time)
 
 
 @dataclass
@@ -188,6 +236,10 @@ class BinanceClient:
         self._funding_intervals: Dict[str, int] = {}
         self._is_connected = False
 
+        # Rate limiter: 10 requests/sec with burst of 20
+        # Conservative to avoid hitting Binance limits (2400 weight/min)
+        self._rate_limiter = RateLimiter(requests_per_second=10.0, burst_size=20)
+
     # =========================================================================
     # Properties
     # =========================================================================
@@ -227,7 +279,7 @@ class BinanceClient:
                 api_key=self.api_key or "",
                 api_secret=self.api_secret or "",
                 testnet=self.testnet,
-                requests_params={"timeout": 30},
+                requests_params={"timeout": 60},  # Increased from 30 to 60 seconds
             )
         return self._client
 
@@ -446,15 +498,17 @@ class BinanceClient:
         start_date: datetime,
         end_date: datetime,
         limit: int = 1000,
+        max_retries: int = 3,
     ) -> pd.DataFrame:
         """
-        Fetch OHLCV data with pagination.
+        Fetch OHLCV data with pagination, rate limiting, and retry logic.
 
         :param symbol: Trading symbol
         :param interval: Timeframe (e.g., '1h', '4h', '1d')
         :param start_date: Start date
         :param end_date: End date
         :param limit: Limit per request
+        :param max_retries: Maximum retry attempts for transient failures
         :return: DataFrame with OHLCV data
         """
         client = await self._get_client()
@@ -471,43 +525,88 @@ class BinanceClient:
         # Cap limit at 1500 (Binance Futures max) to avoid API errors
         limit = min(limit, 1500)
 
-        all_data = []
+        all_data: List[Any] = []
         current_since = int(start_date_utc.timestamp() * 1000)
         end_timestamp = int((end_date_utc + timedelta(days=1)).timestamp() * 1000)
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         while current_since < end_timestamp:
-            try:
-                candles = await client.futures_klines(
-                    symbol=binance_symbol,
-                    interval=interval,
-                    startTime=current_since,
-                    endTime=end_timestamp,
-                    limit=limit,
+            # Retry loop for transient failures
+            candles = None
+            last_error: Optional[Exception] = None
+
+            for attempt in range(max_retries):
+                try:
+                    # Rate limiting - wait for token before making request
+                    # OHLCV requests have weight of 5
+                    await self._rate_limiter.acquire(weight=5)
+
+                    candles = await client.futures_klines(
+                        symbol=binance_symbol,
+                        interval=interval,
+                        startTime=current_since,
+                        endTime=end_timestamp,
+                        limit=limit,
+                    )
+                    break  # Success, exit retry loop
+
+                except (asyncio.TimeoutError, TimeoutError) as e:
+                    last_error = e
+                    wait_time = (attempt + 1) * 2  # Exponential backoff: 2, 4, 6 sec
+                    self.logger.warning(
+                        f"Timeout fetching OHLCV for {symbol}, "
+                        f"attempt {attempt + 1}/{max_retries}, "
+                        f"retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+
+                except BinanceAPIException as e:
+                    # Rate limit error - wait longer
+                    if e.code == -1015:  # Too many requests
+                        wait_time = 30
+                        self.logger.warning(
+                            f"Rate limit hit for {symbol}, waiting {wait_time}s..."
+                        )
+                        await asyncio.sleep(wait_time)
+                        last_error = e
+                    else:
+                        # Other API errors - don't retry
+                        self.logger.error(f"API error fetching OHLCV for {symbol}: {e}")
+                        return self._ohlcv_to_dataframe(all_data)
+
+                except Exception as e:
+                    last_error = e
+                    self.logger.warning(
+                        f"Error fetching OHLCV for {symbol}: {repr(e)}, "
+                        f"attempt {attempt + 1}/{max_retries}"
+                    )
+                    await asyncio.sleep((attempt + 1) * 2)
+
+            # Check if all retries failed
+            if candles is None:
+                self.logger.error(
+                    f"Failed to fetch OHLCV for {symbol} after {max_retries} attempts: "
+                    f"{repr(last_error)}"
                 )
-
-                if not candles:
-                    break
-
-                # Filter data:
-                # 1. Only candles that started before end_timestamp
-                # 2. Only CLOSED candles (close_time <= now)
-                #    k[6] is close_time in ms - candle is closed when close_time is in the past
-                filtered = [
-                    k for k in candles
-                    if k[0] < end_timestamp and k[6] <= now_ms
-                ]
-                all_data.extend(filtered)
-
-                if len(candles) < limit or not filtered:
-                    break
-
-                current_since = candles[-1][0] + 1
-                await asyncio.sleep(0.1)  # Rate limiting
-
-            except Exception as e:
-                self.logger.error(f"Error fetching OHLCV for {symbol}: {repr(e)}")
                 break
+
+            if not candles:
+                break
+
+            # Filter data:
+            # 1. Only candles that started before end_timestamp
+            # 2. Only CLOSED candles (close_time <= now)
+            #    k[6] is close_time in ms - candle is closed when close_time is in the past
+            filtered = [
+                k for k in candles
+                if k[0] < end_timestamp and k[6] <= now_ms
+            ]
+            all_data.extend(filtered)
+
+            if len(candles) < limit or not filtered:
+                break
+
+            current_since = candles[-1][0] + 1
 
         return self._ohlcv_to_dataframe(all_data)
 

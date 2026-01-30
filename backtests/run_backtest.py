@@ -1544,8 +1544,10 @@ class StatArbBacktest:
                 if sym in self._minute_data_cache:
                     df = self._minute_data_cache[sym]
                     print(f"    {sym}: {len(df)} candles, range {df.index.min()} to {df.index.max()}")
+                    print(f"    {sym}: timezone={df.index.tz}")
                 else:
                     print(f"    {sym}: NOT IN CACHE")
+            print(f"  Current time: {current_time} (tz={current_time.tzinfo})")
 
         positions_to_close = []
 
@@ -1562,15 +1564,27 @@ class StatArbBacktest:
                 continue
 
             # Filter to current 15m bar only
+            # Use >= for bar_start to include the first minute of the bar
             bar_start = current_time - timedelta(minutes=self._timeframe_minutes)
             bar_end = current_time
 
-            # Slice 1m data for this bar
+            # Ensure timezone consistency
+            # If 1m data has timezone but bar times don't (or vice versa), convert
+            if coin_1m_full.index.tz is not None and bar_start.tzinfo is None:
+                # 1m data has tz, bar times don't - localize bar times
+                bar_start = bar_start.replace(tzinfo=timezone.utc)
+                bar_end = bar_end.replace(tzinfo=timezone.utc)
+            elif coin_1m_full.index.tz is None and bar_start.tzinfo is not None:
+                # Bar times have tz, 1m data doesn't - remove tz from bar times
+                bar_start = bar_start.replace(tzinfo=None)
+                bar_end = bar_end.replace(tzinfo=None)
+
+            # Slice 1m data for this bar (use >= to include first candle)
             coin_1m = coin_1m_full[
-                (coin_1m_full.index > bar_start) & (coin_1m_full.index <= bar_end)
+                (coin_1m_full.index >= bar_start) & (coin_1m_full.index <= bar_end)
             ]
             primary_1m = primary_1m_full[
-                (primary_1m_full.index > bar_start) & (primary_1m_full.index <= bar_end)
+                (primary_1m_full.index >= bar_start) & (primary_1m_full.index <= bar_end)
             ]
 
             if coin_1m.empty or primary_1m.empty:
@@ -1578,16 +1592,23 @@ class StatArbBacktest:
                 if len(self.trades) < 3:
                     if coin_1m.empty:
                         print(
-                            f"  ⚠️ No 1m candles for {symbol} in bar {bar_start} - {bar_end}"
+                            f"  ⚠️ No 1m candles for {symbol} in bar [{bar_start}, {bar_end}]"
                         )
                         print(
                             f"      coin_1m_full range: {coin_1m_full.index.min()} - {coin_1m_full.index.max()}"
                         )
                         print(f"      coin_1m_full timezone: {coin_1m_full.index.tz}")
                         print(f"      bar_start timezone: {bar_start.tzinfo}")
+                        # Show a few timestamps around the bar
+                        nearby = coin_1m_full[
+                            (coin_1m_full.index >= bar_start - timedelta(minutes=5)) &
+                            (coin_1m_full.index <= bar_end + timedelta(minutes=5))
+                        ]
+                        if not nearby.empty:
+                            print(f"      Nearby timestamps: {nearby.index.tolist()[:10]}")
                     if primary_1m.empty:
                         print(
-                            f"  ⚠️ No 1m candles for {self.primary_pair} in bar {bar_start} - {bar_end}"
+                            f"  ⚠️ No 1m candles for {self.primary_pair} in bar [{bar_start}, {bar_end}]"
                         )
                 continue
 

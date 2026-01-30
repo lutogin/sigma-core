@@ -61,12 +61,9 @@ class WalkForwardRunner:
 
         while current_start < end_date:
             # Calculate month bounds
+            # Use exclusive end date (next_month) to avoid cutting off last day
             next_month = current_start + relativedelta(months=1)
-            current_end = next_month - timedelta(days=1)  # End of current month
-
-            # Clip to overall end date
-            if current_end > end_date:
-                current_end = end_date
+            current_end = min(next_month, end_date)  # Exclusive end date
 
             # If start >= end (can happen on last partial month if logic is off), break
             if current_start >= current_end:
