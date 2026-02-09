@@ -401,7 +401,7 @@ class BacktestConfig:
     """
     use_trailing_entry: bool = True  # Enable trailing entry simulation
     trailing_pullback: float = (
-        0.06  # Z-score pullback for reversal confirmation (normal)
+        0.04  # Z-score pullback for reversal confirmation (normal)
     )
     trailing_pullback_extreme: float = (
         0.15  # Z-score pullback for extreme signals (|Z| > z_sl)
