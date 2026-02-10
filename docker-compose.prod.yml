@@ -29,10 +29,10 @@ services:
       resources:
         limits:
           cpus: '2.0' # Max 2 vCPU (для ThreadPool + warmup)
-          memory: 1.7G # Max 1.8GB (запас 200MB для системы)
+          memory: 3.7G # Max 3.7GB (запас 300MB для системы)
         reservations:
           cpus: '1.0' # Min 1 vCPU
-          memory: 800M # Min 800MB RAM
+          memory: 1.6G # Min 1.6G RAM
 
     # Logging configuration - important for production
     logging:
