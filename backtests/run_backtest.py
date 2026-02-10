@@ -401,7 +401,7 @@ class BacktestConfig:
     """
     use_trailing_entry: bool = True  # Enable trailing entry simulation
     trailing_pullback: float = (
-        0.04  # Z-score pullback for reversal confirmation (normal)
+        0.06  # Z-score pullback for reversal confirmation (normal)
     )
     trailing_pullback_extreme: float = (
         0.15  # Z-score pullback for extreme signals (|Z| > z_sl)
@@ -1543,7 +1543,9 @@ class StatArbBacktest:
             for sym in list(self.positions.keys())[:3]:  # Show first 3
                 if sym in self._minute_data_cache:
                     df = self._minute_data_cache[sym]
-                    print(f"    {sym}: {len(df)} candles, range {df.index.min()} to {df.index.max()}")
+                    print(
+                        f"    {sym}: {len(df)} candles, range {df.index.min()} to {df.index.max()}"
+                    )
                     print(f"    {sym}: timezone={df.index.tz}")
                 else:
                     print(f"    {sym}: NOT IN CACHE")
@@ -1584,7 +1586,8 @@ class StatArbBacktest:
                 (coin_1m_full.index >= bar_start) & (coin_1m_full.index <= bar_end)
             ]
             primary_1m = primary_1m_full[
-                (primary_1m_full.index >= bar_start) & (primary_1m_full.index <= bar_end)
+                (primary_1m_full.index >= bar_start)
+                & (primary_1m_full.index <= bar_end)
             ]
 
             if coin_1m.empty or primary_1m.empty:
@@ -1601,11 +1604,13 @@ class StatArbBacktest:
                         print(f"      bar_start timezone: {bar_start.tzinfo}")
                         # Show a few timestamps around the bar
                         nearby = coin_1m_full[
-                            (coin_1m_full.index >= bar_start - timedelta(minutes=5)) &
-                            (coin_1m_full.index <= bar_end + timedelta(minutes=5))
+                            (coin_1m_full.index >= bar_start - timedelta(minutes=5))
+                            & (coin_1m_full.index <= bar_end + timedelta(minutes=5))
                         ]
                         if not nearby.empty:
-                            print(f"      Nearby timestamps: {nearby.index.tolist()[:10]}")
+                            print(
+                                f"      Nearby timestamps: {nearby.index.tolist()[:10]}"
+                            )
                     if primary_1m.empty:
                         print(
                             f"  ⚠️ No 1m candles for {self.primary_pair} in bar [{bar_start}, {bar_end}]"
@@ -1706,10 +1711,18 @@ class StatArbBacktest:
         z_scores_seen = []
 
         if debug:
-            print(f"\n    🔍 Checking {position.symbol} on {len(common_index)} 1m candles")
-            print(f"      Entry Z: {position.entry_z_score:.2f}, TP: {dynamic_tp:.2f}, SL: {z_sl:.2f}")
-            print(f"      Frozen params: beta={position.entry_beta:.4f}, mean={position.spread_mean:.4f}, std={position.spread_std:.4f}")
-            print(f"      Bars held: {bars_held}, time_coef: {time_coef if self.config.use_dynamic_tp else 'N/A'}")
+            print(
+                f"\n    🔍 Checking {position.symbol} on {len(common_index)} 1m candles"
+            )
+            print(
+                f"      Entry Z: {position.entry_z_score:.2f}, TP: {dynamic_tp:.2f}, SL: {z_sl:.2f}"
+            )
+            print(
+                f"      Frozen params: beta={position.entry_beta:.4f}, mean={position.spread_mean:.4f}, std={position.spread_std:.4f}"
+            )
+            print(
+                f"      Bars held: {bars_held}, time_coef: {time_coef if self.config.use_dynamic_tp else 'N/A'}"
+            )
 
         for ts in common_index:
             coin_price = coin_1m.loc[ts, "close"]
@@ -1754,7 +1767,9 @@ class StatArbBacktest:
 
             if exit_reason:
                 if debug:
-                    print(f"      ✅ {exit_reason} hit at {ts}, Z={live_z:.2f} (abs={abs_z:.2f})")
+                    print(
+                        f"      ✅ {exit_reason} hit at {ts}, Z={live_z:.2f} (abs={abs_z:.2f})"
+                    )
                 return (ts, exit_reason, live_z, coin_price, primary_price)
 
             # Trailing SL: update min_z and tighten SL if favorable
@@ -1764,7 +1779,9 @@ class StatArbBacktest:
                 # Update local z_sl for next iteration
                 z_sl = position.z_sl_threshold
                 if debug and z_sl < old_sl:
-                    print(f"      📈 Trailing SL tightened: {old_sl:.2f} → {z_sl:.2f} (min_z={position.min_z_reached:.2f})")
+                    print(
+                        f"      📈 Trailing SL tightened: {old_sl:.2f} → {z_sl:.2f} (min_z={position.min_z_reached:.2f})"
+                    )
 
         # Debug: print Z-score range if no exit found
         if debug and z_scores_seen:
