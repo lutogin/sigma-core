@@ -102,10 +102,14 @@ class Settings:
     # ADF settings
     ADF_PVALUE_THRESHOLD: float = 0.08  # Максимальный p-value для стационарности
     ADF_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета ADF
+    ADF_EXIT_CONFIRM_SCANS: int = 2  # Подтверждение ADF-деградации для выхода
 
     # Half-Life settings
     HALFLIFE_MAX_BARS: float = 48.0  # 0.5 * MAX_POSITION_BARS (96) = 48 bars = 12h
     HALFLIFE_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Half-Life
+    HALFLIFE_EXIT_CONFIRM_SCANS: int = (
+        2  # Подтверждение деградации Half-Life для выхода
+    )
 
     # Dynamic Position Sizing based on Half-Life
     # Size = BaseSize × (TargetHalfLife / CurrentHalfLife)
@@ -242,15 +246,26 @@ class Settings:
         self.HURST_TRENDING_FOR_EXIT = float(
             os.getenv("HURST_TRENDING_FOR_EXIT", "0.47")
         )
-        self.HURST_CONFIRM_SCANS = int(os.getenv("HURST_CONFIRM_SCANS", "2"))
+        self.HURST_TRENDING_CONFIRM_SCANS = int(
+            os.getenv(
+                "HURST_TRENDING_CONFIRM_SCANS",
+                os.getenv("HURST_CONFIRM_SCANS", "2"),
+            )
+        )
+        # Backward-compatible alias for legacy code paths.
+        self.HURST_CONFIRM_SCANS = self.HURST_TRENDING_CONFIRM_SCANS
         self.HURST_LOOKBACK_CANDLES = int(os.getenv("HURST_LOOKBACK_CANDLES", "300"))
         # ADF
         self.ADF_PVALUE_THRESHOLD = float(os.getenv("ADF_PVALUE_THRESHOLD", "0.05"))
         self.ADF_LOOKBACK_CANDLES = int(os.getenv("ADF_LOOKBACK_CANDLES", "300"))
+        self.ADF_EXIT_CONFIRM_SCANS = int(os.getenv("ADF_EXIT_CONFIRM_SCANS", "2"))
         # Half-Life
         self.HALFLIFE_MAX_BARS = float(os.getenv("HALFLIFE_MAX_BARS", "48.0"))
         self.HALFLIFE_LOOKBACK_CANDLES = int(
             os.getenv("HALFLIFE_LOOKBACK_CANDLES", "300")
+        )
+        self.HALFLIFE_EXIT_CONFIRM_SCANS = int(
+            os.getenv("HALFLIFE_EXIT_CONFIRM_SCANS", "2")
         )
 
         # Dynamic Position Sizing based on Half-Life
@@ -300,7 +315,7 @@ class Settings:
         self.Z_EXTREME_LEVEL = float(os.getenv("Z_EXTREME_LEVEL", "5.0"))
 
         # Position sizing
-        self.POSITION_SIZE_USDT = float(os.getenv("POSITION_SIZE_USDT", "100.0"))
+        self.POSITION_SIZE_USDT = float(os.getenv("POSITION_SIZE_USDT", "1000.0"))
 
         # Trading
         self.ALLOW_TRADING = os.getenv("ALLOW_TRADING", "false").lower() == "true"
@@ -409,10 +424,14 @@ class Settings:
         logger.info("📊 ADF Settings:")
         logger.info(f"  ADF_PVALUE_THRESHOLD: {self.ADF_PVALUE_THRESHOLD}")
         logger.info(f"  ADF_LOOKBACK_CANDLES: {self.ADF_LOOKBACK_CANDLES}")
+        logger.info(f"  ADF_EXIT_CONFIRM_SCANS: {self.ADF_EXIT_CONFIRM_SCANS}")
         logger.info("-" * 40)
         logger.info("⏱️ Half-Life Settings:")
         logger.info(f"  HALFLIFE_MAX_BARS: {self.HALFLIFE_MAX_BARS}")
         logger.info(f"  HALFLIFE_LOOKBACK_CANDLES: {self.HALFLIFE_LOOKBACK_CANDLES}")
+        logger.info(
+            f"  HALFLIFE_EXIT_CONFIRM_SCANS: {self.HALFLIFE_EXIT_CONFIRM_SCANS}"
+        )
         logger.info(f"  TARGET_HALFLIFE_BARS: {self.TARGET_HALFLIFE_BARS}")
         logger.info(
             f"  SIZE_MULTIPLIER: {self.MIN_SIZE_MULTIPLIER}x - {self.MAX_SIZE_MULTIPLIER}x"

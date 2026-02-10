@@ -614,15 +614,13 @@ class ExitObserverService:
         age = now - watch.created_at
         hours = age.total_seconds() / 3600
 
-        time_based_coef = 1
-        if 4 < hours < 12:
-            time_based_coef = 3
-        elif 12 <= hours < 24:
-            time_based_coef = 5
-        else:
-            time_based_coef = 8
-
-        return time_based_coef
+        if hours < 4:
+            return 1
+        if hours < 12:
+            return 3
+        if hours < 24:
+            return 5
+        return 8
 
     # =========================================================================
     # Exit Signal Emission

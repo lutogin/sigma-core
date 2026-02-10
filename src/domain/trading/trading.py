@@ -23,6 +23,7 @@ from src.domain.position_state import (
     SpreadSide as StateSpreadSide,
 )
 from src.infra.event_emitter import (
+    BaseEvent,
     EventEmitter,
     EventType,
     EntrySignalEvent,
@@ -306,6 +307,22 @@ class TradingService:
     # Trade Execution (ACID)
     # =========================================================================
 
+    async def _safe_emit(self, event: BaseEvent) -> None:
+        """
+        Emit event without breaking the trade lifecycle on emitter errors.
+
+        Trading state and exchange side-effects are already committed by the time
+        these lifecycle events are emitted, so emitter failures should be logged
+        but must not crash the workflow.
+        """
+        try:
+            await self._emitter.emit(event)
+        except Exception as e:
+            self._logger.exception(
+                f"Failed to emit {event.event_type.value} for "
+                f"{getattr(event, 'coin_symbol', 'N/A')}: {e}"
+            )
+
     async def _open_spread(
         self,
         event: EntrySignalEvent,
@@ -428,8 +445,7 @@ class TradingService:
                 )
 
                 # Emit TradeOpenedEvent
-                self._emitter.emit(
-                    EventType.TRADE_OPENED,
+                await self._safe_emit(
                     TradeOpenedEvent(
                         coin_symbol=coin_symbol,
                         primary_symbol=primary_symbol,
@@ -466,8 +482,7 @@ class TradingService:
                 self._log_release_symbols(coin_symbol, primary_symbol)
 
                 # Emit TradeFailedEvent
-                self._emitter.emit(
-                    EventType.TRADE_FAILED,
+                await self._safe_emit(
                     TradeFailedEvent(
                         coin_symbol=coin_symbol,
                         primary_symbol=primary_symbol,
@@ -491,8 +506,7 @@ class TradingService:
                 self._log_release_symbols(coin_symbol, primary_symbol)
 
                 # Emit TradeFailedEvent
-                self._emitter.emit(
-                    EventType.TRADE_FAILED,
+                await self._safe_emit(
                     TradeFailedEvent(
                         coin_symbol=coin_symbol,
                         primary_symbol=primary_symbol,
@@ -521,8 +535,7 @@ class TradingService:
             self._log_release_symbols(coin_symbol, primary_symbol)
 
             # Emit TradeFailedEvent
-            self._emitter.emit(
-                EventType.TRADE_FAILED,
+            await self._safe_emit(
                 TradeFailedEvent(
                     coin_symbol=coin_symbol,
                     primary_symbol=primary_symbol,
@@ -683,10 +696,10 @@ class TradingService:
                     f"(partial {position.primary_contracts:.6f}): {primary_result}"
                 )
 
-            # Update position state (applies cooldown if SL/CORRELATION_DROP)
-            self._position_state.close_position(coin_symbol, exit_reason)
-
             if coin_success and primary_success:
+                # Update position state only after BOTH legs are confirmed closed
+                self._position_state.close_position(coin_symbol, exit_reason)
+
                 self._logger.info(
                     f"✅ Spread closed | {coin_symbol} | reason={exit_reason.value} | "
                     f"PRIMARY partial close: {position.primary_contracts:.6f} contracts"
@@ -694,8 +707,7 @@ class TradingService:
 
                 # Emit TradeClosedEvent
                 if position:
-                    self._emitter.emit(
-                        EventType.TRADE_CLOSED,
+                    await self._safe_emit(
                         TradeClosedEvent(
                             coin_symbol=coin_symbol,
                             primary_symbol=primary_symbol,
@@ -730,8 +742,7 @@ class TradingService:
                 if not primary_success:
                     error_msg.append(f"PRIMARY: {primary_result}")
 
-                self._emitter.emit(
-                    EventType.TRADE_CLOSE_ERROR,
+                await self._safe_emit(
                     TradeCloseErrorEvent(
                         coin_symbol=coin_symbol,
                         primary_symbol=primary_symbol,
@@ -747,8 +758,7 @@ class TradingService:
             self._logger.exception(f"❌ Error closing spread {coin_symbol}: {e}")
 
             # Emit TradeCloseErrorEvent
-            self._emitter.emit(
-                EventType.TRADE_CLOSE_ERROR,
+            await self._safe_emit(
                 TradeCloseErrorEvent(
                     coin_symbol=coin_symbol,
                     primary_symbol=primary_symbol,

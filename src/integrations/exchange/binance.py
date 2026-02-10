@@ -1349,6 +1349,7 @@ class BinanceClient:
             precise_amount = await self.amount_to_precision(
                 symbol, Decimal(str(amount))
             )
+            remaining_amount = float(precise_amount)
 
             # Determine position_side for Hedge Mode
             if position_side is None:
@@ -1388,7 +1389,11 @@ class BinanceClient:
                     )
                     if fallback_to_market:
                         return await self.open_position(
-                            symbol, side, amount, leverage, position_side
+                            symbol,
+                            side,
+                            remaining_amount,
+                            leverage,
+                            position_side,
                         )
                     raise ValueError(f"Price slippage exceeded {max_slippage_percent}%")
 
@@ -1448,6 +1453,7 @@ class BinanceClient:
                             f"Partial fill: {updated_order.filled}/{precise_amount}, "
                             f"continuing with {remaining}"
                         )
+                        remaining_amount = remaining
                         precise_amount = await self.amount_to_precision(
                             symbol, Decimal(str(remaining))
                         )
@@ -1473,7 +1479,11 @@ class BinanceClient:
                     f"falling back to market order"
                 )
                 return await self.open_position(
-                    symbol, side, amount, leverage, position_side
+                    symbol,
+                    side,
+                    remaining_amount,
+                    leverage,
+                    position_side,
                 )
 
             raise TimeoutError(
@@ -1579,6 +1589,7 @@ class BinanceClient:
             precise_amount = await self.amount_to_precision(
                 symbol, Decimal(str(amount))
             )
+            remaining_amount = float(precise_amount)
 
             # Determine position_side for Hedge Mode
             if position_side is None:
@@ -1615,7 +1626,10 @@ class BinanceClient:
                     )
                     if fallback_to_market:
                         return await self.close_position(
-                            symbol, side, amount, position_side
+                            symbol,
+                            side,
+                            remaining_amount,
+                            position_side,
                         )
                     raise ValueError(f"Price slippage exceeded {max_slippage_percent}%")
 
@@ -1664,6 +1678,7 @@ class BinanceClient:
                         remaining = float(precise_amount) - updated_order.filled
                         if remaining <= 0:
                             return updated_order
+                        remaining_amount = remaining
                         precise_amount = await self.amount_to_precision(
                             symbol, Decimal(str(remaining))
                         )
@@ -1685,7 +1700,9 @@ class BinanceClient:
                     f"Close limit order not filled after {max_retries + 1} attempts, "
                     f"falling back to market order"
                 )
-                return await self.close_position(symbol, side, amount, position_side)
+                return await self.close_position(
+                    symbol, side, remaining_amount, position_side
+                )
 
             raise TimeoutError(
                 f"Close limit order for {symbol} not filled after {max_retries + 1} attempts"

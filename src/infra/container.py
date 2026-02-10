@@ -286,6 +286,8 @@ class Container:
                 correlation_watch_threshold=self._settings.CORRELATION_WATCH_THRESHOLD,
                 hurst_trending_for_exit=self._settings.HURST_TRENDING_FOR_EXIT,
                 hurst_trending_confirm_scans=self._settings.HURST_TRENDING_CONFIRM_SCANS,
+                adf_exit_confirm_scans=self._settings.ADF_EXIT_CONFIRM_SCANS,
+                halflife_exit_confirm_scans=self._settings.HALFLIFE_EXIT_CONFIRM_SCANS,
                 z_extreme_level=self._settings.Z_EXTREME_LEVEL,
             )
         return self._instances["orchestrator_service"]

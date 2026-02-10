@@ -335,6 +335,9 @@ class BacktestConfig:
     # Capital
     initial_balance: float = 40_000.0  # Starting capital in USDT
     position_size_pct: float = 0.35  # 3% of capital per spread
+    # Base size for COIN leg (matches live TradingService when > 0).
+    # If <= 0, backtest falls back to percentage mode via position_size_pct.
+    position_size_usdt: float = 1000.0
     max_spreads: int = 8  # Maximum concurrent spread positions
 
     # Strategy thresholds (from settings)
@@ -374,14 +377,19 @@ class BacktestConfig:
     # Trading pairs (from settings or CLI)
     consistent_pairs: List[str] = field(default_factory=list)
 
-    use_dynamic_tp: bool = True  # Use dynamic take profit
+    # Match live ExitObserver TP behavior: TP threshold = z_tp_threshold * time_coef
+    use_dynamic_tp: bool = True
 
     # Hurst exit with confirmation (matching production OrchestratorService)
-    # Exit requires: hurst >= threshold for N scans + corr < threshold
+    # Exit requires: hurst >= threshold for N consecutive scans
     hurst_trending_for_exit: float = 0.47
     hurst_confirm_scans: int = 2  # Number of consecutive scans required
 
-    halflife_max_bars: int = 48  # 12 hours
+    # Structural exit confirmations (matching production OrchestratorService)
+    adf_exit_confirm_scans: int = 2
+    halflife_exit_confirm_scans: int = 2
+
+    halflife_max_bars: float = 48.0  # 12 hours
 
     # Trailing Entry settings (simulation of live EntryObserverService)
     """
@@ -421,7 +429,7 @@ class BacktestConfig:
     # Size = BaseSize * (TargetHalfLife / CurrentHalfLife)
     # Faster mean reversion -> larger position, slower -> smaller position
     use_dynamic_position_size: bool = True  # Enable dynamic position sizing
-    target_halflife_bars: int = 16  # Target half-life in bars (4 hours for 15m)
+    target_halflife_bars: float = 16.0  # Target half-life in bars
     halflife_multiplier_min: float = 0.5  # Minimum position size multiplier
     halflife_multiplier_max: float = 2.1  # Maximum position size multiplier
 
@@ -668,6 +676,8 @@ class StatArbBacktest:
         # Internal state: track consecutive Hurst violations per symbol
         # Key: symbol, Value: consecutive count of hurst >= threshold
         self._hurst_violation_counts: Dict[str, int] = {}
+        self._adf_violation_counts: Dict[str, int] = {}
+        self._halflife_violation_counts: Dict[str, int] = {}
 
     async def run(
         self,
@@ -1184,6 +1194,60 @@ class StatArbBacktest:
 
         return is_acceptable
 
+    def _get_adf_for_symbol(
+        self,
+        symbol: str,
+        window_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict,
+    ) -> Optional[float]:
+        """Calculate and return ADF p-value for a symbol."""
+        if (
+            not self.adf_filter_service
+            or not self.adf_filter_service.is_available
+            or not self.config.use_adf_filter
+        ):
+            return None
+
+        primary_df = window_data.get(self.primary_pair)
+        coin_df = window_data.get(symbol)
+        if primary_df is None or coin_df is None or primary_df.empty or coin_df.empty:
+            return None
+
+        corr_result = correlation_results.get(symbol)
+        if corr_result is None:
+            return None
+
+        return self.adf_filter_service.calculate_for_spread(
+            coin_log_prices=coin_df["close"].apply(np.log),
+            primary_log_prices=primary_df["close"].apply(np.log),
+            beta=corr_result.latest_beta,
+        )
+
+    def _get_hurst_for_symbol(
+        self,
+        symbol: str,
+        window_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict,
+    ) -> Optional[float]:
+        """Calculate and return Hurst exponent for a symbol spread."""
+        if not self.hurst_filter_service:
+            return None
+
+        primary_df = window_data.get(self.primary_pair)
+        coin_df = window_data.get(symbol)
+        if primary_df is None or coin_df is None or primary_df.empty or coin_df.empty:
+            return None
+
+        corr_result = correlation_results.get(symbol)
+        if corr_result is None:
+            return None
+
+        return self.hurst_filter_service.calculate_for_spread(
+            coin_log_prices=coin_df["close"].apply(np.log),
+            primary_log_prices=primary_df["close"].apply(np.log),
+            beta=corr_result.latest_beta,
+        )
+
     def _get_halflife_for_symbol(
         self,
         symbol: str,
@@ -1275,57 +1339,14 @@ class StatArbBacktest:
     def _check_hurst_exit_with_confirmation(
         self,
         symbol: str,
-        window_data: Dict[str, pd.DataFrame],
-        correlation_results: Dict,
-        z_score_results: Dict,
+        hurst: float,
     ) -> bool:
         """
-        Check if an open position should exit due to Hurst trending with confirmation.
+        Check Hurst exit with confirmation scans.
 
-        Matching production OrchestratorService logic:
-        Exit requires ALL conditions (simplified version):
-        1. hurst >= hurst_trending_for_exit for hurst_confirm_scans consecutive scans
-        2. corr < correlation_exit_threshold
-
-        Args:
-            symbol: Symbol to check
-            window_data: OHLCV data
-            correlation_results: Correlation results with beta values
-            z_score_results: Z-score results for correlation check
-
-        Returns:
-            True if should exit due to HURST_TRENDING, False otherwise
+        Matches live Orchestrator behavior: if Hurst stays above threshold
+        for N consecutive scans, emit structural exit.
         """
-        if not self.hurst_filter_service:
-            return False
-
-        primary_df = window_data.get(self.primary_pair)
-        coin_df = window_data.get(symbol)
-
-        if primary_df is None or coin_df is None:
-            return False
-
-        if primary_df.empty or coin_df.empty:
-            return False
-
-        # Get beta from correlation results
-        corr_result = correlation_results.get(symbol)
-        if corr_result is None:
-            return False
-
-        beta = corr_result.latest_beta
-
-        # Calculate Hurst for spread (use log prices)
-        hurst = self.hurst_filter_service.calculate_for_spread(
-            coin_log_prices=coin_df["close"].apply(np.log),
-            primary_log_prices=primary_df["close"].apply(np.log),
-            beta=beta,
-        )
-
-        if hurst is None:
-            return False
-
-        # Check if Hurst is above trending threshold
         if hurst >= self.config.hurst_trending_for_exit:
             # Increment consecutive counter
             self._hurst_violation_counts[symbol] = (
@@ -1340,36 +1361,6 @@ class StatArbBacktest:
 
             # Check if we have enough consecutive violations
             if consecutive >= self.config.hurst_confirm_scans:
-                #     # Now check correlation condition
-                #     z_result = z_score_results.get(symbol)
-                #     if z_result is None:
-                #         return False
-
-                #     current_corr = z_result.current_correlation
-                #     corr_ok = current_corr < self.config.correlation_exit_threshold
-
-                #     if corr_ok:
-                #         print(
-                #             f"⛔ {symbol} HURST_TRENDING EXIT confirmed | "
-                #             f"H={hurst:.3f} ({consecutive}x) | "
-                #             f"corr={current_corr:.3f} < {self.config.correlation_exit_threshold:.2f}"
-                #         )
-                #         # Reset counter after exit decision
-                #         self._hurst_violation_counts.pop(symbol, None)
-                #         return True
-                #     else:
-                #         print(
-                #             f"⚠️ {symbol} Hurst trending but corr OK | "
-                #             f"H={hurst:.3f} ({consecutive}x) | "
-                #             f"corr={current_corr:.3f} >= {self.config.correlation_exit_threshold:.2f}"
-                #         )
-                #         return False
-                # else:
-                #     print(
-                #         f"⚠️ {symbol} Hurst trending ({consecutive}/{self.config.hurst_confirm_scans}) | "
-                #         f"H={hurst:.3f}, waiting for confirmation..."
-                #     )
-                #     return False
                 return True
         else:
             # Hurst is below threshold - reset counter
@@ -1380,39 +1371,81 @@ class StatArbBacktest:
                     print(
                         f"✅ {symbol} Hurst normalized | H={hurst:.3f} - reset counter from {old_count}"
                     )
+        return False
+
+    def _check_adf_exit_with_confirmation(
+        self,
+        symbol: str,
+        adf_pvalue: float,
+    ) -> bool:
+        """Check ADF degradation with confirmation scans."""
+        threshold = self.config.adf_pvalue_threshold
+        if adf_pvalue >= threshold:
+            self._adf_violation_counts[symbol] = (
+                self._adf_violation_counts.get(symbol, 0) + 1
+            )
+            consecutive = self._adf_violation_counts[symbol]
+            print(
+                f"📊 {symbol} ADF violation #{consecutive}/{self.config.adf_exit_confirm_scans} | "
+                f"p={adf_pvalue:.4f} >= {threshold:.2f}"
+            )
+            if consecutive >= self.config.adf_exit_confirm_scans:
+                return True
             return False
+
+        self._adf_violation_counts.pop(symbol, None)
+        return False
+
+    def _check_halflife_exit_with_confirmation(
+        self,
+        symbol: str,
+        halflife: float,
+    ) -> bool:
+        """Check Half-Life degradation with confirmation scans."""
+        threshold = self.config.halflife_max_bars
+        if halflife > threshold:
+            self._halflife_violation_counts[symbol] = (
+                self._halflife_violation_counts.get(symbol, 0) + 1
+            )
+            consecutive = self._halflife_violation_counts[symbol]
+            print(
+                f"📊 {symbol} Half-Life violation #{consecutive}/{self.config.halflife_exit_confirm_scans} | "
+                f"HL={halflife:.1f} > {threshold:.1f}"
+            )
+            if consecutive >= self.config.halflife_exit_confirm_scans:
+                return True
+            return False
+
+        self._halflife_violation_counts.pop(symbol, None)
+        return False
 
     def _get_time_based_tp_coefficient(self, bars_held: int) -> float:
         """
-        Calculate time-based coefficient for dynamic TP threshold.
+        Calculate time-based coefficient for TP threshold.
 
-        As position ages, we accept less reversion (higher coefficient = easier TP).
-        The coefficient is multiplied by peak_z_score to get the TP threshold.
-
-        Example with peak_z = 3.0:
-        - 0-4h:   coef=0.1 -> TP at Z=0.3 (wait for ideal ~90% reversion)
-        - 4-12h:  coef=0.3 -> TP at Z=0.9 (accept ~70% reversion)
-        - 12-24h: coef=0.5 -> TP at Z=1.5 (accept ~50% reversion)
-        - 24h+:   TIME_STOP -> close at market (handled separately)
+        Mirrors live ExitObserverService.get_time_based_coefficient():
+        - 0-4h:   1x
+        - 4-12h:  3x
+        - 12-24h: 5x
+        - 24h+:   8x
 
         Args:
             bars_held: Number of bars the position has been held.
 
         Returns:
-            Coefficient to multiply peak_z_score by.
-            Returns None (via special value) for time stop after 24h.
+            Coefficient to multiply z_tp_threshold by.
         """
         # Convert bars to hours
         hours = bars_held * self._timeframe_minutes / 60
 
-        if hours <= 4:
-            return 0.1  # Wait for ideal (~90% reversion)
+        if hours < 4:
+            return 1
         elif hours < 12:
-            return 0.3  # Accept ~70% reversion after 4h
+            return 3
         elif hours < 24:
-            return 0.5  # Accept ~50% reversion after 12h
+            return 5
         else:
-            return 1.0  # Time stop - will be handled by TIMEOUT check
+            return 8
 
     async def _check_structural_exits(
         self,
@@ -1428,8 +1461,10 @@ class StatArbBacktest:
 
         Like the live Orchestrator, this checks:
         1. TIMEOUT: Position held too long
-        2. CORRELATION_DROP: Correlation dropped below threshold
-        3. HURST_TRENDING: Spread became trending
+        2. ADF_NON_STATIONARY: ADF degraded with confirmation scans
+        3. HALFLIFE_TOO_SLOW: Half-Life degraded with confirmation scans
+        4. HURST_TRENDING: Spread became trending with confirmation scans
+        5. CORRELATION_DROP: Correlation dropped below threshold
 
         When use_trailing_entry=True:
             Z-Score TP/SL are checked separately via _simulate_exit_observer()
@@ -1453,19 +1488,48 @@ class StatArbBacktest:
             elif z_result is None:
                 exit_reason = "NO_DATA"
 
-            # 3. STRUCTURAL: Correlation dropped below relaxed threshold (hysteresis)
-            # Entry requires >= min_correlation (0.80)
-            # Exit only when < correlation_exit_threshold (0.70)
-            elif z_result.current_correlation < self.config.correlation_exit_threshold:
-                exit_reason = "CORRELATION_DROP"
+            else:
+                # 3. STRUCTURAL: evaluate ADF/Half-Life/Hurst on open positions every scan
+                adf_pvalue = self._get_adf_for_symbol(
+                    symbol, window_data, correlation_results
+                )
+                halflife = self._get_halflife_for_symbol(
+                    symbol, window_data, correlation_results
+                )
+                hurst = self._get_hurst_for_symbol(symbol, window_data, correlation_results)
 
-            # 4. STRUCTURAL: Hurst became trending (with confirmation logic)
-            # Exit requires: consecutive violations + corr < threshold
-            if exit_reason is None and self.hurst_filter_service is not None:
-                if self._check_hurst_exit_with_confirmation(
-                    symbol, window_data, correlation_results, all_results
+                # 3.1 ADF degradation with confirm scans
+                if self.config.use_adf_filter:
+                    if adf_pvalue is not None:
+                        if self._check_adf_exit_with_confirmation(symbol, adf_pvalue):
+                            exit_reason = "ADF_NON_STATIONARY"
+                    else:
+                        self._adf_violation_counts.pop(symbol, None)
+
+                # 3.2 Half-Life degradation with confirm scans
+                if exit_reason is None:
+                    if halflife is not None:
+                        if self._check_halflife_exit_with_confirmation(
+                            symbol, halflife
+                        ):
+                            exit_reason = "HALFLIFE_TOO_SLOW"
+                    else:
+                        self._halflife_violation_counts.pop(symbol, None)
+
+                # 3.3 Hurst degradation with confirm scans
+                if exit_reason is None and self.hurst_filter_service is not None:
+                    if hurst is not None:
+                        if self._check_hurst_exit_with_confirmation(symbol, hurst):
+                            exit_reason = "HURST_TRENDING"
+                    else:
+                        self._hurst_violation_counts.pop(symbol, None)
+
+                # 3.4 Correlation drop (hysteresis for open positions)
+                if (
+                    exit_reason is None
+                    and z_result.current_correlation < self.config.correlation_exit_threshold
                 ):
-                    exit_reason = "HURST_TRENDING"
+                    exit_reason = "CORRELATION_DROP"
 
             # 5. Z-Score TP/SL on 15m candles (when use_live_exit=False)
             # When use_live_exit=True, this is handled by _simulate_exit_observer on 1m
@@ -1486,12 +1550,7 @@ class StatArbBacktest:
                 # Calculate dynamic TP threshold based on time held
                 if self.config.use_dynamic_tp:
                     time_coef = self._get_time_based_tp_coefficient(bars_held)
-                    reference_z = (
-                        position.peak_z_score
-                        if position.peak_z_score > 0
-                        else abs(position.entry_z_score)
-                    )
-                    dynamic_tp = max(reference_z * time_coef, position.z_tp_threshold)
+                    dynamic_tp = position.z_tp_threshold * time_coef
                 else:
                     dynamic_tp = position.z_tp_threshold
 
@@ -1693,12 +1752,7 @@ class StatArbBacktest:
         # Calculate dynamic TP threshold
         if self.config.use_dynamic_tp:
             time_coef = self._get_time_based_tp_coefficient(bars_held)
-            reference_z = (
-                position.peak_z_score
-                if position.peak_z_score > 0
-                else abs(position.entry_z_score)
-            )
-            dynamic_tp = max(reference_z * time_coef, position.z_tp_threshold)
+            dynamic_tp = position.z_tp_threshold * time_coef
         else:
             dynamic_tp = position.z_tp_threshold
 
@@ -2444,6 +2498,18 @@ class StatArbBacktest:
         current_spread = math.log(coin_price) - beta * math.log(primary_price)
         return (current_spread - spread_mean) / spread_std
 
+    def _get_base_position_size(self) -> float:
+        """
+        Get base COIN-leg size in USDT before Half-Life multiplier.
+
+        Priority:
+        1. Fixed USDT mode (matches live): position_size_usdt > 0
+        2. Percentage mode: balance * position_size_pct
+        """
+        if self.config.position_size_usdt > 0:
+            return self.config.position_size_usdt
+        return self.balance * self.config.position_size_pct
+
     async def _execute_watch_entry(
         self,
         watch: BacktestWatchCandidate,
@@ -2460,7 +2526,7 @@ class StatArbBacktest:
         primary_price = window_data[self.primary_pair]["close"].iloc[-1]
 
         # Calculate base position size
-        base_position_size = self.balance * self.config.position_size_pct
+        base_position_size = self._get_base_position_size()
 
         # Apply HalfLife-based dynamic position sizing if enabled
         multiplier = self._calculate_halflife_multiplier(watch.halflife)
@@ -2562,12 +2628,7 @@ class StatArbBacktest:
         # Calculate dynamic TP threshold (bars_held = 0 for same-candle exit)
         if self.config.use_dynamic_tp:
             time_coef = self._get_time_based_tp_coefficient(0)
-            reference_z = (
-                position.peak_z_score
-                if position.peak_z_score > 0
-                else abs(position.entry_z_score)
-            )
-            dynamic_tp = max(reference_z * time_coef, position.z_tp_threshold)
+            dynamic_tp = position.z_tp_threshold * time_coef
         else:
             dynamic_tp = position.z_tp_threshold
 
@@ -2636,8 +2697,10 @@ class StatArbBacktest:
         """
         position = self.positions.pop(symbol)
 
-        # Clean up Hurst violation counter for this position
+        # Clean up structural violation counters for this position
         self._hurst_violation_counts.pop(symbol, None)
+        self._adf_violation_counts.pop(symbol, None)
+        self._halflife_violation_counts.pop(symbol, None)
 
         # Calculate PnL for each leg
         coin_pct_change = (
@@ -2703,7 +2766,14 @@ class StatArbBacktest:
         self.trades.append(trade)
 
         # Add cooldown for adverse exits
-        cooldown_reasons = ("SL", "CORRELATION_DROP", "TIMEOUT", "HURST_TRENDING")
+        cooldown_reasons = (
+            "SL",
+            "CORRELATION_DROP",
+            "TIMEOUT",
+            "HURST_TRENDING",
+            "ADF_NON_STATIONARY",
+            "HALFLIFE_TOO_SLOW",
+        )
         if exit_reason in cooldown_reasons and self.config.cooldown_bars > 0:
             cooldown_minutes = self.config.cooldown_bars * get_timeframe_minutes(
                 self.timeframe
@@ -2739,7 +2809,7 @@ class StatArbBacktest:
         for ExitObserver simulation to use for TP/SL calculations.
         """
         # Calculate base position size
-        base_position_size = self.balance * self.config.position_size_pct
+        base_position_size = self._get_base_position_size()
 
         # Apply HalfLife-based dynamic position sizing if enabled
         halflife = None
@@ -2872,8 +2942,10 @@ class StatArbBacktest:
         """
         position = self.positions.pop(symbol)
 
-        # Clean up Hurst violation counter for this position
+        # Clean up structural violation counters for this position
         self._hurst_violation_counts.pop(symbol, None)
+        self._adf_violation_counts.pop(symbol, None)
+        self._halflife_violation_counts.pop(symbol, None)
 
         # Get exit prices
         coin_exit_price = window_data[symbol]["close"].iloc[-1]
@@ -2953,7 +3025,14 @@ class StatArbBacktest:
 
         # Add cooldown for adverse exits (SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
         # These indicate the pair is not behaving as expected - prevent immediate re-entry
-        cooldown_reasons = ("SL", "CORRELATION_DROP", "TIMEOUT", "HURST_TRENDING")
+        cooldown_reasons = (
+            "SL",
+            "CORRELATION_DROP",
+            "TIMEOUT",
+            "HURST_TRENDING",
+            "ADF_NON_STATIONARY",
+            "HALFLIFE_TOO_SLOW",
+        )
         if exit_reason in cooldown_reasons and self.config.cooldown_bars > 0:
             cooldown_minutes = self.config.cooldown_bars * get_timeframe_minutes(
                 self.timeframe
@@ -3435,7 +3514,7 @@ Examples:
     parser.add_argument(
         "--balance",
         type=float,
-        default=10000.0,
+        default=None,
         help="Initial balance in USDT. Default: 10000",
     )
     parser.add_argument(
@@ -3445,10 +3524,16 @@ Examples:
         help="Position size as fraction of balance.",
     )
     parser.add_argument(
+        "--position-size-usdt",
+        type=float,
+        default=None,
+        help="Fixed base size in USDT for COIN leg (live-like sizing mode).",
+    )
+    parser.add_argument(
         "--max-spreads",
         type=int,
-        default=1,
-        help="Maximum concurrent spread positions (1 = one coin vs ETH).",
+        default=None,
+        help="Maximum concurrent spread positions. Default: from settings.MAX_OPEN_SPREADS",
     )
     parser.add_argument(
         "--leverage",
@@ -3477,8 +3562,8 @@ Examples:
     parser.add_argument(
         "--use-dynamic-tp",
         type=str,
-        default=True,
-        help="Use dynamic TP by time base exponent",
+        default=None,
+        help="Enable live-like time-based TP scaling (true/false). Default: true",
     )
 
     parser.add_argument(
@@ -3502,6 +3587,20 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    def _parse_bool(value: Optional[str], flag_name: str) -> Optional[bool]:
+        if value is None:
+            return None
+
+        normalized = value.strip().lower()
+        if normalized in ("1", "true", "yes", "y", "on"):
+            return True
+        if normalized in ("0", "false", "no", "n", "off"):
+            return False
+
+        raise ValueError(
+            f"Invalid value for {flag_name}: {value!r}. Use true/false."
+        )
 
     # Parse dates
     start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -3531,15 +3630,56 @@ Examples:
         consistent_pairs = settings.CONSISTENT_PAIRS
         print(f"\n📋 Using pairs from settings: {len(consistent_pairs)} pairs")
 
-    # Parse use_trailing_entry from CLI (if provided)
-    use_trailing_entry = None
-    if args.use_trailing_entry is not None:
-        use_trailing_entry = args.use_trailing_entry.lower() in ("true", "1", "yes")
+    # Parse optional bool CLI flags
+    try:
+        use_trailing_entry = _parse_bool(args.use_trailing_entry, "--use-trailing-entry")
+        use_live_exit = _parse_bool(args.use_live_exit, "--use-live-exit")
+        use_dynamic_tp = _parse_bool(args.use_dynamic_tp, "--use-dynamic-tp")
+    except ValueError as exc:
+        parser.error(str(exc))
 
-    # Parse use_live_exit from CLI (if provided)
-    use_live_exit = None
-    if args.use_live_exit is not None:
-        use_live_exit = args.use_live_exit.lower() in ("true", "1", "yes")
+    initial_balance = args.balance if args.balance is not None else 10_000.0
+    max_spreads = (
+        args.max_spreads if args.max_spreads is not None else settings.MAX_OPEN_SPREADS
+    )
+    leverage = (
+        args.leverage
+        if args.leverage is not None
+        else settings.EXCHANGE_DEFAULT_LEVERAGE
+    )
+
+    if args.risk is not None and args.position_size_usdt is not None:
+        parser.error("Use either --risk or --position-size-usdt, not both.")
+
+    if args.position_size_usdt is not None:
+        position_size_usdt = args.position_size_usdt
+        position_size_pct = (
+            position_size_usdt / initial_balance if initial_balance > 0 else 0.01
+        )
+    elif args.risk is not None:
+        position_size_usdt = 0.0
+        position_size_pct = args.risk
+    else:
+        # Default: live-like fixed base size from settings
+        position_size_usdt = settings.POSITION_SIZE_USDT
+        position_size_pct = (
+            position_size_usdt / initial_balance if initial_balance > 0 else 0.01
+        )
+
+    # Trailing-entry pullback calibration for 1m pseudo-tick emulation.
+    # Live EntryObserver sees dense WebSocket ticks; backtest sees only OHLC-derived pseudo-ticks.
+    # Scale pullback by sqrt(dt) to keep reversal sensitivity comparable.
+    timeframe_minutes = max(1, get_timeframe_minutes(settings.TIMEFRAME))
+    pullback_scale = math.sqrt(1.0 / timeframe_minutes)
+    trailing_pullback_raw = settings.TRAILING_ENTRY_PULLBACK * pullback_scale
+    trailing_pullback_extreme_raw = (
+        settings.TRAILING_ENTRY_PULLBACK_EXTREME * pullback_scale
+    )
+    # Floor to 2 decimals to avoid over-tightening from tiny floating deltas.
+    trailing_pullback = math.floor(trailing_pullback_raw * 100) / 100
+    trailing_pullback_extreme = (
+        math.floor(trailing_pullback_extreme_raw * 100) / 100
+    )
 
     # Create backtest config with optional CLI overrides
     config_overrides = {}
@@ -3547,10 +3687,42 @@ Examples:
         config_overrides["use_trailing_entry"] = use_trailing_entry
     if use_live_exit is not None:
         config_overrides["use_live_exit"] = use_live_exit
+    if use_dynamic_tp is not None:
+        config_overrides["use_dynamic_tp"] = use_dynamic_tp
 
     config = BacktestConfig(
+        initial_balance=initial_balance,
+        position_size_pct=position_size_pct,
+        position_size_usdt=position_size_usdt,
+        max_spreads=max_spreads,
+        leverage=leverage,
+        z_entry_threshold=settings.Z_ENTRY_THRESHOLD,
+        z_tp_threshold=settings.Z_TP_THRESHOLD,
+        z_sl_threshold=settings.Z_SL_THRESHOLD,
+        min_correlation=settings.MIN_CORRELATION,
+        correlation_exit_threshold=settings.CORRELATION_EXIT_THRESHOLD,
+        correlation_watch_threshold=settings.CORRELATION_WATCH_THRESHOLD,
+        cooldown_bars=settings.COOLDOWN_BARS,
+        max_position_bars=settings.MAX_POSITION_BARS,
+        hurst_trending_for_exit=settings.HURST_TRENDING_FOR_EXIT,
+        hurst_confirm_scans=settings.HURST_TRENDING_CONFIRM_SCANS,
+        adf_exit_confirm_scans=settings.ADF_EXIT_CONFIRM_SCANS,
+        halflife_exit_confirm_scans=settings.HALFLIFE_EXIT_CONFIRM_SCANS,
+        halflife_max_bars=settings.HALFLIFE_MAX_BARS,
+        adf_pvalue_threshold=settings.ADF_PVALUE_THRESHOLD,
+        adf_lookback_candles=settings.ADF_LOOKBACK_CANDLES,
+        trailing_pullback=trailing_pullback,
+        trailing_pullback_extreme=trailing_pullback_extreme,
+        trailing_timeout_minutes=settings.TRAILING_ENTRY_TIMEOUT_MINUTES,
+        false_alarm_hysteresis=settings.FALSE_ALARM_HYSTERESIS,
+        z_extreme_level=settings.Z_EXTREME_LEVEL,
+        z_sl_extreme_offset=settings.Z_SL_EXTREME_OFFSET,
+        trailing_sl_offset=settings.TRAILING_SL_OFFSET,
+        trailing_sl_activation=settings.TRAILING_SL_ACTIVATION,
+        target_halflife_bars=settings.TARGET_HALFLIFE_BARS,
+        halflife_multiplier_min=settings.MIN_SIZE_MULTIPLIER,
+        halflife_multiplier_max=settings.MAX_SIZE_MULTIPLIER,
         consistent_pairs=consistent_pairs,
-        use_dynamic_tp=args.use_dynamic_tp,
         use_funding_filter=not args.no_funding_filter,
         max_funding_cost_threshold=settings.MAX_FUNDING_COST_THRESHOLD,
         **config_overrides,
@@ -3562,7 +3734,13 @@ Examples:
     print(f"\n  Start Date:          {start_date.date()}")
     print(f"  End Date:            {end_date.date()}")
     print(f"  Initial Balance:     ${config.initial_balance:,.2f}")
-    print(f"  Position Size:       {config.position_size_pct * 100:.1f}%")
+    if config.position_size_usdt > 0:
+        print(f"  Position Size Mode:  fixed USDT")
+        print(f"  Base COIN Size:      ${config.position_size_usdt:,.2f}")
+        print(f"  Equivalent Risk:     {config.position_size_pct * 100:.1f}%")
+    else:
+        print(f"  Position Size Mode:  percent")
+        print(f"  Position Size:       {config.position_size_pct * 100:.1f}%")
     print(
         f"  Max Spreads:         {config.max_spreads} (COIN vs {settings.PRIMARY_PAIR})"
     )
@@ -3581,6 +3759,14 @@ Examples:
             f"  Max Funding Cost:    {config.max_funding_cost_threshold * 100:.3f}% per 8h"
         )
     print(f"\n  Trailing Entry:      {'ON' if config.use_trailing_entry else 'OFF'}")
+    print(
+        f"  Trailing Pullback:   {config.trailing_pullback:.3f} "
+        f"(scaled from {settings.TRAILING_ENTRY_PULLBACK:.3f}, x{pullback_scale:.3f})"
+    )
+    print(
+        f"  Pullback Extreme:    {config.trailing_pullback_extreme:.3f} "
+        f"(scaled from {settings.TRAILING_ENTRY_PULLBACK_EXTREME:.3f})"
+    )
     print(f"  Live Exit (1m):      {'ON' if config.use_live_exit else 'OFF'}")
     print(f"\n  Half-Life Filter:    ON")
     print(f"  HL Max Bars:         {settings.HALFLIFE_MAX_BARS} bars")
@@ -3707,7 +3893,7 @@ Examples:
         if not args.no_plot:
             plot_results(
                 result,
-                save_path=f"backtests/results/{start_date.strftime("%Y-%m-%d")}-{end_date.strftime("%Y-%m-%d")}.png",
+                save_path=f"backtests/results/{start_date.strftime('%Y-%m-%d')}-{end_date.strftime('%Y-%m-%d')}.png",
             )
 
     finally:

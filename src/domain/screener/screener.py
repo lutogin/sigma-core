@@ -199,6 +199,16 @@ class ScreenerService:
             return self._hurst_filter_service.threshold
         return None
 
+    @property
+    def adf_filter_service(self) -> Optional[ADFFilterService]:
+        """Expose ADF filter service for orchestrator-level re-checks."""
+        return self._adf_filter_service
+
+    @property
+    def halflife_filter_service(self) -> Optional[HalfLifeFilterService]:
+        """Expose Half-Life filter service for orchestrator-level re-checks."""
+        return self._halflife_filter_service
+
     # =========================================================================
     # Trading Pairs
     # =========================================================================

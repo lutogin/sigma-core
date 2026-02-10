@@ -15,12 +15,13 @@ entry parameters to avoid the "moving goalposts" problem.
 """
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
 from src.domain.position_state import PositionStateService, SpreadPosition
 from src.domain.screener import ScreenerService
+from src.domain.screener.correlation.correlation import CorrelationResult
 from src.domain.screener.hurst_filter import HurstFilterService
 from src.domain.screener.funding_filter import FundingFilterService
 from src.domain.screener.z_score import ZScoreResult
@@ -81,6 +82,8 @@ class OrchestratorService:
         correlation_watch_threshold: float = 0.77,
         hurst_trending_for_exit: float = 0.46,
         hurst_trending_confirm_scans: int = 2,
+        adf_exit_confirm_scans: int = 2,
+        halflife_exit_confirm_scans: int = 2,
         z_score_progress_exit_threshold: float = 0.30,
         z_extreme_level: float = 5.0,
     ):
@@ -118,12 +121,16 @@ class OrchestratorService:
         self._correlation_watch_threshold = correlation_watch_threshold
         self._hurst_trending_for_exit = hurst_trending_for_exit
         self._hurst_trending_confirm_scans = hurst_trending_confirm_scans
+        self._adf_exit_confirm_scans = adf_exit_confirm_scans
+        self._halflife_exit_confirm_scans = halflife_exit_confirm_scans
         self._z_score_progress_exit_threshold = z_score_progress_exit_threshold
         self._z_extreme_level = z_extreme_level
 
         # Internal state: track consecutive Hurst violations per symbol
         # Key: coin_symbol, Value: consecutive count of hurst >= threshold
         self._hurst_violation_counts: Dict[str, int] = {}
+        self._adf_violation_counts: Dict[str, int] = {}
+        self._halflife_violation_counts: Dict[str, int] = {}
 
     async def run(self) -> None:
         """
@@ -181,9 +188,8 @@ class OrchestratorService:
         # 3. Check exit conditions for open positions FIRST
         exit_signals = await self._check_exit_conditions(
             z_score_results=scan_result.all_z_score_results,
-            filtered_results=scan_result.filtered_results,
             raw_data=scan_result.raw_data,
-            _min_correlation=min_correlation,
+            correlation_results=scan_result.correlation_results,
             adf_pvalues=scan_result.adf_pvalues,
             halflife_values=scan_result.halflife_values,
             hurst_values=scan_result.hurst_values,
@@ -305,9 +311,8 @@ class OrchestratorService:
     async def _check_exit_conditions(
         self,
         z_score_results: Dict[str, ZScoreResult],
-        filtered_results: Dict[str, ZScoreResult],
         raw_data: Dict[str, pd.DataFrame],
-        _min_correlation: float,
+        correlation_results: Dict[str, CorrelationResult],
         adf_pvalues: Dict[str, float],
         halflife_values: Dict[str, float],
         hurst_values: Dict[str, float],
@@ -315,12 +320,11 @@ class OrchestratorService:
         """
         Check STRUCTURAL exit conditions for all open positions.
 
-        Orchestrator checks only structural failures that invalidate the spread:
-        1. Symbol NOT in filtered_results - determine specific reason:
-           - ADF_NON_STATIONARY: failed ADF test
-           - HALFLIFE_TOO_SLOW: half-life too long
-           - HURST_TRENDING: spread became trending
-           - CORRELATION_DROP: correlation dropped
+        Orchestrator checks structural failures that invalidate the spread:
+        - ADF_NON_STATIONARY: spread stopped being stationary
+        - HALFLIFE_TOO_SLOW: mean reversion became too slow
+        - HURST_TRENDING: spread became trending
+        - CORRELATION_DROP: pair decoupled
 
         Z-Score based exits (TP/SL) are handled ONLY by ExitObserver using
         the "frozen" parameters from position entry. This prevents the
@@ -359,24 +363,42 @@ class OrchestratorService:
             current_z = z_result.current_z_score
             current_corr = z_result.current_correlation
 
-            # FILTER CHECK: If NOT in filtered_results, determine which filter failed
-            if coin_symbol not in filtered_results:
-                exit_reason = self._determine_failed_filter_for_exit(
-                    coin_symbol=coin_symbol,
-                    position=position,
-                    z_result=z_result,
-                    adf_pvalue=adf_pvalues.get(coin_symbol),
-                    halflife=halflife_values.get(coin_symbol),
-                    hurst=hurst_values.get(coin_symbol),
-                )
+            adf_pvalue, halflife, hurst = self._calculate_missing_filter_metrics(
+                coin_symbol=coin_symbol,
+                position=position,
+                z_result=z_result,
+                raw_data=raw_data,
+                correlation_results=correlation_results,
+                adf_pvalue=adf_pvalues.get(coin_symbol),
+                halflife=halflife_values.get(coin_symbol),
+                hurst=hurst_values.get(coin_symbol),
+            )
+
+            if adf_pvalue is not None:
+                adf_pvalues[coin_symbol] = adf_pvalue
+            if halflife is not None:
+                halflife_values[coin_symbol] = halflife
+            if hurst is not None:
+                hurst_values[coin_symbol] = hurst
+
+            exit_reason = self._determine_failed_filter_for_exit(
+                coin_symbol=coin_symbol,
+                position=position,
+                z_result=z_result,
+                adf_pvalue=adf_pvalue,
+                halflife=halflife,
+                hurst=hurst,
+            )
 
             # NOTE: Z-Score TP/SL checks are NOT done here!
             # ExitObserver handles TP/SL using frozen entry parameters (beta, std)
             # to avoid "moving goalposts" problem with recalculated values.
 
             if exit_reason:
-                # Clean up Hurst violation counter for this position
+                # Clean up violation counters for this position
                 self._hurst_violation_counts.pop(coin_symbol, None)
+                self._adf_violation_counts.pop(coin_symbol, None)
+                self._halflife_violation_counts.pop(coin_symbol, None)
 
                 coin_df = raw_data.get(coin_symbol)
                 coin_price = coin_df["close"].iloc[-1] if coin_df is not None else 0.0
@@ -579,7 +601,181 @@ class OrchestratorService:
         return 0.0
 
     # =========================================================================
-    # Helpers
+    # Structural Filter Helpers
+    # =========================================================================
+
+    def _resolve_beta_for_metrics(
+        self,
+        coin_symbol: str,
+        position: SpreadPosition,
+        z_result: Optional[ZScoreResult],
+        correlation_results: Dict[str, CorrelationResult],
+    ) -> Optional[float]:
+        """
+        Resolve hedge ratio (beta) for structural metric recalculation.
+
+        Priority:
+        1. Latest beta from correlation scan
+        2. Current beta from z-score result
+        3. Frozen entry beta from position
+        """
+        corr_result = correlation_results.get(coin_symbol)
+        if corr_result is not None and np.isfinite(corr_result.latest_beta):
+            return float(corr_result.latest_beta)
+
+        if z_result is not None and np.isfinite(z_result.current_beta):
+            return float(z_result.current_beta)
+
+        if np.isfinite(position.entry_beta):
+            return float(position.entry_beta)
+
+        return None
+
+    def _calculate_missing_filter_metrics(
+        self,
+        coin_symbol: str,
+        position: SpreadPosition,
+        z_result: Optional[ZScoreResult],
+        raw_data: Dict[str, pd.DataFrame],
+        correlation_results: Dict[str, CorrelationResult],
+        adf_pvalue: Optional[float],
+        halflife: Optional[float],
+        hurst: Optional[float],
+    ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        """
+        Ensure ADF/Half-Life/Hurst are available for open positions.
+
+        Scan pipeline computes these mainly for entry candidates. For open positions
+        we recalculate missing values so structural degradation is observed even when
+        |Z| is outside entry-candidate zone.
+        """
+        needs_adf = self._screener_service.adf_threshold is not None and adf_pvalue is None
+        needs_halflife = (
+            self._screener_service.halflife_threshold is not None and halflife is None
+        )
+        needs_hurst = self._screener_service.hurst_threshold is not None and hurst is None
+
+        if not (needs_adf or needs_halflife or needs_hurst):
+            return adf_pvalue, halflife, hurst
+
+        coin_df = raw_data.get(coin_symbol)
+        primary_df = raw_data.get(self._primary_pair)
+        if (
+            coin_df is None
+            or primary_df is None
+            or coin_df.empty
+            or primary_df.empty
+            or "close" not in coin_df
+            or "close" not in primary_df
+        ):
+            return adf_pvalue, halflife, hurst
+
+        beta = self._resolve_beta_for_metrics(
+            coin_symbol=coin_symbol,
+            position=position,
+            z_result=z_result,
+            correlation_results=correlation_results,
+        )
+        if beta is None:
+            return adf_pvalue, halflife, hurst
+
+        coin_close = coin_df["close"]
+        primary_close = primary_df["close"]
+        if (coin_close <= 0).any() or (primary_close <= 0).any():
+            return adf_pvalue, halflife, hurst
+
+        coin_log = np.log(coin_close)
+        primary_log = np.log(primary_close)
+
+        if needs_hurst and self._hurst_filter is not None:
+            hurst = self._hurst_filter.calculate_for_spread(
+                coin_log_prices=coin_log,
+                primary_log_prices=primary_log,
+                beta=beta,
+            )
+
+        halflife_filter = self._screener_service.halflife_filter_service
+        if (
+            needs_halflife
+            and halflife_filter is not None
+            and halflife_filter.is_available
+        ):
+            halflife = halflife_filter.calculate_for_spread(
+                coin_log_prices=coin_log,
+                primary_log_prices=primary_log,
+                beta=beta,
+            )
+
+        adf_filter = self._screener_service.adf_filter_service
+        if needs_adf and adf_filter is not None and adf_filter.is_available:
+            adf_pvalue = adf_filter.calculate_for_spread(
+                coin_log_prices=coin_log,
+                primary_log_prices=primary_log,
+                beta=beta,
+            )
+
+        return adf_pvalue, halflife, hurst
+
+    def _check_adf_exit_with_confirmation(
+        self,
+        coin_symbol: str,
+        adf_pvalue: float,
+        adf_threshold: float,
+    ) -> bool:
+        """Confirm ADF degradation across multiple scans before forcing exit."""
+        if adf_pvalue >= adf_threshold:
+            self._adf_violation_counts[coin_symbol] = (
+                self._adf_violation_counts.get(coin_symbol, 0) + 1
+            )
+            consecutive = self._adf_violation_counts[coin_symbol]
+            if consecutive >= self._adf_exit_confirm_scans:
+                self._logger.warning(
+                    f"⛔ Position {coin_symbol} EXIT (ADF) | "
+                    f"p-value={adf_pvalue:.4f} >= {adf_threshold:.2f} "
+                    f"for {consecutive}/{self._adf_exit_confirm_scans} scans"
+                )
+                return True
+            self._logger.info(
+                f"⚠️ {coin_symbol} ADF degradation "
+                f"({consecutive}/{self._adf_exit_confirm_scans}) | "
+                f"p-value={adf_pvalue:.4f}"
+            )
+            return False
+
+        self._adf_violation_counts.pop(coin_symbol, None)
+        return False
+
+    def _check_halflife_exit_with_confirmation(
+        self,
+        coin_symbol: str,
+        halflife: float,
+        halflife_threshold: float,
+    ) -> bool:
+        """Confirm Half-Life degradation across multiple scans before forcing exit."""
+        if halflife > halflife_threshold:
+            self._halflife_violation_counts[coin_symbol] = (
+                self._halflife_violation_counts.get(coin_symbol, 0) + 1
+            )
+            consecutive = self._halflife_violation_counts[coin_symbol]
+            if consecutive >= self._halflife_exit_confirm_scans:
+                self._logger.warning(
+                    f"⛔ Position {coin_symbol} EXIT (HALFLIFE) | "
+                    f"HL={halflife:.1f} bars > {halflife_threshold:.1f} "
+                    f"for {consecutive}/{self._halflife_exit_confirm_scans} scans"
+                )
+                return True
+            self._logger.info(
+                f"⚠️ {coin_symbol} Half-Life degradation "
+                f"({consecutive}/{self._halflife_exit_confirm_scans}) | "
+                f"HL={halflife:.1f} bars"
+            )
+            return False
+
+        self._halflife_violation_counts.pop(coin_symbol, None)
+        return False
+
+    # =========================================================================
+    # General Helpers
     # =========================================================================
 
     def _determine_failed_filter(
@@ -842,39 +1038,45 @@ class OrchestratorService:
         adf_pvalue: Optional[float],
         halflife: Optional[float],
         hurst: Optional[float],
-    ) -> ExitReason:
+    ) -> Optional[ExitReason]:
         """
         Determine which specific filter caused a position to require exit.
 
         Uses pre-calculated values from ScanResult (no direct filter calls).
         """
         if z_result is None:
-            self._logger.info(f"⛔ Position {coin_symbol} EXIT | No Z-score data")
-            return ExitReason.CORRELATION_DROP  # Fallback when no data
+            self._logger.warning(
+                f"Skipping structural exit check for {coin_symbol}: no Z-score data"
+            )
+            return None
 
         # Get thresholds from screener_service
         adf_threshold = self._screener_service.adf_threshold
         halflife_threshold = self._screener_service.halflife_threshold
 
         # 1. Check ADF filter
-        if adf_threshold is not None and adf_pvalue is not None:
-            if adf_pvalue >= adf_threshold:
-                self._logger.warning(
-                    f"⛔ Position {coin_symbol} EXIT (ADF) | "
-                    f"p-value={adf_pvalue:.4f} >= {adf_threshold:.2f} (non-stationary)"
-                )
-                # mute false alarm (when ADF is non-stationary) for now
-                # return ExitReason.ADF_NON_STATIONARY
+        if adf_threshold is not None:
+            if adf_pvalue is not None:
+                if self._check_adf_exit_with_confirmation(
+                    coin_symbol=coin_symbol,
+                    adf_pvalue=adf_pvalue,
+                    adf_threshold=adf_threshold,
+                ):
+                    return ExitReason.ADF_NON_STATIONARY
+            else:
+                self._adf_violation_counts.pop(coin_symbol, None)
 
         # 2. Check Half-life filter
-        if halflife_threshold is not None and halflife is not None:
-            if halflife > halflife_threshold:
-                self._logger.info(
-                    f"⛔ Position {coin_symbol} EXIT (HALFLIFE) | "
-                    f"HL={halflife:.1f} bars > {halflife_threshold:.1f} (too slow)"
-                )
-                # mute false alarm (when Half-life is too slow) for now
-                # return ExitReason.HALFLIFE_TOO_SLOW
+        if halflife_threshold is not None:
+            if halflife is not None:
+                if self._check_halflife_exit_with_confirmation(
+                    coin_symbol=coin_symbol,
+                    halflife=halflife,
+                    halflife_threshold=halflife_threshold,
+                ):
+                    return ExitReason.HALFLIFE_TOO_SLOW
+            else:
+                self._halflife_violation_counts.pop(coin_symbol, None)
 
         # 3. Check Hurst filter with confirmation logic
         # Exit requires: consecutive violations + corr drop + time in position + poor progress + not near TP
@@ -890,6 +1092,8 @@ class OrchestratorService:
                 current_corr=current_corr,
             ):
                 return ExitReason.HURST_TRENDING
+        else:
+            self._hurst_violation_counts.pop(coin_symbol, None)
 
         # 4. Check Correlation
         if z_result.current_correlation < self._correlation_exit_threshold:
@@ -899,9 +1103,7 @@ class OrchestratorService:
             )
             return ExitReason.CORRELATION_DROP
 
-        # Default: couldn't determine specific reason
-        self._logger.info(f"⛔ Position {coin_symbol} EXIT | Failed unknown filter")
-        return ExitReason.CORRELATION_DROP
+        return None
 
     async def _emit_market_unsafe_event(self, volatility_result) -> None:
         """Emit market unsafe event when volatility filter triggers."""
