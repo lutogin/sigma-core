@@ -170,3 +170,6 @@ logs/
 .env
 
 .idea
+
+backtests/results
+backtests/results/*

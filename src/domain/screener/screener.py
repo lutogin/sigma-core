@@ -31,6 +31,7 @@ from src.domain.screener.volatility_filter import (
 from src.domain.screener.z_score import ZScoreResult, ZScoreService
 from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
 from src.domain.trading_pairs import TradingPairRepository
+from src.domain.utils import get_timeframe_minutes
 
 
 @dataclass
@@ -108,6 +109,13 @@ class ScreenerService:
         consistent_pairs: list[str],
         timeframe: str,
         trading_pair_repository: Optional[TradingPairRepository] = None,
+        enable_beta_drift_guard: bool = True,
+        beta_drift_short_days: int = 3,
+        beta_drift_long_days: int = 9,
+        beta_drift_max_relative: float = 0.35,
+        enable_stability_filter: bool = True,
+        stability_windows_days: Optional[list[int]] = None,
+        stability_min_pass_windows: int = 2,
     ):
         """
         Initialize Screener Service.
@@ -135,6 +143,23 @@ class ScreenerService:
         self._consistent_pairs = consistent_pairs
         self._timeframe = timeframe
         self._trading_pair_repository = trading_pair_repository
+        self._bars_per_day = max(1, 24 * 60 // get_timeframe_minutes(timeframe))
+
+        # Beta drift guard (regime stability)
+        self._enable_beta_drift_guard = enable_beta_drift_guard
+        self._beta_drift_short_days = max(1, beta_drift_short_days)
+        self._beta_drift_long_days = max(
+            self._beta_drift_short_days + 1, beta_drift_long_days
+        )
+        self._beta_drift_max_relative = max(0.0, beta_drift_max_relative)
+
+        # Stability-over-time windows
+        self._enable_stability_filter = enable_stability_filter
+        windows = stability_windows_days or [3, 6, 9]
+        self._stability_windows_days = sorted({int(w) for w in windows if int(w) > 0})
+        if not self._stability_windows_days:
+            self._stability_windows_days = [3, 6, 9]
+        self._stability_min_pass_windows = max(1, stability_min_pass_windows)
 
         # Internal state for last scan results
         self._last_scan_state = LastScanState()
@@ -321,11 +346,21 @@ class ScreenerService:
 
         symbols_scanned = len(z_score_results)
 
-        # 6. Filter by correlation quality
-        filtered_results = self._filter_by_correlation(z_score_results)
+        # 6. Filter by correlation quality (+ optional beta drift guard)
+        filtered_results = self._filter_by_correlation(
+            z_score_results, correlation_results
+        )
         symbols_after_corr = len(filtered_results)
 
-        # 7. Filter by Hurst exponent (CPU-bound, run in thread pool)
+        # 7. Stability-over-time filter across multiple windows
+        filtered_results, _ = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self._filter_by_stability(
+                filtered_results, raw_data
+            )
+        )
+
+        # 8. Filter by Hurst exponent (CPU-bound, run in thread pool)
         filtered_results, hurst_values = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: self._filter_by_hurst(
@@ -333,7 +368,7 @@ class ScreenerService:
             )
         )
 
-        # 8. Filter by Half-Life mean-reversion speed (CPU-bound, run in thread pool)
+        # 9. Filter by Half-Life mean-reversion speed (CPU-bound, run in thread pool)
         filtered_results, halflife_values = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: self._filter_by_halflife(
@@ -341,7 +376,7 @@ class ScreenerService:
             )
         )
 
-        # 9. Filter by ADF stationarity (CPU-bound, run in thread pool)
+        # 10. Filter by ADF stationarity (CPU-bound, run in thread pool)
         filtered_results, adf_pvalues = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: self._filter_by_adf(
@@ -349,7 +384,7 @@ class ScreenerService:
             )
         )
 
-        # 10. Log results
+        # 11. Log results
         formatted_table = self._format_results(
             filtered_results,
             sort_by="z_score",
@@ -399,7 +434,182 @@ class ScreenerService:
     # Private Methods - Filtering
     # =========================================================================
 
-    def _filter_by_correlation(self, z_score_results: Dict[str, ZScoreResult]) -> Dict:
+    def _evaluate_beta_drift(
+        self, correlation_result: CorrelationResult
+    ) -> tuple[bool, Optional[float], Optional[float], Optional[float]]:
+        """
+        Evaluate beta drift between short and long windows.
+
+        Returns:
+            (is_stable, short_beta, long_beta, relative_drift)
+        """
+        if not self._enable_beta_drift_guard:
+            return True, None, None, None
+
+        beta_series = correlation_result.rolling_beta.dropna()
+        short_bars = self._beta_drift_short_days * self._bars_per_day
+        long_bars = self._beta_drift_long_days * self._bars_per_day
+
+        if len(beta_series) < long_bars:
+            # Not enough history yet - don't block signal.
+            return True, None, None, None
+
+        short_beta = float(beta_series.tail(short_bars).median())
+        long_beta = float(beta_series.tail(long_bars).median())
+
+        if not np.isfinite(short_beta) or not np.isfinite(long_beta):
+            return True, short_beta, long_beta, None
+
+        denom = max(abs(long_beta), 1e-6)
+        relative_drift = abs(short_beta - long_beta) / denom
+        is_stable = relative_drift <= self._beta_drift_max_relative
+        return is_stable, short_beta, long_beta, relative_drift
+
+    def _estimate_window_beta(
+        self,
+        coin_log_prices: pd.Series,
+        primary_log_prices: pd.Series,
+    ) -> Optional[float]:
+        """Estimate beta on a fixed window using log-return covariance."""
+        returns = pd.concat(
+            [coin_log_prices.diff(), primary_log_prices.diff()],
+            axis=1,
+            keys=["coin", "primary"],
+        ).dropna()
+
+        if len(returns) < 30:
+            return None
+
+        var_primary = returns["primary"].var()
+        if var_primary is None or not np.isfinite(var_primary) or var_primary <= 0:
+            return None
+
+        cov = returns["coin"].cov(returns["primary"])
+        if cov is None or not np.isfinite(cov):
+            return None
+
+        beta = float(cov / var_primary)
+        if not np.isfinite(beta):
+            return None
+        return beta
+
+    def _filter_by_stability(
+        self,
+        z_score_results: Dict[str, ZScoreResult],
+        raw_data: Dict[str, pd.DataFrame],
+    ) -> tuple[Dict[str, ZScoreResult], Dict[str, int]]:
+        """
+        Stability-over-time filter across multiple windows.
+
+        A symbol passes when at least N windows pass:
+        - beta in configured range
+        - Half-Life <= threshold
+        - ADF p-value < threshold
+        """
+        stability_passes: Dict[str, int] = {}
+
+        if not self._enable_stability_filter:
+            return z_score_results, stability_passes
+
+        if (
+            self._adf_filter_service is None
+            or not self._adf_filter_service.is_available
+            or self._halflife_filter_service is None
+            or not self._halflife_filter_service.is_available
+        ):
+            return z_score_results, stability_passes
+
+        filtered: Dict[str, ZScoreResult] = {}
+        skipped: list[str] = []
+        z_sl = self._z_score_service.z_sl_threshold
+        adf_threshold = self._adf_filter_service.threshold
+        halflife_threshold = self._halflife_filter_service.threshold
+
+        primary_df = raw_data.get(self._primary_pair)
+        if primary_df is None or primary_df.empty:
+            return z_score_results, stability_passes
+
+        for symbol, result in z_score_results.items():
+            z = result.current_z_score
+            z_entry = result.dynamic_entry_threshold
+            is_entry_candidate = (
+                not np.isnan(z) and abs(z) >= z_entry and abs(z) <= z_sl
+            )
+            if not is_entry_candidate:
+                filtered[symbol] = result
+                continue
+
+            coin_df = raw_data.get(symbol)
+            if coin_df is None or coin_df.empty:
+                skipped.append(f"{symbol} (no data)")
+                continue
+
+            pass_count = 0
+            checked = 0
+
+            for days in self._stability_windows_days:
+                bars = days * self._bars_per_day
+                if len(primary_df) < bars or len(coin_df) < bars:
+                    continue
+
+                coin_close = coin_df["close"].tail(bars)
+                primary_close = primary_df["close"].tail(bars)
+                if (coin_close <= 0).any() or (primary_close <= 0).any():
+                    continue
+
+                coin_log = np.log(coin_close)
+                primary_log = np.log(primary_close)
+                beta_window = self._estimate_window_beta(coin_log, primary_log)
+                if beta_window is None:
+                    continue
+
+                checked += 1
+
+                if not (self._min_beta <= beta_window <= self._max_beta):
+                    continue
+
+                halflife = self._halflife_filter_service.calculate_for_spread(
+                    coin_log_prices=coin_log,
+                    primary_log_prices=primary_log,
+                    beta=beta_window,
+                )
+                adf_pvalue = self._adf_filter_service.calculate_for_spread(
+                    coin_log_prices=coin_log,
+                    primary_log_prices=primary_log,
+                    beta=beta_window,
+                )
+
+                if (
+                    halflife is not None
+                    and adf_pvalue is not None
+                    and halflife <= halflife_threshold
+                    and adf_pvalue < adf_threshold
+                ):
+                    pass_count += 1
+
+            required = min(self._stability_min_pass_windows, checked) if checked > 0 else 0
+            if required == 0 or pass_count >= required:
+                filtered[symbol] = result
+                stability_passes[symbol] = pass_count
+            else:
+                skipped.append(f"{symbol} ({pass_count}/{checked})")
+                self._logger.warning(
+                    f"⚠️ {symbol}: Stability-over-time failed "
+                    f"(pass={pass_count}/{checked}, required={required})"
+                )
+
+        if skipped:
+            self._logger.warning(
+                f"Skipped {len(skipped)} entry candidates by stability-over-time: {', '.join(skipped)}"
+            )
+
+        return filtered, stability_passes
+
+    def _filter_by_correlation(
+        self,
+        z_score_results: Dict[str, ZScoreResult],
+        correlation_results: Dict[str, CorrelationResult],
+    ) -> Dict[str, ZScoreResult]:
         """
         Filter z-score results by correlation quality.
 
@@ -417,11 +627,30 @@ class ScreenerService:
         skipped = []
 
         for symbol, result in z_score_results.items():
+            corr_result = correlation_results.get(symbol)
             if (
                 result.current_correlation >= self._correlation_threshold
                 and result.current_beta >= self._min_beta
                 and result.current_beta <= self._max_beta
             ):
+                if corr_result is not None:
+                    (
+                        beta_stable,
+                        beta_short,
+                        beta_long,
+                        beta_drift,
+                    ) = self._evaluate_beta_drift(corr_result)
+                    if not beta_stable:
+                        skipped.append(
+                            f"{symbol} (beta drift={beta_drift:.2f}, short={beta_short:.3f}, long={beta_long:.3f})"
+                        )
+                        self._logger.warning(
+                            f"⚠️ {symbol}: beta drift guard failed | "
+                            f"short={beta_short:.4f}, long={beta_long:.4f}, "
+                            f"drift={beta_drift:.2f} > {self._beta_drift_max_relative:.2f}"
+                        )
+                        continue
+
                 filtered[symbol] = result
             else:
                 skipped.append(f"{symbol} (corr={result.current_correlation:.4f})")
@@ -748,8 +977,14 @@ class ScreenerService:
         # Total: 440 + 288 + 288 = 1016 candles minimum for 15m timeframe
         #
         # For 15m: 1016 candles = ~10.6 days
-        # We use 3x lookback + buffer to be safe
+        # Base warmup: 3x lookback + buffer.
         data_window_days = self._lookback_window_days * 3 + 2
+
+        # Extend warmup for stability/beta-drift windows if enabled.
+        if self._enable_stability_filter and self._stability_windows_days:
+            data_window_days = max(data_window_days, max(self._stability_windows_days) + 2)
+        if self._enable_beta_drift_guard:
+            data_window_days = max(data_window_days, self._beta_drift_long_days + 2)
         start_time = end_time - timedelta(days=data_window_days)
 
         # Get trading pairs (from MongoDB if available, otherwise from config)

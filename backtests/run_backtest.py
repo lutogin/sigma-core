@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.domain.data_loader import AsyncDataLoaderService
 from src.domain.screener.correlation import CorrelationService
+from src.domain.screener.correlation.correlation import CorrelationResult
 from src.domain.screener.hurst_filter import HurstFilterService
 from src.domain.screener.adf_filter import ADFFilterService
 from src.domain.screener.halflife_filter import HalfLifeFilterService
@@ -345,6 +346,8 @@ class BacktestConfig:
     z_tp_threshold: float = 0.25  # |Z| <= this to take profit
     z_sl_threshold: float = 4.0  # |Z| >= this to stop loss
     min_correlation: float = 0.8  # Minimum correlation for picking pairs
+    min_beta: float = 0.5
+    max_beta: float = 2.0
 
     # Correlation hysteresis thresholds (relaxed for existing positions/watches)
     # Entry requires >= min_correlation, but holding/watching allows lower values
@@ -390,6 +393,13 @@ class BacktestConfig:
     halflife_exit_confirm_scans: int = 2
 
     halflife_max_bars: float = 48.0  # 12 hours
+    enable_beta_drift_guard: bool = True
+    beta_drift_short_days: int = 3
+    beta_drift_long_days: int = 9
+    beta_drift_max_relative: float = 0.35
+    enable_stability_filter: bool = True
+    stability_windows_days: List[int] = field(default_factory=lambda: [3, 6, 9])
+    stability_min_pass_windows: int = 2
 
     # Trailing Entry settings (simulation of live EntryObserverService)
     """
@@ -439,6 +449,11 @@ class BacktestConfig:
     # This is INDEPENDENT of use_trailing_entry - in production ExitObserver
     # always runs on WebSocket regardless of how entry was made
     use_live_exit: bool = True
+    # Performance mode for backtests: load 1m candles only for symbols that
+    # actually become watched/opened during the run.
+    # This keeps live-like logic but avoids preloading large 1m datasets for
+    # symbols that never generate signals.
+    lazy_load_minute_data: bool = True
 
     # Trailing Stop Loss (smart SL that follows favorable moves)
     # When Z-score moves in our favor, we tighten the SL to lock in gains
@@ -651,6 +666,19 @@ class StatArbBacktest:
 
         # Calculate timeframe in minutes for time-based TP coefficient
         self._timeframe_minutes = get_timeframe_minutes(self.timeframe)
+        self._bars_per_day = max(1, 24 * 60 // self._timeframe_minutes)
+
+        self._beta_drift_short_days = max(1, self.config.beta_drift_short_days)
+        self._beta_drift_long_days = max(
+            self._beta_drift_short_days + 1,
+            self.config.beta_drift_long_days,
+        )
+        windows = [
+            int(window_days)
+            for window_days in self.config.stability_windows_days
+            if int(window_days) > 0
+        ]
+        self._stability_windows_days = sorted(set(windows)) or [3, 6, 9]
 
         # State
         self.balance = config.initial_balance
@@ -669,9 +697,13 @@ class StatArbBacktest:
         self.watch_candidates: Dict[str, BacktestWatchCandidate] = {}
         self.trailing_cancelled_count: int = 0  # Stats: cancelled watches
 
-        # Cache for 1m candles (loaded once at start for ExitObserver simulation)
+        # Cache for 1m candles (eager or lazy-loaded depending on config)
         # symbol -> DataFrame with 1m OHLCV
         self._minute_data_cache: Dict[str, pd.DataFrame] = {}
+        self._minute_data_failed: set[str] = set()
+        self._minute_data_locks: Dict[str, asyncio.Lock] = {}
+        self._minute_data_start_time: Optional[datetime] = None
+        self._minute_data_end_time: Optional[datetime] = None
 
         # Internal state: track consecutive Hurst violations per symbol
         # Key: symbol, Value: consecutive count of hurst >= threshold
@@ -704,6 +736,10 @@ class StatArbBacktest:
         # For 15m: 1016 candles = ~10.6 days
         # We use 3x lookback + 2 days buffer to be safe
         warmup_days = self.lookback_window_days * 3 + 2
+        if self.config.enable_stability_filter and self._stability_windows_days:
+            warmup_days = max(warmup_days, max(self._stability_windows_days) + 2)
+        if self.config.enable_beta_drift_guard:
+            warmup_days = max(warmup_days, self._beta_drift_long_days + 2)
         data_start = start_date - timedelta(days=warmup_days)
 
         print(
@@ -769,21 +805,28 @@ class StatArbBacktest:
         self.equity_history = [(all_timestamps[start_idx], self.balance)]
         self.symbol_cooldowns = {}  # Reset cooldowns
 
-        # Load 1m data if either trailing entry OR live exit simulation is enabled
-        # In production: EntryObserver uses WebSocket for trailing entry
-        #                ExitObserver uses WebSocket for TP/SL - they are INDEPENDENT
+        # Prepare 1m data mode if either trailing-entry or live-exit emulation is enabled.
+        # In production these flows are driven by WebSocket ticks.
+        self._minute_data_start_time = start_date
+        self._minute_data_end_time = end_date
         if self.config.use_trailing_entry or self.config.use_live_exit:
             features = []
             if self.config.use_trailing_entry:
                 features.append("trailing entry")
             if self.config.use_live_exit:
                 features.append("live exit")
-            print(f"\n📊 Loading 1-minute data for: {', '.join(features)}...")
-            await self._load_minute_data_for_backtest(
-                symbols=all_symbols,
-                start_time=start_date,
-                end_time=end_date,
-            )
+            if self.config.lazy_load_minute_data:
+                print(
+                    f"\n📊 1-minute data mode: LAZY for {', '.join(features)} "
+                    "(load only when symbol is watched/opened)"
+                )
+            else:
+                print(f"\n📊 Loading 1-minute data for: {', '.join(features)}...")
+                await self._load_minute_data_for_backtest(
+                    symbols=all_symbols,
+                    start_time=start_date,
+                    end_time=end_date,
+                )
 
         # Main backtest loop
         for i in range(start_idx, len(all_timestamps)):
@@ -894,6 +937,57 @@ class StatArbBacktest:
             f"  Loaded 1m data for {len(self._minute_data_cache)}/{len(symbols)} symbols\n"
         )
 
+    async def _ensure_minute_data_for_symbol(
+        self,
+        symbol: str,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Ensure 1m data for symbol is available in cache.
+
+        In lazy mode this loads the full backtest range on first demand.
+        In eager mode this is just a cache hit helper.
+        """
+        cached = self._minute_data_cache.get(symbol)
+        if cached is not None and not cached.empty:
+            return cached
+
+        if symbol in self._minute_data_failed:
+            return None
+
+        if self._minute_data_start_time is None or self._minute_data_end_time is None:
+            self._minute_data_failed.add(symbol)
+            return None
+
+        lock = self._minute_data_locks.setdefault(symbol, asyncio.Lock())
+        async with lock:
+            cached = self._minute_data_cache.get(symbol)
+            if cached is not None and not cached.empty:
+                return cached
+            if symbol in self._minute_data_failed:
+                return None
+
+            try:
+                print(f"  Loading 1m data on-demand for {symbol}...")
+                df = await self.data_loader.load_ohlcv_with_cache(
+                    symbol=symbol,
+                    num_bars=0,
+                    timeframe="1m",
+                    start_time=self._minute_data_start_time,
+                    end_time=self._minute_data_end_time,
+                )
+                if df is not None and not df.empty:
+                    self._minute_data_cache[symbol] = df
+                    print(f"    ✓ {symbol}: {len(df)} candles cached")
+                    return df
+
+                print(f"    ⚠️ No 1m data for {symbol}")
+                self._minute_data_failed.add(symbol)
+                return None
+            except Exception as e:
+                print(f"    ❌ Failed to load 1m data for {symbol}: {e}")
+                self._minute_data_failed.add(symbol)
+                return None
+
     async def _process_candle(
         self,
         current_time: datetime,
@@ -918,7 +1012,11 @@ class StatArbBacktest:
         )
 
         # Filter by correlation
-        filtered_results = self._filter_by_correlation(z_score_results)
+        filtered_results = self._filter_by_correlation(
+            z_score_results,
+            correlation_results,
+        )
+        filtered_results = self._filter_by_stability(filtered_results, window_data)
 
         # Step 1: Simulate ExitObserver - check TP/SL on 1m candles
         # When use_live_exit=True: check on 1m candles with frozen params (mirrors live bot)
@@ -972,16 +1070,188 @@ class StatArbBacktest:
             all_z_score_results=z_score_results,  # Pass for Re-Validate & Reset
         )
 
+    def _evaluate_beta_drift(
+        self,
+        corr_result: CorrelationResult,
+    ) -> Tuple[bool, Optional[float], Optional[float], Optional[float]]:
+        """Evaluate beta drift between short and long windows."""
+        if not self.config.enable_beta_drift_guard:
+            return True, None, None, None
+
+        beta_series = corr_result.rolling_beta.dropna()
+        short_bars = self._beta_drift_short_days * self._bars_per_day
+        long_bars = self._beta_drift_long_days * self._bars_per_day
+
+        if len(beta_series) < long_bars:
+            return True, None, None, None
+
+        beta_short = float(beta_series.tail(short_bars).median())
+        beta_long = float(beta_series.tail(long_bars).median())
+        if not np.isfinite(beta_short) or not np.isfinite(beta_long):
+            return True, beta_short, beta_long, None
+
+        denom = max(abs(beta_long), 1e-6)
+        beta_drift = abs(beta_short - beta_long) / denom
+        return (
+            beta_drift <= self.config.beta_drift_max_relative,
+            beta_short,
+            beta_long,
+            beta_drift,
+        )
+
+    def _estimate_window_beta(
+        self,
+        coin_log_prices: pd.Series,
+        primary_log_prices: pd.Series,
+    ) -> Optional[float]:
+        """Estimate beta on a fixed window using log-return covariance."""
+        returns = pd.concat(
+            [coin_log_prices.diff(), primary_log_prices.diff()],
+            axis=1,
+            keys=["coin", "primary"],
+        ).dropna()
+        if len(returns) < 30:
+            return None
+
+        var_primary = returns["primary"].var()
+        if var_primary is None or not np.isfinite(var_primary) or var_primary <= 0:
+            return None
+
+        cov = returns["coin"].cov(returns["primary"])
+        if cov is None or not np.isfinite(cov):
+            return None
+
+        beta = float(cov / var_primary)
+        return beta if np.isfinite(beta) else None
+
+    def _filter_by_stability(
+        self,
+        z_score_results: Dict[str, ZScoreResult],
+        window_data: Dict[str, pd.DataFrame],
+    ) -> Dict[str, ZScoreResult]:
+        """
+        Stability-over-time filter across multiple windows.
+
+        Candidate passes when at least N windows pass beta-range + HalfLife (+ADF if enabled).
+        """
+        if not self.config.enable_stability_filter:
+            return z_score_results
+
+        primary_df = window_data.get(self.primary_pair)
+        if primary_df is None or primary_df.empty:
+            return z_score_results
+
+        filtered: Dict[str, ZScoreResult] = {}
+
+        for symbol, z_result in z_score_results.items():
+            z = z_result.current_z_score
+            dyn_threshold = z_result.dynamic_entry_threshold
+            is_entry_candidate = (
+                not np.isnan(z)
+                and abs(z) >= dyn_threshold
+                and abs(z) <= self.config.z_sl_threshold
+            )
+
+            if not is_entry_candidate:
+                filtered[symbol] = z_result
+                continue
+
+            coin_df = window_data.get(symbol)
+            if coin_df is None or coin_df.empty:
+                continue
+
+            pass_count = 0
+            checked = 0
+
+            for days in self._stability_windows_days:
+                bars = days * self._bars_per_day
+                if len(primary_df) < bars or len(coin_df) < bars:
+                    continue
+
+                coin_close = coin_df["close"].tail(bars)
+                primary_close = primary_df["close"].tail(bars)
+                if (coin_close <= 0).any() or (primary_close <= 0).any():
+                    continue
+
+                coin_log = np.log(coin_close)
+                primary_log = np.log(primary_close)
+                beta_window = self._estimate_window_beta(coin_log, primary_log)
+                if beta_window is None:
+                    continue
+
+                checked += 1
+                if not (self.config.min_beta <= beta_window <= self.config.max_beta):
+                    continue
+
+                halflife_ok = True
+                if (
+                    self.halflife_filter_service is not None
+                    and self.halflife_filter_service.is_available
+                ):
+                    halflife = self.halflife_filter_service.calculate_for_spread(
+                        coin_log_prices=coin_log,
+                        primary_log_prices=primary_log,
+                        beta=beta_window,
+                    )
+                    halflife_ok = (
+                        halflife is not None
+                        and halflife <= self.config.halflife_max_bars
+                    )
+
+                adf_ok = True
+                if (
+                    self.config.use_adf_filter
+                    and self.adf_filter_service is not None
+                    and self.adf_filter_service.is_available
+                ):
+                    adf_pvalue = self.adf_filter_service.calculate_for_spread(
+                        coin_log_prices=coin_log,
+                        primary_log_prices=primary_log,
+                        beta=beta_window,
+                    )
+                    adf_ok = (
+                        adf_pvalue is not None
+                        and adf_pvalue < self.config.adf_pvalue_threshold
+                    )
+
+                if halflife_ok and adf_ok:
+                    pass_count += 1
+
+            required = (
+                min(self.config.stability_min_pass_windows, checked)
+                if checked > 0
+                else 0
+            )
+            if required == 0 or pass_count >= required:
+                filtered[symbol] = z_result
+
+        return filtered
+
     def _filter_by_correlation(
         self,
         z_score_results: Dict[str, ZScoreResult],
+        correlation_results: Dict[str, CorrelationResult],
     ) -> Dict[str, ZScoreResult]:
-        """Filter by correlation threshold."""
-        return {
-            symbol: result
-            for symbol, result in z_score_results.items()
-            if result.current_correlation >= self.config.min_correlation
-        }
+        """Filter by correlation, beta range, and optional beta-drift guard."""
+        filtered: Dict[str, ZScoreResult] = {}
+
+        for symbol, result in z_score_results.items():
+            corr_ok = result.current_correlation >= self.config.min_correlation
+            beta_ok = self.config.min_beta <= result.current_beta <= self.config.max_beta
+            if not corr_ok or not beta_ok:
+                continue
+
+            corr_result = correlation_results.get(symbol)
+            if corr_result is not None:
+                beta_stable, beta_short, beta_long, beta_drift = self._evaluate_beta_drift(
+                    corr_result
+                )
+                if not beta_stable:
+                    continue
+
+            filtered[symbol] = result
+
+        return filtered
 
     def _check_hurst_for_symbol(
         self,
@@ -1036,17 +1306,6 @@ class StatArbBacktest:
 
         is_mean_reverting = self.hurst_filter_service.is_mean_reverting(hurst)
 
-        if is_mean_reverting:
-            print(
-                f"▶️ {symbol} Hurst={hurst:.3f} < {self.hurst_filter_service.threshold} "
-                f"(mean-reverting, allow entry)"
-            )
-        # else:
-        #     print(
-        #         f"  ⚠️  {symbol} Hurst={hurst:.3f} > {self.hurst_filter_service.threshold} "
-        #         f"(trending spread, skip entry)"
-        #     )
-
         return is_mean_reverting
 
     def _check_adf_for_symbol(
@@ -1081,17 +1340,14 @@ class StatArbBacktest:
         coin_df = window_data.get(symbol)
 
         if primary_df is None or coin_df is None:
-            print(f"  ⚠️  {symbol} ADF: no data available")
             return False
 
         if primary_df.empty or coin_df.empty:
-            print(f"  ⚠️  {symbol} ADF: empty dataframes")
             return False
 
         # Get beta from correlation results
         corr_result = correlation_results.get(symbol)
         if corr_result is None:
-            print(f"  ⚠️  {symbol} ADF: no correlation result")
             return False
 
         beta = corr_result.latest_beta
@@ -1103,20 +1359,7 @@ class StatArbBacktest:
             beta=beta,
         )
 
-        is_stationary = self.adf_filter_service.is_stationary(pvalue)
-
-        if is_stationary:
-            print(
-                f"▶️ {symbol} ADF p={pvalue:.4f} < {self.adf_filter_service.threshold} "
-                f"(stationary, allow entry)"
-            )
-        else:
-            print(
-                f"  ⚠️  {symbol} ADF p={pvalue:.4f} >= {self.adf_filter_service.threshold} "
-                f"(non-stationary, skip entry)"
-            )
-
-        return is_stationary
+        return self.adf_filter_service.is_stationary(pvalue)
 
     def _check_halflife_for_symbol(
         self,
@@ -1140,30 +1383,23 @@ class StatArbBacktest:
             True if spread has acceptable Half-Life (<= threshold), False otherwise
         """
         if not self.halflife_filter_service:
-            print(f"  ℹ️  {symbol} Half-Life filter not configured, skipping check")
             return True  # No filter = allow all
 
         if not self.halflife_filter_service.is_available:
-            print(
-                f"  ℹ️  {symbol} Half-Life filter unavailable (statsmodels not installed)"
-            )
             return True  # No filter = allow all
 
         primary_df = window_data.get(self.primary_pair)
         coin_df = window_data.get(symbol)
 
         if primary_df is None or coin_df is None:
-            print(f"  ⚠️  {symbol} Half-Life: no data available")
             return False
 
         if primary_df.empty or coin_df.empty:
-            print(f"  ⚠️  {symbol} Half-Life: empty dataframes")
             return False
 
         # Get beta from correlation results
         corr_result = correlation_results.get(symbol)
         if corr_result is None:
-            print(f"  ⚠️  {symbol} Half-Life: no correlation result")
             return False
 
         beta = corr_result.latest_beta
@@ -1179,20 +1415,7 @@ class StatArbBacktest:
             beta=beta,
         )
 
-        is_acceptable = self.halflife_filter_service.is_acceptable(halflife)
-
-        if is_acceptable:
-            print(
-                f"▶️ {symbol} HL={halflife:.1f} bars <= {self.halflife_filter_service.threshold} "
-                f"(fast reversion, allow entry) [data: {len(coin_log_prices)} candles, β={beta:.3f}]"
-            )
-        else:
-            print(
-                f"  ⚠️  {symbol} HL={halflife:.1f} bars > {self.halflife_filter_service.threshold} "
-                f"(slow reversion, skip entry) [data: {len(coin_log_prices)} candles, β={beta:.3f}]"
-            )
-
-        return is_acceptable
+        return self.halflife_filter_service.is_acceptable(halflife)
 
     def _get_adf_for_symbol(
         self,
@@ -1585,14 +1808,15 @@ class StatArbBacktest:
         2. Calculates Z-score on 1m candles within the current 15m bar
         3. Exits immediately when TP or SL is hit
 
-        Uses pre-loaded 1m data from _minute_data_cache for efficiency.
+        Uses cached 1m data (eager or lazy-loaded) for efficiency.
         """
         if not self.positions:
             return
 
-        if not self._minute_data_cache:
-            print(f"  ⚠️ No 1m data cache available for ExitObserver simulation")
-            return  # No 1m data available
+        primary_1m_full = await self._ensure_minute_data_for_symbol(self.primary_pair)
+        if primary_1m_full is None or primary_1m_full.empty:
+            print(f"  ⚠️ No 1m data for {self.primary_pair} in ExitObserver simulation")
+            return
 
         # Debug: log cache status on first call
         if len(self.trades) == 0 and len(self.positions) > 0:
@@ -1613,15 +1837,11 @@ class StatArbBacktest:
         positions_to_close = []
 
         for symbol, position in list(self.positions.items()):
-            # Get 1m data from cache
-            coin_1m_full = self._minute_data_cache.get(symbol)
-            primary_1m_full = self._minute_data_cache.get(self.primary_pair)
+            # Get 1m data from cache (lazy load on first demand)
+            coin_1m_full = await self._ensure_minute_data_for_symbol(symbol)
 
             if coin_1m_full is None or coin_1m_full.empty:
                 print(f"  ⚠️ No 1m data for {symbol}")
-                continue
-            if primary_1m_full is None or primary_1m_full.empty:
-                print(f"  ⚠️ No 1m data for {self.primary_pair}")
                 continue
 
             # Filter to current 15m bar only
@@ -2276,11 +2496,11 @@ class StatArbBacktest:
         end_time: datetime,
     ) -> Optional[pd.DataFrame]:
         """
-        Load 1m candles from pre-loaded cache for trailing entry simulation.
-        Uses the same cache as ExitObserver simulation.
+        Load 1m candles from cache for trailing entry simulation.
+        Uses the same cache as ExitObserver simulation (lazy on-demand when enabled).
         """
-        # Get from pre-loaded cache (loaded at backtest start)
-        df_full = self._minute_data_cache.get(symbol)
+        # Ensure symbol is present in cache
+        df_full = await self._ensure_minute_data_for_symbol(symbol)
 
         if df_full is None or df_full.empty:
             return None
@@ -3585,6 +3805,12 @@ Examples:
         default=None,
         help="Enable live exit simulation on 1m candles (true/false). Default: from BacktestConfig",
     )
+    parser.add_argument(
+        "--lazy-minute-data",
+        type=str,
+        default=None,
+        help="Load 1m data lazily on first watch/position (true/false). Default: from BacktestConfig",
+    )
 
     args = parser.parse_args()
 
@@ -3635,6 +3861,7 @@ Examples:
         use_trailing_entry = _parse_bool(args.use_trailing_entry, "--use-trailing-entry")
         use_live_exit = _parse_bool(args.use_live_exit, "--use-live-exit")
         use_dynamic_tp = _parse_bool(args.use_dynamic_tp, "--use-dynamic-tp")
+        lazy_minute_data = _parse_bool(args.lazy_minute_data, "--lazy-minute-data")
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -3687,6 +3914,8 @@ Examples:
         config_overrides["use_trailing_entry"] = use_trailing_entry
     if use_live_exit is not None:
         config_overrides["use_live_exit"] = use_live_exit
+    if lazy_minute_data is not None:
+        config_overrides["lazy_load_minute_data"] = lazy_minute_data
     if use_dynamic_tp is not None:
         config_overrides["use_dynamic_tp"] = use_dynamic_tp
 
@@ -3700,6 +3929,8 @@ Examples:
         z_tp_threshold=settings.Z_TP_THRESHOLD,
         z_sl_threshold=settings.Z_SL_THRESHOLD,
         min_correlation=settings.MIN_CORRELATION,
+        min_beta=settings.MIN_BETA,
+        max_beta=settings.MAX_BETA,
         correlation_exit_threshold=settings.CORRELATION_EXIT_THRESHOLD,
         correlation_watch_threshold=settings.CORRELATION_WATCH_THRESHOLD,
         cooldown_bars=settings.COOLDOWN_BARS,
@@ -3709,6 +3940,13 @@ Examples:
         adf_exit_confirm_scans=settings.ADF_EXIT_CONFIRM_SCANS,
         halflife_exit_confirm_scans=settings.HALFLIFE_EXIT_CONFIRM_SCANS,
         halflife_max_bars=settings.HALFLIFE_MAX_BARS,
+        enable_beta_drift_guard=settings.ENABLE_BETA_DRIFT_GUARD,
+        beta_drift_short_days=settings.BETA_DRIFT_SHORT_DAYS,
+        beta_drift_long_days=settings.BETA_DRIFT_LONG_DAYS,
+        beta_drift_max_relative=settings.BETA_DRIFT_MAX_RELATIVE,
+        enable_stability_filter=settings.ENABLE_STABILITY_FILTER,
+        stability_windows_days=settings.STABILITY_WINDOWS_DAYS,
+        stability_min_pass_windows=settings.STABILITY_MIN_PASS_WINDOWS,
         adf_pvalue_threshold=settings.ADF_PVALUE_THRESHOLD,
         adf_lookback_candles=settings.ADF_LOOKBACK_CANDLES,
         trailing_pullback=trailing_pullback,
@@ -3749,6 +3987,15 @@ Examples:
     print(f"  Z TP Threshold:      ±{config.z_tp_threshold}")
     print(f"  Z SL Threshold:      ±{config.z_sl_threshold}")
     print(f"  Min Correlation:     {config.min_correlation}")
+    print(f"  Beta Range:          [{config.min_beta}, {config.max_beta}]")
+    print(
+        f"  Beta Drift Guard:    {'ON' if config.enable_beta_drift_guard else 'OFF'} "
+        f"({config.beta_drift_short_days}d/{config.beta_drift_long_days}d, max {config.beta_drift_max_relative:.2f})"
+    )
+    print(
+        f"  Stability Filter:    {'ON' if config.enable_stability_filter else 'OFF'} "
+        f"(windows={config.stability_windows_days}, min_pass={config.stability_min_pass_windows})"
+    )
     print(f"\n  Primary Pair:        {settings.PRIMARY_PAIR}")
     print(f"  Trading Pairs:       {len(config.consistent_pairs)} pairs")
     for pair in config.consistent_pairs:
@@ -3768,6 +4015,9 @@ Examples:
         f"(scaled from {settings.TRAILING_ENTRY_PULLBACK_EXTREME:.3f})"
     )
     print(f"  Live Exit (1m):      {'ON' if config.use_live_exit else 'OFF'}")
+    print(
+        f"  1m Data Loading:     {'LAZY (on-demand)' if config.lazy_load_minute_data else 'EAGER (preload all)'}"
+    )
     print(f"\n  Half-Life Filter:    ON")
     print(f"  HL Max Bars:         {settings.HALFLIFE_MAX_BARS} bars")
     print(f"  HL Lookback:         {settings.HALFLIFE_LOOKBACK_CANDLES} candles")

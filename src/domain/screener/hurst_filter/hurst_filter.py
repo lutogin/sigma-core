@@ -14,7 +14,6 @@ strongly mean-reverting spreads.
 """
 
 from typing import Dict, Optional, Tuple
-from decimal import Decimal, ROUND_DOWN
 
 import numpy as np
 import pandas as pd
@@ -139,12 +138,7 @@ class HurstFilterService:
         Returns:
             True if spread is mean-reverting (H < threshold)
         """
-        # # Round down to 2 decimal places and compare as float
-        # dh = Decimal(str(hurst))  # Use str() to avoid float precision issues
-        # rounded_hurst = float(dh.quantize(Decimal("0.00"), rounding=ROUND_DOWN))
-        # return rounded_hurst < self._hurst_threshold
-
-        return round(hurst, 2) < self._hurst_threshold
+        return float(hurst) < self._hurst_threshold
 
     def _calculate_hurst_rs(self, series: np.ndarray) -> float:
         """

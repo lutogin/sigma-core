@@ -1,19 +1,55 @@
 {
   "metadata": {
     "start_date": "2025-10-01T00:00:00+00:00",
-    "end_date": "2026-01-28T15:19:45.880113+00:00",
+    "end_date": "2026-02-11T20:48:44.910823+00:00",
     "train_days": 30,
     "trade_days": 7,
     "top_k": 10,
-    "min_trades_train": 15,
+    "min_trades_train": 1,
     "rank_metric": "netPnL"
   },
   "summary": {
-    "total_portfolio_pnl": -890.1055483978296,
-    "total_trades": 18,
-    "max_portfolio_dd": -1365.1791592150112,
-    "coin_selection_turnover": 0.5636363636363637
+    "total_portfolio_pnl": 0.0,
+    "total_trades": 0,
+    "max_portfolio_dd": 0,
+    "coin_selection_turnover": 0.015384615384615385
   },
+  "best_coins_over_period": [],
+  "best_train_candidates_over_period": [],
+  "ranked_fallback_over_period": [
+    {
+      "coin": "SAND",
+      "train_steps_tested": 4,
+      "train_net_pnl": -10693.360466018663,
+      "train_avg_score_all": -0.972576663426413,
+      "selected_steps": 4,
+      "selection_rate": 0.2857142857142857,
+      "avg_train_score_selected": -0.972576663426413,
+      "trade_steps": 4,
+      "trade_total_trades": 0,
+      "trade_winning_trades": 0,
+      "trade_win_rate": 0.0,
+      "trade_net_pnl": 0.0,
+      "killed_count": 0
+    }
+  ],
+  "coin_period_stats": [
+    {
+      "coin": "SAND",
+      "train_steps_tested": 4,
+      "train_net_pnl": -10693.360466018663,
+      "train_avg_score_all": -0.972576663426413,
+      "selected_steps": 4,
+      "selection_rate": 0.2857142857142857,
+      "avg_train_score_selected": -0.972576663426413,
+      "trade_steps": 4,
+      "trade_total_trades": 0,
+      "trade_winning_trades": 0,
+      "trade_win_rate": 0.0,
+      "trade_net_pnl": 0.0,
+      "killed_count": 0
+    }
+  ],
   "steps": [
     {
       "step_num": 1,
@@ -21,114 +57,11 @@
       "train_end": "2025-10-31T00:00:00+00:00",
       "trade_start": "2025-10-31T00:00:00+00:00",
       "trade_end": "2025-11-07T00:00:00+00:00",
-      "selected_coins": [
-        "SUPER",
-        "1000BONK",
-        "GRT",
-        "ZK",
-        "CRV",
-        "RENDER",
-        "TURBO",
-        "UNI",
-        "WLFI",
-        "W"
-      ],
-      "selection_scores": {
-        "SUPER": 203.20686212442232,
-        "1000BONK": 57.40060066314757,
-        "GRT": 8.358657717005146,
-        "ZK": 4.753640102723411,
-        "CRV": 3.519438151588448,
-        "RENDER": 3.389968509605591,
-        "TURBO": 3.121839629092124,
-        "UNI": 2.869398016272487,
-        "WLFI": 2.866212846421006,
-        "W": 1.0120782383087308
-      },
-      "portfolio_pnl": -1097.4570708158394,
-      "portfolio_dd": -1292.7151115530723,
-      "trade_results": [
-        {
-          "coin": "SUPER",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "1000BONK",
-          "net_pnl": -1097.4570708158394,
-          "total_trades": 1,
-          "win_rate": 0.0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "GRT",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ZK",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "CRV",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "RENDER",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "TURBO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "UNI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "WLFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "W",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        }
-      ]
+      "selected_coins": [],
+      "selection_scores": {},
+      "portfolio_pnl": 0,
+      "portfolio_dd": 0,
+      "trade_results": []
     },
     {
       "step_num": 2,
@@ -136,114 +69,11 @@
       "train_end": "2025-11-07T00:00:00+00:00",
       "trade_start": "2025-11-07T00:00:00+00:00",
       "trade_end": "2025-11-14T00:00:00+00:00",
-      "selected_coins": [
-        "SUPER",
-        "GRT",
-        "ZK",
-        "1000BONK",
-        "CRV",
-        "RENDER",
-        "TURBO",
-        "UNI",
-        "WLFI",
-        "MANA"
-      ],
-      "selection_scores": {
-        "SUPER": 203.20686212442254,
-        "GRT": 8.35865771700515,
-        "ZK": 4.753640102723324,
-        "1000BONK": 4.02087934599711,
-        "CRV": 3.519438151588523,
-        "RENDER": 3.389968509605591,
-        "TURBO": 3.1218396290921033,
-        "UNI": 2.869398016272488,
-        "WLFI": 2.8662128464209857,
-        "MANA": 1.4238990349840785
-      },
+      "selected_coins": [],
+      "selection_scores": {},
       "portfolio_pnl": 0,
-      "portfolio_dd": 0.0,
-      "trade_results": [
-        {
-          "coin": "SUPER",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "GRT",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ZK",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "1000BONK",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "CRV",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "RENDER",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "TURBO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "UNI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "WLFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "MANA",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        }
-      ]
+      "portfolio_dd": 0,
+      "trade_results": []
     },
     {
       "step_num": 3,
@@ -251,114 +81,11 @@
       "train_end": "2025-11-14T00:00:00+00:00",
       "trade_start": "2025-11-14T00:00:00+00:00",
       "trade_end": "2025-11-21T00:00:00+00:00",
-      "selected_coins": [
-        "ZK",
-        "CRV",
-        "TURBO",
-        "RENDER",
-        "WLFI",
-        "MANA",
-        "W",
-        "ONDO",
-        "GLM",
-        "JASMY"
-      ],
-      "selection_scores": {
-        "ZK": 4.753640102723336,
-        "CRV": 3.5194381515883975,
-        "TURBO": 3.4058671795386277,
-        "RENDER": 3.389968509605599,
-        "WLFI": 2.8662128464209977,
-        "MANA": 1.3536511025173654,
-        "W": 0.7938512969825225,
-        "ONDO": 0.7322969882659862,
-        "GLM": 0.6904923288400093,
-        "JASMY": 0.2775652611152831
-      },
-      "portfolio_pnl": 1673.926619276053,
-      "portfolio_dd": -446.6461446963931,
-      "trade_results": [
-        {
-          "coin": "ZK",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "CRV",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "TURBO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "RENDER",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "WLFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "MANA",
-          "net_pnl": 1267.8058285247541,
-          "total_trades": 1,
-          "win_rate": 1.0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "W",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ONDO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "GLM",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "JASMY",
-          "net_pnl": 406.12079075129896,
-          "total_trades": 1,
-          "win_rate": 1.0,
-          "was_killed": false,
-          "kill_reason": null
-        }
-      ]
+      "selected_coins": [],
+      "selection_scores": {},
+      "portfolio_pnl": 0,
+      "portfolio_dd": 0,
+      "trade_results": []
     },
     {
       "step_num": 4,
@@ -366,114 +93,11 @@
       "train_end": "2025-11-21T00:00:00+00:00",
       "trade_start": "2025-11-21T00:00:00+00:00",
       "trade_end": "2025-11-28T00:00:00+00:00",
-      "selected_coins": [
-        "RENDER",
-        "CRV",
-        "ATOM",
-        "MANA",
-        "JASMY",
-        "SNX",
-        "RSR",
-        "ONDO",
-        "AAVE",
-        "SFP"
-      ],
-      "selection_scores": {
-        "RENDER": 3.6226443366259167,
-        "CRV": 3.519438151588602,
-        "ATOM": 3.3483599061443425,
-        "MANA": 2.7651040218110423,
-        "JASMY": 1.4344321291324669,
-        "SNX": 0.8140801465064178,
-        "RSR": 0.7831385867694425,
-        "ONDO": 0.7322969882659605,
-        "AAVE": 0.5600263375526195,
-        "SFP": 0.11581979931166005
-      },
-      "portfolio_pnl": 1378.0174258976945,
-      "portfolio_dd": -766.4516890095547,
-      "trade_results": [
-        {
-          "coin": "RENDER",
-          "net_pnl": 833.6075401157635,
-          "total_trades": 1,
-          "win_rate": 1.0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "CRV",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ATOM",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "MANA",
-          "net_pnl": 544.4098857819308,
-          "total_trades": 1,
-          "win_rate": 1.0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "JASMY",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "SNX",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "RSR",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ONDO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "AAVE",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "SFP",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        }
-      ]
+      "selected_coins": [],
+      "selection_scores": {},
+      "portfolio_pnl": 0,
+      "portfolio_dd": 0,
+      "trade_results": []
     },
     {
       "step_num": 5,
@@ -482,109 +106,19 @@
       "trade_start": "2025-11-28T00:00:00+00:00",
       "trade_end": "2025-12-05T00:00:00+00:00",
       "selected_coins": [
-        "SUPER",
-        "MANA",
-        "ATOM",
-        "YFI",
-        "JASMY",
-        "RENDER",
-        "SNX",
-        "ONDO",
-        "EIGEN",
-        "AAVE"
+        "SAND"
       ],
       "selection_scores": {
-        "SUPER": 5.344663344688496,
-        "MANA": 3.4480384540186346,
-        "ATOM": 3.3483599061443523,
-        "YFI": 2.5130199719990904,
-        "JASMY": 1.4344321291324715,
-        "RENDER": 1.0876191573052592,
-        "SNX": 0.8140801465064159,
-        "ONDO": 0.7322969882659721,
-        "EIGEN": 0.7137626072976675,
-        "AAVE": 0.5600263375526183
+        "SAND": -0.9725766634264128
       },
-      "portfolio_pnl": 0,
+      "portfolio_pnl": 0.0,
       "portfolio_dd": 0.0,
       "trade_results": [
         {
-          "coin": "SUPER",
-          "net_pnl": 0,
+          "coin": "SAND",
+          "net_pnl": 0.0,
           "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "MANA",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ATOM",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "YFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "JASMY",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "RENDER",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "SNX",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ONDO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "EIGEN",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "AAVE",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
+          "win_rate": 0.0,
           "was_killed": false,
           "kill_reason": null
         }
@@ -597,109 +131,19 @@
       "trade_start": "2025-12-05T00:00:00+00:00",
       "trade_end": "2025-12-12T00:00:00+00:00",
       "selected_coins": [
-        "SUPER",
-        "ATOM",
-        "MANA",
-        "YFI",
-        "JASMY",
-        "RENDER",
-        "ENS",
-        "SNX",
-        "ONDO",
-        "EIGEN"
+        "SAND"
       ],
       "selection_scores": {
-        "SUPER": 5.3446633446884935,
-        "ATOM": 3.3483599061443443,
-        "MANA": 3.2949654019064054,
-        "YFI": 2.513019971999105,
-        "JASMY": 1.434432129132467,
-        "RENDER": 1.0876191573052572,
-        "ENS": 0.8936116573038899,
-        "SNX": 0.814080146506417,
-        "ONDO": 0.7322969882659682,
-        "EIGEN": 0.7137626072976669
+        "SAND": -0.9725766634264127
       },
-      "portfolio_pnl": 0,
+      "portfolio_pnl": 0.0,
       "portfolio_dd": 0.0,
       "trade_results": [
         {
-          "coin": "SUPER",
-          "net_pnl": 0,
+          "coin": "SAND",
+          "net_pnl": 0.0,
           "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ATOM",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "MANA",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "YFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "JASMY",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "RENDER",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ENS",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "SNX",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ONDO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "EIGEN",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
+          "win_rate": 0.0,
           "was_killed": false,
           "kill_reason": null
         }
@@ -712,109 +156,19 @@
       "trade_start": "2025-12-12T00:00:00+00:00",
       "trade_end": "2025-12-19T00:00:00+00:00",
       "selected_coins": [
-        "SUPER",
-        "ATOM",
-        "MANA",
-        "YFI",
-        "JASMY",
-        "RENDER",
-        "ENS",
-        "SNX",
-        "EIGEN",
-        "LINK"
+        "SAND"
       ],
       "selection_scores": {
-        "SUPER": 5.3446633446884935,
-        "ATOM": 3.3483599061443514,
-        "MANA": 3.2949654019064294,
-        "YFI": 2.513019971999067,
-        "JASMY": 1.4344321291324695,
-        "RENDER": 1.0876191573052565,
-        "ENS": 0.8936116573039037,
-        "SNX": 0.8140801465064161,
-        "EIGEN": 0.7137626072976656,
-        "LINK": 0.6303642304978347
+        "SAND": -0.9725766634264134
       },
-      "portfolio_pnl": -1189.8166416542556,
-      "portfolio_dd": -1189.8166416542554,
+      "portfolio_pnl": 0.0,
+      "portfolio_dd": 0.0,
       "trade_results": [
         {
-          "coin": "SUPER",
-          "net_pnl": 0,
+          "coin": "SAND",
+          "net_pnl": 0.0,
           "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ATOM",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "MANA",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "YFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "JASMY",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "RENDER",
-          "net_pnl": -1189.8166416542556,
-          "total_trades": 1,
           "win_rate": 0.0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ENS",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "SNX",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "EIGEN",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "LINK",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
           "was_killed": false,
           "kill_reason": null
         }
@@ -827,109 +181,19 @@
       "trade_start": "2025-12-19T00:00:00+00:00",
       "trade_end": "2025-12-26T00:00:00+00:00",
       "selected_coins": [
-        "SUPER",
-        "ATOM",
-        "MANA",
-        "YFI",
-        "AXS",
-        "ETHFI",
-        "EIGEN",
-        "ENS",
-        "FLUID",
-        "COMP"
+        "SAND"
       ],
       "selection_scores": {
-        "SUPER": 5.344663344688493,
-        "ATOM": 3.3483599061443585,
-        "MANA": 3.094269694677221,
-        "YFI": 2.5130199719990856,
-        "AXS": 1.7018413053729362,
-        "ETHFI": 1.1432261720642551,
-        "EIGEN": 0.7137626072976694,
-        "ENS": 0.6481810761157071,
-        "FLUID": 0.5592328487655264,
-        "COMP": 0.0015649239698689566
+        "SAND": -0.9725766634264131
       },
-      "portfolio_pnl": -1082.3101101857737,
-      "portfolio_dd": -1200.100881016304,
+      "portfolio_pnl": 0.0,
+      "portfolio_dd": 0.0,
       "trade_results": [
         {
-          "coin": "SUPER",
-          "net_pnl": 0,
+          "coin": "SAND",
+          "net_pnl": 0.0,
           "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ATOM",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "MANA",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "YFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "AXS",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ETHFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "EIGEN",
-          "net_pnl": -1082.3101101857737,
-          "total_trades": 1,
           "win_rate": 0.0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ENS",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "FLUID",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "COMP",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
           "was_killed": false,
           "kill_reason": null
         }
@@ -941,114 +205,11 @@
       "train_end": "2025-12-26T00:00:00+00:00",
       "trade_start": "2025-12-26T00:00:00+00:00",
       "trade_end": "2026-01-02T00:00:00+00:00",
-      "selected_coins": [
-        "ETHFI",
-        "FLUID",
-        "JASMY",
-        "ENS",
-        "CVX",
-        "POL",
-        "UNI",
-        "LDO",
-        "1INCH",
-        "FET"
-      ],
-      "selection_scores": {
-        "ETHFI": 1.143226172064249,
-        "FLUID": 0.5592328487655275,
-        "JASMY": 0.499482602222619,
-        "ENS": 0.18175119822736951,
-        "CVX": -0.48601066608808885,
-        "POL": -0.5696587908542132,
-        "UNI": -0.5698646432704113,
-        "LDO": -0.6099753506061709,
-        "1INCH": -0.6339170296405697,
-        "FET": -0.6481787367204298
-      },
-      "portfolio_pnl": 342.83214603660974,
-      "portfolio_dd": -92.05703565772819,
-      "trade_results": [
-        {
-          "coin": "ETHFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "FLUID",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "JASMY",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ENS",
-          "net_pnl": 342.83214603660974,
-          "total_trades": 1,
-          "win_rate": 1.0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "CVX",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "POL",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "UNI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "LDO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "1INCH",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "FET",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        }
-      ]
+      "selected_coins": [],
+      "selection_scores": {},
+      "portfolio_pnl": 0,
+      "portfolio_dd": 0,
+      "trade_results": []
     },
     {
       "step_num": 10,
@@ -1056,114 +217,11 @@
       "train_end": "2026-01-02T00:00:00+00:00",
       "trade_start": "2026-01-02T00:00:00+00:00",
       "trade_end": "2026-01-09T00:00:00+00:00",
-      "selected_coins": [
-        "ONDO",
-        "ENS",
-        "LINK",
-        "ETHFI",
-        "FLUID",
-        "JASMY",
-        "CVX",
-        "POL",
-        "LDO",
-        "1INCH"
-      ],
-      "selection_scores": {
-        "ONDO": 6.49644684471511,
-        "ENS": 3.724127586633073,
-        "LINK": 1.4631622168139813,
-        "ETHFI": 1.143226172064235,
-        "FLUID": 0.5592328487655335,
-        "JASMY": 0.49948260222262447,
-        "CVX": -0.4860106660880897,
-        "POL": -0.5696587908542162,
-        "LDO": -0.6099753506061669,
-        "1INCH": -0.6339170296405732
-      },
-      "portfolio_pnl": 185.97048166994006,
-      "portfolio_dd": -503.0658976702107,
-      "trade_results": [
-        {
-          "coin": "ONDO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ENS",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "LINK",
-          "net_pnl": 185.97048166994006,
-          "total_trades": 1,
-          "win_rate": 1.0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ETHFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "FLUID",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "JASMY",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "CVX",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "POL",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "LDO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "1INCH",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        }
-      ]
+      "selected_coins": [],
+      "selection_scores": {},
+      "portfolio_pnl": 0,
+      "portfolio_dd": 0,
+      "trade_results": []
     },
     {
       "step_num": 11,
@@ -1171,114 +229,11 @@
       "train_end": "2026-01-09T00:00:00+00:00",
       "trade_start": "2026-01-09T00:00:00+00:00",
       "trade_end": "2026-01-16T00:00:00+00:00",
-      "selected_coins": [
-        "ONDO",
-        "ENS",
-        "AAVE",
-        "LINK",
-        "ETHFI",
-        "FLUID",
-        "JASMY",
-        "POL",
-        "1INCH",
-        "FET"
-      ],
-      "selection_scores": {
-        "ONDO": 6.4964468447150825,
-        "ENS": 3.724127586633082,
-        "AAVE": 1.5532205892806157,
-        "LINK": 1.1767681707287425,
-        "ETHFI": 1.14322617206423,
-        "FLUID": 0.5592328487655357,
-        "JASMY": 0.4994826022226294,
-        "POL": -0.5696587908542176,
-        "1INCH": -0.6339170296405751,
-        "FET": -0.6481787367204305
-      },
-      "portfolio_pnl": -1101.2683986222582,
-      "portfolio_dd": -1365.1791592150112,
-      "trade_results": [
-        {
-          "coin": "ONDO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ENS",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "AAVE",
-          "net_pnl": -269.6525886547969,
-          "total_trades": 3,
-          "win_rate": 0.3333333333333333,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "LINK",
-          "net_pnl": -130.39929990542203,
-          "total_trades": 3,
-          "win_rate": 0.6666666666666666,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ETHFI",
-          "net_pnl": -701.2165100620393,
-          "total_trades": 3,
-          "win_rate": 0.0,
-          "was_killed": true,
-          "kill_reason": "LOSS_STREAK_3"
-        },
-        {
-          "coin": "FLUID",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "JASMY",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "POL",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "1INCH",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "FET",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        }
-      ]
+      "selected_coins": [],
+      "selection_scores": {},
+      "portfolio_pnl": 0,
+      "portfolio_dd": 0,
+      "trade_results": []
     },
     {
       "step_num": 12,
@@ -1286,114 +241,35 @@
       "train_end": "2026-01-16T00:00:00+00:00",
       "trade_start": "2026-01-16T00:00:00+00:00",
       "trade_end": "2026-01-23T00:00:00+00:00",
-      "selected_coins": [
-        "ONDO",
-        "ENS",
-        "W",
-        "LINK",
-        "JASMY",
-        "AAVE",
-        "POL",
-        "ETHFI",
-        "1INCH",
-        "FET"
-      ],
-      "selection_scores": {
-        "ONDO": 6.496446844715117,
-        "ENS": 3.7241275866330525,
-        "W": 0.9760233182419145,
-        "LINK": 0.82569712291163,
-        "JASMY": 0.49948260222263097,
-        "AAVE": 0.3352209407633357,
-        "POL": -0.4546621544614543,
-        "ETHFI": -0.5136443120514843,
-        "1INCH": -0.6339170296405758,
-        "FET": -0.6481787367204256
-      },
+      "selected_coins": [],
+      "selection_scores": {},
       "portfolio_pnl": 0,
-      "portfolio_dd": 0.0,
-      "trade_results": [
-        {
-          "coin": "ONDO",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ENS",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "W",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "LINK",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "JASMY",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "AAVE",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "POL",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "ETHFI",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "1INCH",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        },
-        {
-          "coin": "FET",
-          "net_pnl": 0,
-          "total_trades": 0,
-          "win_rate": 0,
-          "was_killed": false,
-          "kill_reason": null
-        }
-      ]
+      "portfolio_dd": 0,
+      "trade_results": []
+    },
+    {
+      "step_num": 13,
+      "train_start": "2025-12-24T00:00:00+00:00",
+      "train_end": "2026-01-23T00:00:00+00:00",
+      "trade_start": "2026-01-23T00:00:00+00:00",
+      "trade_end": "2026-01-30T00:00:00+00:00",
+      "selected_coins": [],
+      "selection_scores": {},
+      "portfolio_pnl": 0,
+      "portfolio_dd": 0,
+      "trade_results": []
+    },
+    {
+      "step_num": 14,
+      "train_start": "2025-12-31T00:00:00+00:00",
+      "train_end": "2026-01-30T00:00:00+00:00",
+      "trade_start": "2026-01-30T00:00:00+00:00",
+      "trade_end": "2026-02-06T00:00:00+00:00",
+      "selected_coins": [],
+      "selection_scores": {},
+      "portfolio_pnl": 0,
+      "portfolio_dd": 0,
+      "trade_results": []
     }
   ]
 }

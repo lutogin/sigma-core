@@ -67,6 +67,8 @@ class CoinWalkForwardRunner:
         balance: float,
         leverage: Optional[int],
         workers: int = DEFAULT_WORKERS,
+        use_trailing_entry: bool = True,
+        use_live_exit: bool = True,
     ):
         self.coins = coins
         self.start_date = start_date
@@ -74,6 +76,8 @@ class CoinWalkForwardRunner:
         self.balance = balance
         self.leverage = leverage
         self.workers = workers
+        self.use_trailing_entry = use_trailing_entry
+        self.use_live_exit = use_live_exit
         self.results: List[CoinResult] = []
         self.failed_coins: List[str] = []
         self._print_lock = asyncio.Lock()
@@ -144,8 +148,8 @@ class CoinWalkForwardRunner:
         """Run walk-forward backtest for a single coin via subprocess."""
         symbol = f"{coin}/USDT:USDT"
 
-        # Build command - run from backtests directory
-        # Note: Always run walk-forward tests WITHOUT trailing entry/live exit for speed
+        # Build command - run from backtests directory.
+        # By default this matches live execution path (trailing entry + live exit ON).
         cmd = [
             sys.executable,
             "run_walk_forward_backtest.py",
@@ -159,9 +163,9 @@ class CoinWalkForwardRunner:
             coin,
             "--json-output",
             "--use-trailing-entry",
-            "false",
+            "true" if self.use_trailing_entry else "false",
             "--use-live-exit",
-            "false",
+            "true" if self.use_live_exit else "false",
         ]
 
         if self.leverage:
@@ -519,6 +523,18 @@ def main():
         default="backtests/to_test.json",
         help="JSON file with coin list. Default: backtests/to_test.json",
     )
+    parser.add_argument(
+        "--use-trailing-entry",
+        type=str,
+        default="true",
+        help="Use trailing entry in subprocess walk-forward runs (true/false). Default: true",
+    )
+    parser.add_argument(
+        "--use-live-exit",
+        type=str,
+        default="true",
+        help="Use live exit emulation in subprocess walk-forward runs (true/false). Default: true",
+    )
     args = parser.parse_args()
 
     # Validate dates
@@ -540,6 +556,9 @@ def main():
     print(f"Loaded {len(coins)} coins from {args.coins_file}")
 
     # Run
+    use_trailing_entry = args.use_trailing_entry.lower() in ("true", "1", "yes")
+    use_live_exit = args.use_live_exit.lower() in ("true", "1", "yes")
+
     runner = CoinWalkForwardRunner(
         coins=coins,
         start_date=start_date,
@@ -547,6 +566,8 @@ def main():
         balance=args.balance,
         leverage=args.leverage,
         workers=args.workers,
+        use_trailing_entry=use_trailing_entry,
+        use_live_exit=use_live_exit,
     )
 
     asyncio.run(runner.run())

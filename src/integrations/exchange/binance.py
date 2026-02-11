@@ -16,11 +16,13 @@ All operations are async to avoid blocking the event loop.
 """
 
 import asyncio
+import random
 from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Callable, Awaitable, Literal, Union
 from dataclasses import dataclass
 from enum import Enum
+import time
 
 import pandas as pd
 from binance import AsyncClient, BinanceSocketManager
@@ -232,6 +234,9 @@ class BinanceClient:
         self.logger = logger
 
         self._client: Optional[AsyncClient] = None
+        self._client_lock = asyncio.Lock()
+        # Bound concurrent HTTP requests to reduce transport resets under heavy backtests.
+        self._request_semaphore = asyncio.Semaphore(6)
         self._markets_cache: Dict[str, SymbolInfo] = {}
         self._funding_intervals: Dict[str, int] = {}
         self._is_connected = False
@@ -274,14 +279,72 @@ class BinanceClient:
 
     async def _get_client(self) -> AsyncClient:
         """Get or create async client."""
-        if self._client is None:
-            self._client = await AsyncClient.create(
-                api_key=self.api_key or "",
-                api_secret=self.api_secret or "",
-                testnet=self.testnet,
-                requests_params={"timeout": 60},  # Increased from 30 to 60 seconds
-            )
-        return self._client
+        async with self._client_lock:
+            if self._client is None:
+                try:
+                    # Default bootstrap path from python-binance (uses spot ping/time).
+                    self._client = await AsyncClient.create(
+                        api_key=self.api_key or "",
+                        api_secret=self.api_secret or "",
+                        testnet=self.testnet,
+                        requests_params={"timeout": 60},  # Increased from 30 to 60 seconds
+                    )
+                except Exception as exc:
+                    # Some environments cannot resolve api.binance.com while futures endpoints
+                    # (fapi.binance.com / testnet.binancefuture.com) are available.
+                    # Fallback to futures-only bootstrap to avoid hard dependency on spot DNS.
+                    err = str(exc).lower()
+                    spot_dns_issue = "api.binance.com" in err or "nodename nor servname" in err
+                    if not spot_dns_issue:
+                        raise
+
+                    self.logger.warning(
+                        f"Spot API bootstrap failed ({exc}). "
+                        "Falling back to futures-only bootstrap."
+                    )
+
+                    client = AsyncClient(
+                        api_key=self.api_key or "",
+                        api_secret=self.api_secret or "",
+                        testnet=self.testnet,
+                        requests_params={"timeout": 60},
+                    )
+                    # Keep timestamp offset for signed futures requests.
+                    server_time = await client.futures_time()
+                    client.timestamp_offset = server_time["serverTime"] - int(time.time() * 1000)
+                    self._client = client
+            return self._client
+
+    def _is_transient_network_error(self, error: Exception) -> bool:
+        """Best-effort classification for retryable transport/network failures."""
+        msg = str(error).lower()
+        transient_markers = (
+            "closing transport",
+            "connection reset",
+            "server disconnected",
+            "cannot connect to host",
+            "temporarily unavailable",
+            "connector is closed",
+            "broken pipe",
+        )
+        return any(marker in msg for marker in transient_markers)
+
+    async def _invalidate_client(self, reason: str) -> None:
+        """
+        Safely drop current client so next request recreates a fresh connection pool.
+        """
+        async with self._client_lock:
+            if self._client is None:
+                return
+
+            self.logger.warning(f"Resetting Binance HTTP client ({reason})")
+            client = self._client
+            self._client = None
+            try:
+                await client.close_connection()
+            except Exception:
+                # Ignore close errors - we are already in recovery path.
+                pass
 
     async def connect(self) -> None:
         """Connect and load markets."""
@@ -511,7 +574,6 @@ class BinanceClient:
         :param max_retries: Maximum retry attempts for transient failures
         :return: DataFrame with OHLCV data
         """
-        client = await self._get_client()
         binance_symbol = self._symbol_to_binance(symbol)
 
         # Ensure dates are UTC for timestamp conversion
@@ -540,14 +602,16 @@ class BinanceClient:
                     # Rate limiting - wait for token before making request
                     # OHLCV requests have weight of 5
                     await self._rate_limiter.acquire(weight=5)
+                    client = await self._get_client()
 
-                    candles = await client.futures_klines(
-                        symbol=binance_symbol,
-                        interval=interval,
-                        startTime=current_since,
-                        endTime=end_timestamp,
-                        limit=limit,
-                    )
+                    async with self._request_semaphore:
+                        candles = await client.futures_klines(
+                            symbol=binance_symbol,
+                            interval=interval,
+                            startTime=current_since,
+                            endTime=end_timestamp,
+                            limit=limit,
+                        )
                     break  # Success, exit retry loop
 
                 except (asyncio.TimeoutError, TimeoutError) as e:
@@ -559,6 +623,7 @@ class BinanceClient:
                         f"retrying in {wait_time}s..."
                     )
                     await asyncio.sleep(wait_time)
+                    await self._invalidate_client(reason=f"timeout while fetching {symbol}")
 
                 except BinanceAPIException as e:
                     # Rate limit error - wait longer
@@ -576,11 +641,22 @@ class BinanceClient:
 
                 except Exception as e:
                     last_error = e
-                    self.logger.warning(
-                        f"Error fetching OHLCV for {symbol}: {repr(e)}, "
-                        f"attempt {attempt + 1}/{max_retries}"
-                    )
-                    await asyncio.sleep((attempt + 1) * 2)
+                    if self._is_transient_network_error(e):
+                        wait_time = min(20.0, (2 ** attempt) + random.uniform(0.2, 1.0))
+                        self.logger.warning(
+                            f"Transient network error fetching OHLCV for {symbol}: {repr(e)} | "
+                            f"attempt {attempt + 1}/{max_retries}, retrying in {wait_time:.1f}s"
+                        )
+                        await self._invalidate_client(
+                            reason=f"transient network error while fetching {symbol}"
+                        )
+                        await asyncio.sleep(wait_time)
+                    else:
+                        self.logger.warning(
+                            f"Error fetching OHLCV for {symbol}: {repr(e)}, "
+                            f"attempt {attempt + 1}/{max_retries}"
+                        )
+                        await asyncio.sleep((attempt + 1) * 2)
 
             # Check if all retries failed
             if candles is None:

@@ -85,6 +85,15 @@ class Settings:
     # Beta settings
     MAX_BETA: float = 2.0
     MIN_BETA: float = 0.5
+    ENABLE_BETA_DRIFT_GUARD: bool = True
+    BETA_DRIFT_SHORT_DAYS: int = 3
+    BETA_DRIFT_LONG_DAYS: int = 9
+    BETA_DRIFT_MAX_RELATIVE: float = 0.35
+
+    # Multi-window stability filter (pass N of M windows)
+    ENABLE_STABILITY_FILTER: bool = True
+    STABILITY_WINDOWS_DAYS: list[int] = [3, 6, 9]
+    STABILITY_MIN_PASS_WINDOWS: int = 2
 
     # Hurst settings
     HURST_THRESHOLD: float = 0.45  # Максимальный Hurst для спрэдов (вход)
@@ -240,6 +249,32 @@ class Settings:
         # Beta
         self.MIN_BETA = float(os.getenv("MIN_BETA", "0.5"))
         self.MAX_BETA = float(os.getenv("MAX_BETA", "2"))
+        self.ENABLE_BETA_DRIFT_GUARD = (
+            os.getenv("ENABLE_BETA_DRIFT_GUARD", "true").lower() == "true"
+        )
+        self.BETA_DRIFT_SHORT_DAYS = int(os.getenv("BETA_DRIFT_SHORT_DAYS", "3"))
+        self.BETA_DRIFT_LONG_DAYS = int(os.getenv("BETA_DRIFT_LONG_DAYS", "9"))
+        self.BETA_DRIFT_MAX_RELATIVE = float(
+            os.getenv("BETA_DRIFT_MAX_RELATIVE", "0.35")
+        )
+
+        self.ENABLE_STABILITY_FILTER = (
+            os.getenv("ENABLE_STABILITY_FILTER", "true").lower() == "true"
+        )
+        stability_windows_raw = os.getenv("STABILITY_WINDOWS_DAYS", "3,6,9")
+        try:
+            self.STABILITY_WINDOWS_DAYS = [
+                int(part.strip())
+                for part in stability_windows_raw.split(",")
+                if part.strip()
+            ]
+        except ValueError:
+            self.STABILITY_WINDOWS_DAYS = [3, 6, 9]
+        if not self.STABILITY_WINDOWS_DAYS:
+            self.STABILITY_WINDOWS_DAYS = [3, 6, 9]
+        self.STABILITY_MIN_PASS_WINDOWS = int(
+            os.getenv("STABILITY_MIN_PASS_WINDOWS", "2")
+        )
         # Hurst
         self.HURST_THRESHOLD = float(os.getenv("HURST_THRESHOLD", "0.45"))
         self.HURST_WATCH_THRESHOLD = float(os.getenv("HURST_WATCH_THRESHOLD", "0.46"))
@@ -409,6 +444,16 @@ class Settings:
         logger.info("📉 Beta Settings:")
         logger.info(f"  MIN_BETA: {self.MIN_BETA}")
         logger.info(f"  MAX_BETA: {self.MAX_BETA}")
+        logger.info(f"  ENABLE_BETA_DRIFT_GUARD: {self.ENABLE_BETA_DRIFT_GUARD}")
+        logger.info(
+            f"  BETA_DRIFT_WINDOWS_DAYS: {self.BETA_DRIFT_SHORT_DAYS}/{self.BETA_DRIFT_LONG_DAYS}"
+        )
+        logger.info(f"  BETA_DRIFT_MAX_RELATIVE: {self.BETA_DRIFT_MAX_RELATIVE}")
+        logger.info(f"  ENABLE_STABILITY_FILTER: {self.ENABLE_STABILITY_FILTER}")
+        logger.info(f"  STABILITY_WINDOWS_DAYS: {self.STABILITY_WINDOWS_DAYS}")
+        logger.info(
+            f"  STABILITY_MIN_PASS_WINDOWS: {self.STABILITY_MIN_PASS_WINDOWS}"
+        )
         logger.info("-" * 40)
         logger.info("🔬 Hurst Settings:")
         logger.info(f"  HURST_THRESHOLD: {self.HURST_THRESHOLD}")

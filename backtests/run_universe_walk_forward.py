@@ -19,10 +19,12 @@ import argparse
 import asyncio
 import json
 import sys
+import time
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Literal
 
 # Add the parent directory to sys.path so we can import from src
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -35,13 +37,132 @@ from src.domain.screener.hurst_filter import HurstFilterService
 from src.domain.screener.adf_filter import ADFFilterService
 from src.domain.screener.halflife_filter import HalfLifeFilterService
 from src.infra.container import Container
+from src.domain.utils import get_timeframe_minutes
 
+import run_backtest as run_backtest_module
 from run_backtest import (
     BacktestConfig,
     BacktestResult,
     StatArbBacktest,
     Trade,
 )
+
+
+class _SilentLogger:
+    """No-op logger for high-volume inner backtests."""
+
+    def _noop(self, *args, **kwargs):
+        return None
+
+    def __getattr__(self, _name):
+        return self._noop
+
+
+class _InMemoryOHLCVCacheLoader:
+    """
+    Lightweight in-memory cache wrapper for AsyncDataLoaderService.
+
+    Reuses identical OHLCV requests across many per-coin backtests in a WF run.
+    """
+
+    def __init__(self, base_loader: AsyncDataLoaderService):
+        self._base_loader = base_loader
+        self._bulk_cache: Dict[Tuple[str, str, str, str], Any] = {}
+        self._single_cache: Dict[Tuple[str, str, int, str, str], Any] = {}
+
+    @staticmethod
+    def _dt_key(value: Optional[datetime]) -> str:
+        if value is None:
+            return ""
+        return value.isoformat()
+
+    @staticmethod
+    def _safe_copy(df):
+        return df.copy(deep=True) if hasattr(df, "copy") else df
+
+    async def load_ohlcv_bulk(
+        self,
+        symbols: List[str],
+        start_time: datetime,
+        end_time: datetime,
+        batch_size: int = 10,
+        timeframe: str = "15m",
+    ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        missing: List[str] = []
+        start_key = self._dt_key(start_time)
+        end_key = self._dt_key(end_time)
+
+        for symbol in symbols:
+            key = (symbol, timeframe, start_key, end_key)
+            cached = self._bulk_cache.get(key)
+            if cached is not None:
+                result[symbol] = self._safe_copy(cached)
+            else:
+                missing.append(symbol)
+
+        if missing:
+            fetched = await self._base_loader.load_ohlcv_bulk(
+                symbols=missing,
+                start_time=start_time,
+                end_time=end_time,
+                batch_size=batch_size,
+                timeframe=timeframe,
+            )
+            for symbol in missing:
+                key = (symbol, timeframe, start_key, end_key)
+                df = fetched.get(symbol)
+                if df is None:
+                    continue
+                self._bulk_cache[key] = self._safe_copy(df)
+                result[symbol] = self._safe_copy(df)
+
+        return result
+
+    async def load_ohlcv_with_cache(
+        self,
+        symbol: str,
+        num_bars: int,
+        timeframe: str = "15m",
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ):
+        key = (
+            symbol,
+            timeframe,
+            int(num_bars),
+            self._dt_key(start_time),
+            self._dt_key(end_time),
+        )
+        cached = self._single_cache.get(key)
+        if cached is not None:
+            return self._safe_copy(cached)
+
+        df = await self._base_loader.load_ohlcv_with_cache(
+            symbol=symbol,
+            num_bars=num_bars,
+            timeframe=timeframe,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        self._single_cache[key] = self._safe_copy(df)
+        return self._safe_copy(df)
+
+
+_ORIGINAL_RUN_BACKTEST_PRINT = getattr(run_backtest_module, "print", print)
+
+
+def _set_run_backtest_print_enabled(enabled: bool) -> None:
+    """
+    Enable/disable noisy print output inside run_backtest module.
+
+    Using redirect_stdout per task is not safe with parallel asyncio workers because
+    stdout is process-global and tasks can interleave while awaiting.
+    """
+    if enabled:
+        run_backtest_module.print = _ORIGINAL_RUN_BACKTEST_PRINT
+    else:
+        run_backtest_module.print = lambda *args, **kwargs: None
 
 
 # =============================================================================
@@ -160,6 +281,8 @@ class UniverseWalkForwardRunner:
         kill_loss_streak: int = 3,
         kill_negative_r: float = 1.0,
         workers: int = 10,
+        allow_negative_train_selection: bool = False,
+        verbose_coin_backtests: bool = False,
     ):
         self.services = services
         self.base_config = base_config
@@ -172,9 +295,91 @@ class UniverseWalkForwardRunner:
         self.kill_loss_streak = kill_loss_streak
         self.kill_negative_r = kill_negative_r
         self.workers = workers
+        self.allow_negative_train_selection = allow_negative_train_selection
+        self.verbose_coin_backtests = verbose_coin_backtests
+
+        # Silence inner backtest logs by default to keep universe WF readable/fast.
+        _set_run_backtest_print_enabled(self.verbose_coin_backtests)
+
+        # Shared cached OHLCV loader to avoid repeated DB/cache reads
+        # for identical symbol/window requests across coins.
+        loader_logger = (
+            self.services["logger"] if self.verbose_coin_backtests else _SilentLogger()
+        )
+        shared_loader = AsyncDataLoaderService(
+            logger=loader_logger,
+            exchange_client=self.services["exchange"],
+            ohlcv_repository=self.services["ohlcv_repository"],
+        )
+        self._cached_data_loader = _InMemoryOHLCVCacheLoader(shared_loader)
 
         self.steps: List[WFStepResult] = []
         self._print_lock = asyncio.Lock()
+
+    def _base_r_value(self) -> float:
+        """Base risk unit for kill-switch thresholding."""
+        if self.base_config.position_size_usdt > 0:
+            return self.base_config.position_size_usdt
+        return self.base_config.initial_balance * self.base_config.position_size_pct
+
+    def _apply_online_kill_switch(
+        self,
+        trades: List[Trade],
+    ) -> Tuple[List[Trade], bool, Optional[str]]:
+        """
+        Apply kill-switch online over trade sequence.
+
+        Once triggered, all subsequent trades are ignored (coin disabled until window end).
+        """
+        if not trades:
+            return trades, False, None
+
+        ordered_trades = sorted(trades, key=lambda t: t.exit_time)
+        kept: List[Trade] = []
+        running_pnl = 0.0
+        loss_streak = 0
+        r_value = max(1e-6, self._base_r_value())
+        kill_floor = -self.kill_negative_r * r_value
+
+        for trade in ordered_trades:
+            kept.append(trade)
+            running_pnl += trade.pnl
+
+            if trade.pnl < 0:
+                loss_streak += 1
+            else:
+                loss_streak = 0
+
+            if loss_streak >= self.kill_loss_streak:
+                return kept, True, f"LOSS_STREAK_{loss_streak}"
+            if running_pnl < kill_floor:
+                return kept, True, f"NEGATIVE_PNL_{running_pnl:.0f}"
+
+        return kept, False, None
+
+    def _rebuild_trade_metrics(
+        self,
+        trades: List[Trade],
+    ) -> Tuple[float, int, int, float, float]:
+        """Recalculate net pnl/trades/winrate/max drawdown from trade list."""
+        if not trades:
+            return 0.0, 0, 0, 0.0, 0.0
+
+        net_pnl = sum(t.pnl for t in trades)
+        total_trades = len(trades)
+        winning_trades = sum(1 for t in trades if t.pnl > 0)
+        win_rate = (winning_trades / total_trades * 100.0) if total_trades > 0 else 0.0
+
+        # Trade-level equity curve drawdown
+        cumulative = 0.0
+        peak = 0.0
+        max_drawdown = 0.0
+        for trade in trades:
+            cumulative += trade.pnl
+            peak = max(peak, cumulative)
+            max_drawdown = min(max_drawdown, cumulative - peak)
+
+        return net_pnl, total_trades, winning_trades, win_rate, max_drawdown
 
     async def run(
         self,
@@ -189,6 +394,20 @@ class UniverseWalkForwardRunner:
         print(f"   TopK: {self.top_k} | MinTrades: {self.min_trades_train}")
         print(f"   Rank Metric: {self.rank_metric}")
         print(f"   Kill Switch: lossStreak >= {self.kill_loss_streak} or PnL < -{self.kill_negative_r}R")
+        print(
+            f"   Selection: allow_negative_train={'ON' if self.allow_negative_train_selection else 'OFF'}"
+        )
+        print(f"   Parallel workers: {self.workers}")
+        print(
+            f"   Execution Path: trailing={'ON' if self.base_config.use_trailing_entry else 'OFF'}, "
+            f"live_exit={'ON' if self.base_config.use_live_exit else 'OFF'}"
+        )
+        print(
+            f"   1m Data Loading: {'LAZY (on-demand)' if self.base_config.lazy_load_minute_data else 'EAGER (preload all)'}"
+        )
+        print(
+            f"   Coin backtest logs: {'VERBOSE' if self.verbose_coin_backtests else 'QUIET'}"
+        )
         print(f"   Coins: {len(self.coins)}")
         print("=" * 100 + "\n")
 
@@ -263,10 +482,13 @@ class UniverseWalkForwardRunner:
         trade_end: datetime,
     ) -> WFStepResult:
         """Run a single WF step: train → select → trade."""
+        step_started = time.perf_counter()
 
         # Phase 1: Train - run backtest for ALL coins
         print(f"\n📈 TRAIN PHASE: Testing {len(self.coins)} coins...")
+        train_started = time.perf_counter()
         train_results = await self._run_train_phase(train_start, train_end)
+        train_elapsed = time.perf_counter() - train_started
 
         # Phase 2: Select - filter and rank coins
         selected_coins, selection_scores = self._select_coins(train_results)
@@ -274,13 +496,21 @@ class UniverseWalkForwardRunner:
 
         # Phase 3: Trade - run backtest for selected coins only
         print(f"\n📊 TRADE PHASE: Testing {len(selected_coins)} selected coins...")
+        trade_started = time.perf_counter()
         trade_results = await self._run_trade_phase(
             trade_start, trade_end, selected_coins
         )
+        trade_elapsed = time.perf_counter() - trade_started
 
         # Calculate portfolio metrics
         portfolio_pnl = sum(r.net_pnl for r in trade_results)
         portfolio_dd = min((r.max_drawdown for r in trade_results), default=0)
+
+        step_elapsed = time.perf_counter() - step_started
+        print(
+            f"⏱️ Step timing: total={step_elapsed:.1f}s | "
+            f"train={train_elapsed:.1f}s | trade={trade_elapsed:.1f}s"
+        )
 
         return WFStepResult(
             step_num=step_num,
@@ -304,9 +534,10 @@ class UniverseWalkForwardRunner:
     ) -> List[CoinTrainResult]:
         """Run backtest for all coins in parallel."""
         semaphore = asyncio.Semaphore(self.workers)
-        results = []
 
-        async def run_coin(coin: str, idx: int) -> Optional[CoinTrainResult]:
+        async def run_coin(
+            coin: str, idx: int
+        ) -> Tuple[Literal["with_trades", "no_trades", "error"], Optional[CoinTrainResult]]:
             async with semaphore:
                 try:
                     result = await self._run_single_coin_backtest(
@@ -321,11 +552,16 @@ class UniverseWalkForwardRunner:
                             dd_divisor = max(1.0, abs(result.max_drawdown))
                             score = result.total_pnl / dd_divisor
 
+                        # Trade records include net PnL (after fees/funding).
+                        # Funding is observable separately; exact fee decomposition is not available here.
+                        estimated_costs = sum(max(0.0, -t.funding_pnl) for t in result.trades)
+                        gross_pnl_estimated = result.total_pnl + estimated_costs
+
                         train_result = CoinTrainResult(
                             coin=coin,
                             symbol=f"{coin}/USDT:USDT",
                             net_pnl=result.total_pnl,
-                            gross_pnl=sum(t.pnl + abs(t.funding_pnl) for t in result.trades),
+                            gross_pnl=gross_pnl_estimated,
                             total_trades=result.total_trades,
                             winning_trades=result.winning_trades,
                             win_rate=result.win_rate,
@@ -334,7 +570,7 @@ class UniverseWalkForwardRunner:
                             sharpe_ratio=result.sharpe_ratio,
                             profit_factor=result.profit_factor,
                             avg_trade_pnl=result.avg_trade_pnl,
-                            costs=result.total_pnl - sum(t.pnl for t in result.trades),
+                            costs=estimated_costs,
                             score=score,
                             trades=result.trades,
                         )
@@ -348,23 +584,28 @@ class UniverseWalkForwardRunner:
                                 f"Score={score:.2f}"
                             )
 
-                        return train_result
+                        return "with_trades", train_result
                     else:
                         async with self._print_lock:
                             print(f"  [{idx}/{len(self.coins)}] ⚪ {coin}: No trades")
-                        return None
+                        return "no_trades", None
 
                 except Exception as e:
                     async with self._print_lock:
                         print(f"  [{idx}/{len(self.coins)}] ❌ {coin}: {e}")
-                    return None
+                    return "error", None
 
         # Run all coins in parallel
         tasks = [run_coin(coin, i) for i, coin in enumerate(self.coins, 1)]
         coin_results = await asyncio.gather(*tasks)
 
-        # Filter out None results
-        results = [r for r in coin_results if r is not None]
+        no_trades_count = sum(1 for status, _ in coin_results if status == "no_trades")
+        error_count = sum(1 for status, _ in coin_results if status == "error")
+        results = [r for status, r in coin_results if status == "with_trades" and r is not None]
+        print(
+            f"  ↳ Train diagnostics: with_trades={len(results)} | "
+            f"no_trades={no_trades_count} | errors={error_count}"
+        )
 
         return results
 
@@ -382,28 +623,62 @@ class UniverseWalkForwardRunner:
 
         Ranking by score (netPnL / max(1, abs(maxDD)) or netSharpe).
         """
-        # Filter
-        filtered = [
-            r for r in train_results
+        if not train_results:
+            return [], {}
+
+        selected: List[CoinTrainResult] = []
+        selected_set: set[str] = set()
+
+        def _rank(items: List[CoinTrainResult]) -> List[CoinTrainResult]:
+            return sorted(items, key=lambda r: r.score, reverse=True)
+
+        def _add_ranked(items: List[CoinTrainResult]) -> int:
+            added = 0
+            for item in _rank(items):
+                if item.coin in selected_set:
+                    continue
+                selected.append(item)
+                selected_set.add(item.coin)
+                added += 1
+                if len(selected) >= self.top_k:
+                    break
+            return added
+
+        strict_positive = [
+            r
+            for r in train_results
             if r.total_trades >= self.min_trades_train and r.net_pnl > 0
         ]
+        strict_added = _add_ranked(strict_positive)
 
-        if not filtered:
-            # Fallback: relax netPnl > 0 requirement
-            filtered = [
-                r for r in train_results
-                if r.total_trades >= self.min_trades_train
+        # For sparse strategies, fill remaining slots with profitable candidates
+        # that have at least one trade in train.
+        if len(selected) < self.top_k:
+            relaxed_positive = [
+                r for r in train_results if r.total_trades >= 1 and r.net_pnl > 0
             ]
+            relaxed_added = _add_ranked(relaxed_positive)
+            if relaxed_added > 0 and self.min_trades_train > 1:
+                print(
+                    f"  ℹ️ Selection fallback: backfilled topK with profitable coins "
+                    f"(trades>=1) due sparse strict candidates (strict={strict_added})."
+                )
 
-        if not filtered:
-            # Fallback: relax minTrades requirement
-            filtered = [r for r in train_results if r.total_trades > 0]
+        # Optional negative-PnL fallback (explicitly opt-in).
+        if len(selected) < self.top_k and self.allow_negative_train_selection:
+            non_positive = [r for r in train_results if r.total_trades >= 1]
+            negative_added = _add_ranked(non_positive)
+            if negative_added > 0:
+                print(
+                    "  ⚠️ Selection fallback: included non-positive train PnL candidates "
+                    "(--allow-negative-train-selection=true)."
+                )
 
-        # Sort by score descending
-        filtered.sort(key=lambda r: r.score, reverse=True)
-
-        # Select topK
-        selected = filtered[:self.top_k]
+        if not selected:
+            print(
+                "  ⚠️ Selection produced 0 candidates: no train-window trades passed "
+                "current criteria."
+            )
 
         coins = [r.coin for r in selected]
         scores = {r.coin: r.score for r in selected}
@@ -432,48 +707,42 @@ class UniverseWalkForwardRunner:
                         was_killed = False
                         kill_reason = None
 
+                        effective_trades = result.trades
                         if result.trades:
-                            # Check loss streak
-                            loss_streak = 0
-                            max_loss_streak = 0
-                            for trade in result.trades:
-                                if trade.pnl < 0:
-                                    loss_streak += 1
-                                    max_loss_streak = max(max_loss_streak, loss_streak)
-                                else:
-                                    loss_streak = 0
+                            (
+                                effective_trades,
+                                was_killed,
+                                kill_reason,
+                            ) = self._apply_online_kill_switch(result.trades)
 
-                            if max_loss_streak >= self.kill_loss_streak:
-                                was_killed = True
-                                kill_reason = f"LOSS_STREAK_{max_loss_streak}"
-
-                            # Check negative PnL threshold
-                            # -1R means losing more than 1x average trade size
-                            avg_size = self.base_config.initial_balance * self.base_config.position_size_pct
-                            if result.total_pnl < -self.kill_negative_r * avg_size:
-                                was_killed = True
-                                kill_reason = f"NEGATIVE_PNL_{result.total_pnl:.0f}"
+                        (
+                            net_pnl,
+                            total_trades,
+                            winning_trades,
+                            win_rate,
+                            max_drawdown,
+                        ) = self._rebuild_trade_metrics(effective_trades)
 
                         trade_result = CoinTradeResult(
                             coin=coin,
                             symbol=f"{coin}/USDT:USDT",
-                            net_pnl=result.total_pnl,
-                            total_trades=result.total_trades,
-                            winning_trades=result.winning_trades,
-                            win_rate=result.win_rate,
-                            max_drawdown=result.max_drawdown,
+                            net_pnl=net_pnl,
+                            total_trades=total_trades,
+                            winning_trades=winning_trades,
+                            win_rate=win_rate,
+                            max_drawdown=max_drawdown,
                             was_killed=was_killed,
                             kill_reason=kill_reason,
-                            trades=result.trades,
+                            trades=effective_trades,
                         )
 
                         async with self._print_lock:
-                            emoji = "🟢" if result.total_pnl > 0 else "🔴"
+                            emoji = "🟢" if net_pnl > 0 else "🔴"
                             kill_str = f" ⚠️ KILLED: {kill_reason}" if was_killed else ""
                             print(
                                 f"  [{idx}/{len(selected_coins)}] {emoji} {coin}: "
-                                f"PnL=${result.total_pnl:+.2f} | "
-                                f"Trades={result.total_trades}{kill_str}"
+                                f"PnL=${net_pnl:+.2f} | "
+                                f"Trades={total_trades}{kill_str}"
                             )
 
                         return trade_result
@@ -504,41 +773,133 @@ class UniverseWalkForwardRunner:
 
         return results
 
+    def _build_isolated_backtest_services(self) -> Dict[str, Any]:
+        """
+        Build per-run service instances.
+
+        Important: ZScoreService keeps internal EMA state for dynamic thresholds.
+        Reusing one instance across many coins/windows contaminates results.
+        """
+        settings = self.services["settings"]
+        logger = (
+            self.services["logger"]
+            if self.verbose_coin_backtests
+            else _SilentLogger()
+        )
+        return {
+            "settings": settings,
+            "data_loader": self._cached_data_loader,
+            "correlation_service": CorrelationService(
+                logger, settings.LOOKBACK_WINDOW_DAYS, settings.TIMEFRAME
+            ),
+            "z_score_service": ZScoreService(
+                logger,
+                settings.LOOKBACK_WINDOW_DAYS,
+                settings.TIMEFRAME,
+                settings.Z_ENTRY_THRESHOLD,
+                settings.Z_TP_THRESHOLD,
+                settings.Z_SL_THRESHOLD,
+                adaptive_percentile=settings.ADAPTIVE_PERCENTILE,
+                dynamic_threshold_window=settings.DYNAMIC_THRESHOLD_WINDOW_BARS,
+                threshold_ema_alpha_up=settings.THRESHOLD_EMA_ALPHA_UP,
+                threshold_ema_alpha_down=settings.THRESHOLD_EMA_ALPHA_DOWN,
+            ),
+            "volatility_filter_service": VolatilityFilterService(
+                logger=logger,
+                primary_pair=settings.PRIMARY_PAIR,
+                timeframe=settings.TIMEFRAME,
+                volatility_window=settings.VOLATILITY_WINDOW,
+                volatility_threshold=settings.VOLATILITY_THRESHOLD,
+                crash_window=settings.VOLATILITY_CRASH_WINDOW,
+                crash_threshold=settings.VOLATILITY_CRASH_THRESHOLD,
+            ),
+            "hurst_filter_service": HurstFilterService(
+                logger=logger,
+                hurst_threshold=settings.HURST_THRESHOLD,
+                lookback_candles=settings.HURST_LOOKBACK_CANDLES,
+            ),
+            "adf_filter_service": ADFFilterService(
+                logger=logger,
+                pvalue_threshold=settings.ADF_PVALUE_THRESHOLD,
+                lookback_candles=settings.ADF_LOOKBACK_CANDLES,
+            ),
+            "halflife_filter_service": HalfLifeFilterService(
+                logger=logger,
+                max_bars=settings.HALFLIFE_MAX_BARS,
+                lookback_candles=settings.HALFLIFE_LOOKBACK_CANDLES,
+            ),
+            "funding_cache": self.services.get("funding_cache"),
+        }
+
 
     async def _run_single_coin_backtest(
         self,
         coin: str,
         start_date: datetime,
         end_date: datetime,
-    ) -> Optional[BacktestResult]:
+        ) -> Optional[BacktestResult]:
         """Run backtest for a single coin."""
         symbol = f"{coin}/USDT:USDT"
+        effective_end = end_date - timedelta(seconds=1)
 
         # Create config for this coin
         config = BacktestConfig(
             initial_balance=self.base_config.initial_balance,
             position_size_pct=self.base_config.position_size_pct,
+            position_size_usdt=self.base_config.position_size_usdt,
             max_spreads=1,
             leverage=self.base_config.leverage,
             z_entry_threshold=self.base_config.z_entry_threshold,
             z_tp_threshold=self.base_config.z_tp_threshold,
             z_sl_threshold=self.base_config.z_sl_threshold,
             min_correlation=self.base_config.min_correlation,
+            min_beta=self.base_config.min_beta,
+            max_beta=self.base_config.max_beta,
+            correlation_exit_threshold=self.base_config.correlation_exit_threshold,
+            correlation_watch_threshold=self.base_config.correlation_watch_threshold,
+            cooldown_bars=self.base_config.cooldown_bars,
+            max_position_bars=self.base_config.max_position_bars,
+            use_dynamic_tp=self.base_config.use_dynamic_tp,
+            hurst_trending_for_exit=self.base_config.hurst_trending_for_exit,
+            hurst_confirm_scans=self.base_config.hurst_confirm_scans,
+            adf_exit_confirm_scans=self.base_config.adf_exit_confirm_scans,
+            halflife_exit_confirm_scans=self.base_config.halflife_exit_confirm_scans,
+            halflife_max_bars=self.base_config.halflife_max_bars,
+            enable_beta_drift_guard=self.base_config.enable_beta_drift_guard,
+            beta_drift_short_days=self.base_config.beta_drift_short_days,
+            beta_drift_long_days=self.base_config.beta_drift_long_days,
+            beta_drift_max_relative=self.base_config.beta_drift_max_relative,
+            enable_stability_filter=self.base_config.enable_stability_filter,
+            stability_windows_days=self.base_config.stability_windows_days,
+            stability_min_pass_windows=self.base_config.stability_min_pass_windows,
+            use_dynamic_position_size=self.base_config.use_dynamic_position_size,
+            target_halflife_bars=self.base_config.target_halflife_bars,
+            halflife_multiplier_min=self.base_config.halflife_multiplier_min,
+            halflife_multiplier_max=self.base_config.halflife_multiplier_max,
+            use_trailing_sl=self.base_config.use_trailing_sl,
+            trailing_sl_offset=self.base_config.trailing_sl_offset,
+            trailing_sl_activation=self.base_config.trailing_sl_activation,
+            z_extreme_level=self.base_config.z_extreme_level,
+            z_sl_extreme_offset=self.base_config.z_sl_extreme_offset,
             consistent_pairs=[symbol],
-            use_trailing_entry=False,  # Disable for speed
-            use_live_exit=False,  # Disable for speed
+            use_trailing_entry=self.base_config.use_trailing_entry,
+            use_live_exit=self.base_config.use_live_exit,
             use_funding_filter=self.base_config.use_funding_filter,
+            max_funding_cost_threshold=self.base_config.max_funding_cost_threshold,
             use_adf_filter=self.base_config.use_adf_filter,
+            adf_pvalue_threshold=self.base_config.adf_pvalue_threshold,
+            adf_lookback_candles=self.base_config.adf_lookback_candles,
+            trailing_pullback=self.base_config.trailing_pullback,
+            trailing_pullback_extreme=self.base_config.trailing_pullback_extreme,
+            trailing_timeout_minutes=self.base_config.trailing_timeout_minutes,
+            false_alarm_hysteresis=self.base_config.false_alarm_hysteresis,
         )
 
-        # Create backtester
-        backtester = StatArbBacktest(config=config, **self.services)
+        # Create backtester with isolated stateful services
+        local_services = self._build_isolated_backtest_services()
+        backtester = StatArbBacktest(config=config, **local_services)
 
-        try:
-            result = await backtester.run(start_date, end_date)
-            return result
-        except Exception:
-            return None
+        return await backtester.run(start_date, effective_end)
 
     def _print_step_summary(self, step: WFStepResult) -> None:
         """Print summary for a WF step."""
@@ -669,8 +1030,195 @@ class UniverseWalkForwardRunner:
             for coin, count in sorted(killed_coins.items(), key=lambda x: x[1], reverse=True):
                 print(f"  {coin:<15} | Killed {count} times")
 
+        best_period = self._build_best_coins_over_period(result, top_n=10)
+        if best_period:
+            print("\n" + "-" * 100)
+            print("BEST COINS OVER PERIOD (OOS shortlist)")
+            print("-" * 100)
+            for item in best_period:
+                print(
+                    f"  {item['coin']:<15} | "
+                    f"selection_rate={item['selection_rate']:.1%} | "
+                    f"trade_pnl=${item['trade_net_pnl']:+.2f} | "
+                    f"trades={item['trade_total_trades']}"
+                )
+        else:
+            print("\n" + "-" * 100)
+            print("BEST COINS OVER PERIOD (OOS shortlist)")
+            print("-" * 100)
+            print("  No positive out-of-sample coin results on selected windows.")
+
+        best_train = self._build_best_train_candidates_over_period(result, top_n=10)
+        if best_train:
+            print("\n" + "-" * 100)
+            print("BEST TRAIN CANDIDATES OVER PERIOD")
+            print("-" * 100)
+            for item in best_train:
+                print(
+                    f"  {item['coin']:<15} | "
+                    f"selection_rate={item['selection_rate']:.1%} | "
+                    f"train_pnl=${item['train_net_pnl']:+.2f} | "
+                    f"train_steps={item['train_steps_tested']}"
+                )
+
+        ranked_fallback = self._build_ranked_fallback_over_period(result, top_n=10)
+        if ranked_fallback:
+            print("\n" + "-" * 100)
+            print("RANKED FALLBACK OVER PERIOD")
+            print("-" * 100)
+            for item in ranked_fallback:
+                print(
+                    f"  {item['coin']:<15} | "
+                    f"selection_rate={item['selection_rate']:.1%} | "
+                    f"trade_pnl=${item['trade_net_pnl']:+.2f} | "
+                    f"train_pnl=${item['train_net_pnl']:+.2f} | "
+                    f"trade_trades={item['trade_total_trades']}"
+                )
+
+    def _build_coin_period_stats(self, result: UniverseWFResult) -> List[Dict[str, Any]]:
+        """Build per-coin aggregate stats across all WF steps."""
+        total_steps = max(1, len(result.steps))
+        stats: Dict[str, Dict[str, Any]] = {}
+
+        def ensure_coin(coin: str) -> Dict[str, Any]:
+            if coin not in stats:
+                stats[coin] = {
+                    "coin": coin,
+                    "train_steps_tested": 0,
+                    "train_net_pnl": 0.0,
+                    "train_avg_score_all": 0.0,
+                    "selected_steps": 0,
+                    "selection_rate": 0.0,
+                    "avg_train_score_selected": 0.0,
+                    "trade_steps": 0,
+                    "trade_total_trades": 0,
+                    "trade_winning_trades": 0,
+                    "trade_win_rate": 0.0,
+                    "trade_net_pnl": 0.0,
+                    "killed_count": 0,
+                }
+            return stats[coin]
+
+        for step in result.steps:
+            selected_set = set(step.selected_coins)
+            for train_result in step.train_results:
+                row = ensure_coin(train_result.coin)
+                row["train_steps_tested"] += 1
+                row["train_net_pnl"] += train_result.net_pnl
+                row["train_avg_score_all"] += train_result.score
+                if train_result.coin in selected_set:
+                    row["selected_steps"] += 1
+                    row["avg_train_score_selected"] += train_result.score
+
+            for trade_result in step.trade_results:
+                row = ensure_coin(trade_result.coin)
+                row["trade_steps"] += 1
+                row["trade_total_trades"] += trade_result.total_trades
+                row["trade_winning_trades"] += trade_result.winning_trades
+                row["trade_net_pnl"] += trade_result.net_pnl
+                if trade_result.was_killed:
+                    row["killed_count"] += 1
+
+        for row in stats.values():
+            if row["train_steps_tested"] > 0:
+                row["train_avg_score_all"] /= row["train_steps_tested"]
+            if row["selected_steps"] > 0:
+                row["avg_train_score_selected"] /= row["selected_steps"]
+            row["selection_rate"] = row["selected_steps"] / total_steps
+            if row["trade_total_trades"] > 0:
+                row["trade_win_rate"] = (
+                    row["trade_winning_trades"] / row["trade_total_trades"] * 100.0
+                )
+            else:
+                row["trade_win_rate"] = 0.0
+
+        return sorted(
+            stats.values(),
+            key=lambda r: (
+                r["selection_rate"],
+                r["trade_net_pnl"],
+                r["trade_total_trades"],
+            ),
+            reverse=True,
+        )
+
+    def _build_best_coins_over_period(
+        self, result: UniverseWFResult, top_n: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Build shortlist of best OOS (trade-window) coins across the full WF period.
+        """
+        period_stats = self._build_coin_period_stats(result)
+        filtered = [
+            row
+            for row in period_stats
+            if row["trade_total_trades"] > 0 and row["trade_net_pnl"] > 0
+        ]
+        filtered.sort(
+            key=lambda r: (
+                r["trade_net_pnl"],
+                r["trade_win_rate"],
+                r["selection_rate"],
+                r["trade_total_trades"],
+            ),
+            reverse=True,
+        )
+        return filtered[:top_n]
+
+    def _build_best_train_candidates_over_period(
+        self, result: UniverseWFResult, top_n: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Build train-window shortlist.
+
+        Useful when OOS shortlist is empty due very sparse signals.
+        """
+        period_stats = self._build_coin_period_stats(result)
+        filtered = [
+            row
+            for row in period_stats
+            if row["train_steps_tested"] > 0 and row["train_net_pnl"] > 0
+        ]
+        filtered.sort(
+            key=lambda r: (
+                r["selection_rate"],
+                r["train_net_pnl"],
+                r["avg_train_score_selected"],
+            ),
+            reverse=True,
+        )
+        return filtered[:top_n]
+
+    def _build_ranked_fallback_over_period(
+        self, result: UniverseWFResult, top_n: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Build always-available ranking list (including non-positive PnL).
+
+        Useful when strict OOS shortlist is empty in sparse/hostile regimes.
+        """
+        period_stats = self._build_coin_period_stats(result)
+        filtered = [row for row in period_stats if row["train_steps_tested"] > 0]
+        filtered.sort(
+            key=lambda r: (
+                r["selection_rate"],
+                r["trade_net_pnl"],
+                r["train_net_pnl"],
+                r["trade_total_trades"],
+            ),
+            reverse=True,
+        )
+        return filtered[:top_n]
+
     def save_results(self, result: UniverseWFResult, filepath: str) -> None:
         """Save results to JSON file."""
+        coin_period_stats = self._build_coin_period_stats(result)
+        best_coins = self._build_best_coins_over_period(result, top_n=20)
+        best_train_candidates = self._build_best_train_candidates_over_period(
+            result, top_n=20
+        )
+        ranked_fallback = self._build_ranked_fallback_over_period(result, top_n=20)
+
         data = {
             "metadata": {
                 "start_date": result.start_date.isoformat(),
@@ -687,6 +1235,10 @@ class UniverseWalkForwardRunner:
                 "max_portfolio_dd": result.max_portfolio_dd,
                 "coin_selection_turnover": result.coin_selection_turnover,
             },
+            "best_coins_over_period": best_coins,
+            "best_train_candidates_over_period": best_train_candidates,
+            "ranked_fallback_over_period": ranked_fallback,
+            "coin_period_stats": coin_period_stats,
             "steps": [
                 {
                     "step_num": s.step_num,
@@ -756,8 +1308,8 @@ Examples:
     parser.add_argument(
         "--minTradesTrain",
         type=int,
-        default=15,
-        help="Minimum trades in train phase to qualify. Default: 15",
+        default=1,
+        help="Minimum trades in train phase to qualify. Default: 1",
     )
     parser.add_argument(
         "--rankMetric",
@@ -796,8 +1348,52 @@ Examples:
         default=1.0,
         help="Kill coin if PnL < -N*R (R = avg position size). Default: 1.0",
     )
+    parser.add_argument(
+        "--use-trailing-entry",
+        type=str,
+        default="true",
+        help="Use trailing entry in helper backtests (true/false). Default: true",
+    )
+    parser.add_argument(
+        "--use-live-exit",
+        type=str,
+        default="true",
+        help="Use live-exit emulation (1m) in helper backtests (true/false). Default: true",
+    )
+    parser.add_argument(
+        "--lazy-minute-data",
+        type=str,
+        default="true",
+        help="Load 1m data lazily (on first watch/position) instead of eager preload (true/false). Default: true",
+    )
+    parser.add_argument(
+        "--min-universe-volume-usdt",
+        type=float,
+        default=0.0,
+        help="Optional 24h minimum volume filter for universe symbols. Default: 0 (disabled)",
+    )
+    parser.add_argument(
+        "--allow-negative-train-selection",
+        type=str,
+        default="false",
+        help="Allow fallback selection with non-positive train PnL (true/false). Default: false",
+    )
+    parser.add_argument(
+        "--verbose-coin-backtests",
+        type=str,
+        default="false",
+        help="Show full inner logs for each coin backtest (true/false). Default: false",
+    )
 
     args = parser.parse_args()
+
+    def _parse_bool(value: str, flag_name: str) -> bool:
+        normalized = value.strip().lower()
+        if normalized in ("1", "true", "yes", "y", "on"):
+            return True
+        if normalized in ("0", "false", "no", "n", "off"):
+            return False
+        raise ValueError(f"Invalid value for {flag_name}: {value!r}. Use true/false.")
 
     # Parse dates
     start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -805,6 +1401,9 @@ Examples:
         end_date = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     else:
         end_date = datetime.now(timezone.utc)
+    if start_date >= end_date:
+        print("Error: start date must be before end date")
+        sys.exit(1)
 
     # Load coins list
     coins_file = Path(args.coinsFile)
@@ -823,15 +1422,82 @@ Examples:
     logger = container.logger
 
     # Create base config
+    try:
+        use_trailing_entry = _parse_bool(args.use_trailing_entry, "--use-trailing-entry")
+        use_live_exit = _parse_bool(args.use_live_exit, "--use-live-exit")
+        lazy_minute_data = _parse_bool(args.lazy_minute_data, "--lazy-minute-data")
+        allow_negative_train_selection = _parse_bool(
+            args.allow_negative_train_selection, "--allow-negative-train-selection"
+        )
+        verbose_coin_backtests = _parse_bool(
+            args.verbose_coin_backtests, "--verbose-coin-backtests"
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+
+    # Match run_backtest.py pullback calibration for 1m pseudo-tick emulation.
+    timeframe_minutes = max(1, get_timeframe_minutes(settings.TIMEFRAME))
+    pullback_scale = math.sqrt(1.0 / timeframe_minutes)
+    trailing_pullback = math.floor(
+        settings.TRAILING_ENTRY_PULLBACK * pullback_scale * 100
+    ) / 100
+    trailing_pullback_extreme = math.floor(
+        settings.TRAILING_ENTRY_PULLBACK_EXTREME * pullback_scale * 100
+    ) / 100
+
     base_config = BacktestConfig(
         initial_balance=args.balance,
+        position_size_usdt=settings.POSITION_SIZE_USDT,
+        position_size_pct=(
+            settings.POSITION_SIZE_USDT / args.balance if args.balance > 0 else 0.01
+        ),
         leverage=args.leverage or settings.EXCHANGE_DEFAULT_LEVERAGE,
+        max_spreads=settings.MAX_OPEN_SPREADS,
         z_entry_threshold=settings.Z_ENTRY_THRESHOLD,
         z_tp_threshold=settings.Z_TP_THRESHOLD,
         z_sl_threshold=settings.Z_SL_THRESHOLD,
         min_correlation=settings.MIN_CORRELATION,
+        min_beta=settings.MIN_BETA,
+        max_beta=settings.MAX_BETA,
+        correlation_exit_threshold=settings.CORRELATION_EXIT_THRESHOLD,
+        correlation_watch_threshold=settings.CORRELATION_WATCH_THRESHOLD,
+        cooldown_bars=settings.COOLDOWN_BARS,
+        max_position_bars=settings.MAX_POSITION_BARS,
+        use_dynamic_tp=True,
+        hurst_trending_for_exit=settings.HURST_TRENDING_FOR_EXIT,
+        hurst_confirm_scans=settings.HURST_TRENDING_CONFIRM_SCANS,
+        adf_exit_confirm_scans=settings.ADF_EXIT_CONFIRM_SCANS,
+        halflife_exit_confirm_scans=settings.HALFLIFE_EXIT_CONFIRM_SCANS,
+        halflife_max_bars=settings.HALFLIFE_MAX_BARS,
+        enable_beta_drift_guard=settings.ENABLE_BETA_DRIFT_GUARD,
+        beta_drift_short_days=settings.BETA_DRIFT_SHORT_DAYS,
+        beta_drift_long_days=settings.BETA_DRIFT_LONG_DAYS,
+        beta_drift_max_relative=settings.BETA_DRIFT_MAX_RELATIVE,
+        enable_stability_filter=settings.ENABLE_STABILITY_FILTER,
+        stability_windows_days=settings.STABILITY_WINDOWS_DAYS,
+        stability_min_pass_windows=settings.STABILITY_MIN_PASS_WINDOWS,
+        use_dynamic_position_size=True,
+        target_halflife_bars=settings.TARGET_HALFLIFE_BARS,
+        halflife_multiplier_min=settings.MIN_SIZE_MULTIPLIER,
+        halflife_multiplier_max=settings.MAX_SIZE_MULTIPLIER,
+        use_trailing_entry=use_trailing_entry,
+        trailing_pullback=trailing_pullback,
+        trailing_pullback_extreme=trailing_pullback_extreme,
+        trailing_timeout_minutes=settings.TRAILING_ENTRY_TIMEOUT_MINUTES,
+        false_alarm_hysteresis=settings.FALSE_ALARM_HYSTERESIS,
+        use_live_exit=use_live_exit,
+        lazy_load_minute_data=lazy_minute_data,
+        use_trailing_sl=True,
+        trailing_sl_offset=settings.TRAILING_SL_OFFSET,
+        trailing_sl_activation=settings.TRAILING_SL_ACTIVATION,
+        z_extreme_level=settings.Z_EXTREME_LEVEL,
+        z_sl_extreme_offset=settings.Z_SL_EXTREME_OFFSET,
         use_funding_filter=True,
+        max_funding_cost_threshold=settings.MAX_FUNDING_COST_THRESHOLD,
         use_adf_filter=True,
+        adf_pvalue_threshold=settings.ADF_PVALUE_THRESHOLD,
+        adf_lookback_candles=settings.ADF_LOOKBACK_CANDLES,
     )
 
     # Connect to exchange
@@ -839,43 +1505,40 @@ Examples:
     await exchange.connect()
 
     try:
+        # Keep only symbols that exist on current Binance USDT-M universe
+        tradable_symbols = set(
+            await exchange.get_tradable_symbols(
+                exclude_leveraged=True,
+                min_volume_usdt=args.min_universe_volume_usdt,
+            )
+        )
+        normalized_coins = []
+        skipped = []
+        for coin in coins:
+            symbol = f"{str(coin).upper()}/USDT:USDT"
+            if symbol in tradable_symbols:
+                normalized_coins.append(str(coin).upper())
+            else:
+                skipped.append(str(coin).upper())
+
+        if skipped:
+            print(
+                f"⚠️ Skipped {len(skipped)} non-tradable symbols: "
+                + ", ".join(skipped[:20])
+                + (" ..." if len(skipped) > 20 else "")
+            )
+        coins = normalized_coins
+        if not coins:
+            print("Error: no tradable symbols left in universe after filtering.")
+            return
+        print(f"Using {len(coins)} tradable symbols after exchange validation.")
+
         # Create services
         services = {
+            "logger": logger,
             "settings": settings,
-            "data_loader": AsyncDataLoaderService(
-                logger, exchange, container.ohlcv_repository
-            ),
-            "correlation_service": CorrelationService(
-                logger, settings.LOOKBACK_WINDOW_DAYS, settings.TIMEFRAME
-            ),
-            "z_score_service": ZScoreService(
-                logger,
-                settings.LOOKBACK_WINDOW_DAYS,
-                settings.TIMEFRAME,
-                settings.Z_ENTRY_THRESHOLD,
-                settings.Z_TP_THRESHOLD,
-                settings.Z_SL_THRESHOLD,
-            ),
-            "volatility_filter_service": VolatilityFilterService(
-                logger=logger,
-                primary_pair=settings.PRIMARY_PAIR,
-                timeframe=settings.TIMEFRAME,
-                volatility_window=settings.VOLATILITY_WINDOW,
-                volatility_threshold=settings.VOLATILITY_THRESHOLD,
-                crash_window=settings.VOLATILITY_CRASH_WINDOW,
-                crash_threshold=settings.VOLATILITY_CRASH_THRESHOLD,
-            ),
-            "hurst_filter_service": HurstFilterService(logger),
-            "adf_filter_service": ADFFilterService(
-                logger,
-                pvalue_threshold=settings.ADF_PVALUE_THRESHOLD,
-                lookback_candles=settings.ADF_LOOKBACK_CANDLES,
-            ),
-            "halflife_filter_service": HalfLifeFilterService(
-                logger,
-                max_bars=settings.HALFLIFE_MAX_BARS,
-                lookback_candles=settings.HALFLIFE_LOOKBACK_CANDLES,
-            ),
+            "exchange": exchange,
+            "ohlcv_repository": container.ohlcv_repository,
         }
 
         # Create and run runner
@@ -891,6 +1554,8 @@ Examples:
             kill_loss_streak=args.killLossStreak,
             kill_negative_r=args.killNegativeR,
             workers=args.workers,
+            allow_negative_train_selection=allow_negative_train_selection,
+            verbose_coin_backtests=verbose_coin_backtests,
         )
 
         result = await runner.run(start_date, end_date)
@@ -902,6 +1567,7 @@ Examples:
         runner.save_results(result, output_file)
 
     finally:
+        _set_run_backtest_print_enabled(True)
         await exchange.disconnect()
         container.shutdown()
 

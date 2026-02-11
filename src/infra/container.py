@@ -262,6 +262,13 @@ class Container:
                 consistent_pairs=self._settings.CONSISTENT_PAIRS,
                 timeframe=self._settings.TIMEFRAME,
                 trading_pair_repository=self.trading_pair_repository,
+                enable_beta_drift_guard=self._settings.ENABLE_BETA_DRIFT_GUARD,
+                beta_drift_short_days=self._settings.BETA_DRIFT_SHORT_DAYS,
+                beta_drift_long_days=self._settings.BETA_DRIFT_LONG_DAYS,
+                beta_drift_max_relative=self._settings.BETA_DRIFT_MAX_RELATIVE,
+                enable_stability_filter=self._settings.ENABLE_STABILITY_FILTER,
+                stability_windows_days=self._settings.STABILITY_WINDOWS_DAYS,
+                stability_min_pass_windows=self._settings.STABILITY_MIN_PASS_WINDOWS,
             )
         return self._instances["screener_service"]
 

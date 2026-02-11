@@ -294,14 +294,14 @@ async def main():
     parser.add_argument(
         "--use-trailing-entry",
         type=str,
-        default="false",
-        help="Enable trailing entry simulation (true/false). Default: false",
+        default="true",
+        help="Enable trailing entry simulation (true/false). Default: true",
     )
     parser.add_argument(
         "--use-live-exit",
         type=str,
-        default="false",
-        help="Enable live exit simulation on 1m candles (true/false). Default: false",
+        default="true",
+        help="Enable live exit simulation on 1m candles (true/false). Default: true",
     )
 
     args = parser.parse_args()
