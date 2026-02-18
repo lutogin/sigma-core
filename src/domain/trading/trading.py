@@ -250,14 +250,17 @@ class TradingService:
                 f"coin={coin_size_usdt:.2f} USDT"
             )
 
-            # 3. Check balance
+            # 3. Check balance (margin required = notional / leverage)
             balance = await self._exchange.get_balance("USDT")
             available = balance.free
+            margin_required = total_required / self._leverage
 
-            if available < total_required:
+            if available < margin_required:
                 self._logger.warning(
                     f"⚠️ Insufficient balance | "
-                    f"available={available:.2f} | required={total_required:.2f}"
+                    f"available={available:.2f} | "
+                    f"margin_required={margin_required:.2f} "
+                    f"(notional={total_required:.2f} / {self._leverage}x)"
                 )
                 return
 

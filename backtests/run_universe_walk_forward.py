@@ -20,8 +20,7 @@ import asyncio
 import json
 import sys
 import time
-import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Literal
@@ -30,16 +29,13 @@ from typing import Any, Dict, List, Optional, Tuple, Literal
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
-from src.domain.screener.correlation import CorrelationService
-from src.domain.screener.z_score import ZScoreService
-from src.domain.screener.volatility_filter import VolatilityFilterService
-from src.domain.screener.hurst_filter import HurstFilterService
-from src.domain.screener.adf_filter import ADFFilterService
-from src.domain.screener.halflife_filter import HalfLifeFilterService
 from src.infra.container import Container
-from src.domain.utils import get_timeframe_minutes
 
 import run_backtest as run_backtest_module
+from backtest_shared import (
+    build_backtest_config_kwargs,
+    build_backtest_services,
+)
 from run_backtest import (
     BacktestConfig,
     BacktestResult,
@@ -786,50 +782,15 @@ class UniverseWalkForwardRunner:
             if self.verbose_coin_backtests
             else _SilentLogger()
         )
-        return {
-            "settings": settings,
-            "data_loader": self._cached_data_loader,
-            "correlation_service": CorrelationService(
-                logger, settings.LOOKBACK_WINDOW_DAYS, settings.TIMEFRAME
-            ),
-            "z_score_service": ZScoreService(
-                logger,
-                settings.LOOKBACK_WINDOW_DAYS,
-                settings.TIMEFRAME,
-                settings.Z_ENTRY_THRESHOLD,
-                settings.Z_TP_THRESHOLD,
-                settings.Z_SL_THRESHOLD,
-                adaptive_percentile=settings.ADAPTIVE_PERCENTILE,
-                dynamic_threshold_window=settings.DYNAMIC_THRESHOLD_WINDOW_BARS,
-                threshold_ema_alpha_up=settings.THRESHOLD_EMA_ALPHA_UP,
-                threshold_ema_alpha_down=settings.THRESHOLD_EMA_ALPHA_DOWN,
-            ),
-            "volatility_filter_service": VolatilityFilterService(
-                logger=logger,
-                primary_pair=settings.PRIMARY_PAIR,
-                timeframe=settings.TIMEFRAME,
-                volatility_window=settings.VOLATILITY_WINDOW,
-                volatility_threshold=settings.VOLATILITY_THRESHOLD,
-                crash_window=settings.VOLATILITY_CRASH_WINDOW,
-                crash_threshold=settings.VOLATILITY_CRASH_THRESHOLD,
-            ),
-            "hurst_filter_service": HurstFilterService(
-                logger=logger,
-                hurst_threshold=settings.HURST_THRESHOLD,
-                lookback_candles=settings.HURST_LOOKBACK_CANDLES,
-            ),
-            "adf_filter_service": ADFFilterService(
-                logger=logger,
-                pvalue_threshold=settings.ADF_PVALUE_THRESHOLD,
-                lookback_candles=settings.ADF_LOOKBACK_CANDLES,
-            ),
-            "halflife_filter_service": HalfLifeFilterService(
-                logger=logger,
-                max_bars=settings.HALFLIFE_MAX_BARS,
-                lookback_candles=settings.HALFLIFE_LOOKBACK_CANDLES,
-            ),
-            "funding_cache": self.services.get("funding_cache"),
-        }
+        return build_backtest_services(
+            settings=settings,
+            logger=logger,
+            exchange_client=self.services["exchange"],
+            ohlcv_repository=self.services["ohlcv_repository"],
+            config=self.base_config,
+            data_loader_override=self._cached_data_loader,
+            funding_cache=self.services.get("funding_cache"),
+        )
 
 
     async def _run_single_coin_backtest(
@@ -842,57 +803,11 @@ class UniverseWalkForwardRunner:
         symbol = f"{coin}/USDT:USDT"
         effective_end = end_date - timedelta(seconds=1)
 
-        # Create config for this coin
-        config = BacktestConfig(
-            initial_balance=self.base_config.initial_balance,
-            position_size_pct=self.base_config.position_size_pct,
-            position_size_usdt=self.base_config.position_size_usdt,
+        # Copy base strategy config and override only per-coin specifics.
+        config = replace(
+            self.base_config,
             max_spreads=1,
-            leverage=self.base_config.leverage,
-            z_entry_threshold=self.base_config.z_entry_threshold,
-            z_tp_threshold=self.base_config.z_tp_threshold,
-            z_sl_threshold=self.base_config.z_sl_threshold,
-            min_correlation=self.base_config.min_correlation,
-            min_beta=self.base_config.min_beta,
-            max_beta=self.base_config.max_beta,
-            correlation_exit_threshold=self.base_config.correlation_exit_threshold,
-            correlation_watch_threshold=self.base_config.correlation_watch_threshold,
-            cooldown_bars=self.base_config.cooldown_bars,
-            max_position_bars=self.base_config.max_position_bars,
-            use_dynamic_tp=self.base_config.use_dynamic_tp,
-            hurst_trending_for_exit=self.base_config.hurst_trending_for_exit,
-            hurst_confirm_scans=self.base_config.hurst_confirm_scans,
-            adf_exit_confirm_scans=self.base_config.adf_exit_confirm_scans,
-            halflife_exit_confirm_scans=self.base_config.halflife_exit_confirm_scans,
-            halflife_max_bars=self.base_config.halflife_max_bars,
-            enable_beta_drift_guard=self.base_config.enable_beta_drift_guard,
-            beta_drift_short_days=self.base_config.beta_drift_short_days,
-            beta_drift_long_days=self.base_config.beta_drift_long_days,
-            beta_drift_max_relative=self.base_config.beta_drift_max_relative,
-            enable_stability_filter=self.base_config.enable_stability_filter,
-            stability_windows_days=self.base_config.stability_windows_days,
-            stability_min_pass_windows=self.base_config.stability_min_pass_windows,
-            use_dynamic_position_size=self.base_config.use_dynamic_position_size,
-            target_halflife_bars=self.base_config.target_halflife_bars,
-            halflife_multiplier_min=self.base_config.halflife_multiplier_min,
-            halflife_multiplier_max=self.base_config.halflife_multiplier_max,
-            use_trailing_sl=self.base_config.use_trailing_sl,
-            trailing_sl_offset=self.base_config.trailing_sl_offset,
-            trailing_sl_activation=self.base_config.trailing_sl_activation,
-            z_extreme_level=self.base_config.z_extreme_level,
-            z_sl_extreme_offset=self.base_config.z_sl_extreme_offset,
             consistent_pairs=[symbol],
-            use_trailing_entry=self.base_config.use_trailing_entry,
-            use_live_exit=self.base_config.use_live_exit,
-            use_funding_filter=self.base_config.use_funding_filter,
-            max_funding_cost_threshold=self.base_config.max_funding_cost_threshold,
-            use_adf_filter=self.base_config.use_adf_filter,
-            adf_pvalue_threshold=self.base_config.adf_pvalue_threshold,
-            adf_lookback_candles=self.base_config.adf_lookback_candles,
-            trailing_pullback=self.base_config.trailing_pullback,
-            trailing_pullback_extreme=self.base_config.trailing_pullback_extreme,
-            trailing_timeout_minutes=self.base_config.trailing_timeout_minutes,
-            false_alarm_hysteresis=self.base_config.false_alarm_hysteresis,
         )
 
         # Create backtester with isolated stateful services
@@ -1436,17 +1351,8 @@ Examples:
         print(f"Error: {exc}")
         sys.exit(1)
 
-    # Match run_backtest.py pullback calibration for 1m pseudo-tick emulation.
-    timeframe_minutes = max(1, get_timeframe_minutes(settings.TIMEFRAME))
-    pullback_scale = math.sqrt(1.0 / timeframe_minutes)
-    trailing_pullback = math.floor(
-        settings.TRAILING_ENTRY_PULLBACK * pullback_scale * 100
-    ) / 100
-    trailing_pullback_extreme = math.floor(
-        settings.TRAILING_ENTRY_PULLBACK_EXTREME * pullback_scale * 100
-    ) / 100
-
-    base_config = BacktestConfig(
+    base_config_kwargs = build_backtest_config_kwargs(
+        settings=settings,
         initial_balance=args.balance,
         position_size_usdt=settings.POSITION_SIZE_USDT,
         position_size_pct=(
@@ -1454,51 +1360,15 @@ Examples:
         ),
         leverage=args.leverage or settings.EXCHANGE_DEFAULT_LEVERAGE,
         max_spreads=settings.MAX_OPEN_SPREADS,
-        z_entry_threshold=settings.Z_ENTRY_THRESHOLD,
-        z_tp_threshold=settings.Z_TP_THRESHOLD,
-        z_sl_threshold=settings.Z_SL_THRESHOLD,
-        min_correlation=settings.MIN_CORRELATION,
-        min_beta=settings.MIN_BETA,
-        max_beta=settings.MAX_BETA,
-        correlation_exit_threshold=settings.CORRELATION_EXIT_THRESHOLD,
-        correlation_watch_threshold=settings.CORRELATION_WATCH_THRESHOLD,
-        cooldown_bars=settings.COOLDOWN_BARS,
-        max_position_bars=settings.MAX_POSITION_BARS,
-        use_dynamic_tp=True,
-        hurst_trending_for_exit=settings.HURST_TRENDING_FOR_EXIT,
-        hurst_confirm_scans=settings.HURST_TRENDING_CONFIRM_SCANS,
-        adf_exit_confirm_scans=settings.ADF_EXIT_CONFIRM_SCANS,
-        halflife_exit_confirm_scans=settings.HALFLIFE_EXIT_CONFIRM_SCANS,
-        halflife_max_bars=settings.HALFLIFE_MAX_BARS,
-        enable_beta_drift_guard=settings.ENABLE_BETA_DRIFT_GUARD,
-        beta_drift_short_days=settings.BETA_DRIFT_SHORT_DAYS,
-        beta_drift_long_days=settings.BETA_DRIFT_LONG_DAYS,
-        beta_drift_max_relative=settings.BETA_DRIFT_MAX_RELATIVE,
-        enable_stability_filter=settings.ENABLE_STABILITY_FILTER,
-        stability_windows_days=settings.STABILITY_WINDOWS_DAYS,
-        stability_min_pass_windows=settings.STABILITY_MIN_PASS_WINDOWS,
-        use_dynamic_position_size=True,
-        target_halflife_bars=settings.TARGET_HALFLIFE_BARS,
-        halflife_multiplier_min=settings.MIN_SIZE_MULTIPLIER,
-        halflife_multiplier_max=settings.MAX_SIZE_MULTIPLIER,
-        use_trailing_entry=use_trailing_entry,
-        trailing_pullback=trailing_pullback,
-        trailing_pullback_extreme=trailing_pullback_extreme,
-        trailing_timeout_minutes=settings.TRAILING_ENTRY_TIMEOUT_MINUTES,
-        false_alarm_hysteresis=settings.FALSE_ALARM_HYSTERESIS,
-        use_live_exit=use_live_exit,
-        lazy_load_minute_data=lazy_minute_data,
-        use_trailing_sl=True,
-        trailing_sl_offset=settings.TRAILING_SL_OFFSET,
-        trailing_sl_activation=settings.TRAILING_SL_ACTIVATION,
-        z_extreme_level=settings.Z_EXTREME_LEVEL,
-        z_sl_extreme_offset=settings.Z_SL_EXTREME_OFFSET,
+        consistent_pairs=[],
         use_funding_filter=True,
-        max_funding_cost_threshold=settings.MAX_FUNDING_COST_THRESHOLD,
+        use_trailing_entry=use_trailing_entry,
+        use_live_exit=use_live_exit,
+        use_dynamic_tp=True,
+        lazy_load_minute_data=lazy_minute_data,
         use_adf_filter=True,
-        adf_pvalue_threshold=settings.ADF_PVALUE_THRESHOLD,
-        adf_lookback_candles=settings.ADF_LOOKBACK_CANDLES,
     )
+    base_config = BacktestConfig(**base_config_kwargs)
 
     # Connect to exchange
     exchange = container.exchange_client

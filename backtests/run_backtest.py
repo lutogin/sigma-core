@@ -42,6 +42,11 @@ from src.domain.screener.volatility_filter import VolatilityFilterService
 from src.domain.screener.z_score import ZScoreService, ZScoreResult
 from src.infra.container import Container
 from src.domain.utils import get_timeframe_minutes
+from backtest_shared import (
+    build_backtest_config_kwargs,
+    build_backtest_services,
+    compute_trailing_pullback_calibration,
+)
 
 # =============================================================================
 # OHLC Pseudo-Tick Generator (for realistic 1m simulation)
@@ -3894,18 +3899,12 @@ Examples:
         )
 
     # Trailing-entry pullback calibration for 1m pseudo-tick emulation.
-    # Live EntryObserver sees dense WebSocket ticks; backtest sees only OHLC-derived pseudo-ticks.
-    # Scale pullback by sqrt(dt) to keep reversal sensitivity comparable.
-    timeframe_minutes = max(1, get_timeframe_minutes(settings.TIMEFRAME))
-    pullback_scale = math.sqrt(1.0 / timeframe_minutes)
-    trailing_pullback_raw = settings.TRAILING_ENTRY_PULLBACK * pullback_scale
-    trailing_pullback_extreme_raw = (
-        settings.TRAILING_ENTRY_PULLBACK_EXTREME * pullback_scale
-    )
-    # Floor to 2 decimals to avoid over-tightening from tiny floating deltas.
-    trailing_pullback = math.floor(trailing_pullback_raw * 100) / 100
-    trailing_pullback_extreme = (
-        math.floor(trailing_pullback_extreme_raw * 100) / 100
+    trailing_pullback, trailing_pullback_extreme, pullback_scale = (
+        compute_trailing_pullback_calibration(
+            timeframe=settings.TIMEFRAME,
+            trailing_pullback_base=settings.TRAILING_ENTRY_PULLBACK,
+            trailing_pullback_extreme_base=settings.TRAILING_ENTRY_PULLBACK_EXTREME,
+        )
     )
 
     # Create backtest config with optional CLI overrides
@@ -3919,52 +3918,22 @@ Examples:
     if use_dynamic_tp is not None:
         config_overrides["use_dynamic_tp"] = use_dynamic_tp
 
-    config = BacktestConfig(
+    config_kwargs = build_backtest_config_kwargs(
+        settings=settings,
         initial_balance=initial_balance,
         position_size_pct=position_size_pct,
         position_size_usdt=position_size_usdt,
         max_spreads=max_spreads,
         leverage=leverage,
-        z_entry_threshold=settings.Z_ENTRY_THRESHOLD,
-        z_tp_threshold=settings.Z_TP_THRESHOLD,
-        z_sl_threshold=settings.Z_SL_THRESHOLD,
-        min_correlation=settings.MIN_CORRELATION,
-        min_beta=settings.MIN_BETA,
-        max_beta=settings.MAX_BETA,
-        correlation_exit_threshold=settings.CORRELATION_EXIT_THRESHOLD,
-        correlation_watch_threshold=settings.CORRELATION_WATCH_THRESHOLD,
-        cooldown_bars=settings.COOLDOWN_BARS,
-        max_position_bars=settings.MAX_POSITION_BARS,
-        hurst_trending_for_exit=settings.HURST_TRENDING_FOR_EXIT,
-        hurst_confirm_scans=settings.HURST_TRENDING_CONFIRM_SCANS,
-        adf_exit_confirm_scans=settings.ADF_EXIT_CONFIRM_SCANS,
-        halflife_exit_confirm_scans=settings.HALFLIFE_EXIT_CONFIRM_SCANS,
-        halflife_max_bars=settings.HALFLIFE_MAX_BARS,
-        enable_beta_drift_guard=settings.ENABLE_BETA_DRIFT_GUARD,
-        beta_drift_short_days=settings.BETA_DRIFT_SHORT_DAYS,
-        beta_drift_long_days=settings.BETA_DRIFT_LONG_DAYS,
-        beta_drift_max_relative=settings.BETA_DRIFT_MAX_RELATIVE,
-        enable_stability_filter=settings.ENABLE_STABILITY_FILTER,
-        stability_windows_days=settings.STABILITY_WINDOWS_DAYS,
-        stability_min_pass_windows=settings.STABILITY_MIN_PASS_WINDOWS,
-        adf_pvalue_threshold=settings.ADF_PVALUE_THRESHOLD,
-        adf_lookback_candles=settings.ADF_LOOKBACK_CANDLES,
-        trailing_pullback=trailing_pullback,
-        trailing_pullback_extreme=trailing_pullback_extreme,
-        trailing_timeout_minutes=settings.TRAILING_ENTRY_TIMEOUT_MINUTES,
-        false_alarm_hysteresis=settings.FALSE_ALARM_HYSTERESIS,
-        z_extreme_level=settings.Z_EXTREME_LEVEL,
-        z_sl_extreme_offset=settings.Z_SL_EXTREME_OFFSET,
-        trailing_sl_offset=settings.TRAILING_SL_OFFSET,
-        trailing_sl_activation=settings.TRAILING_SL_ACTIVATION,
-        target_halflife_bars=settings.TARGET_HALFLIFE_BARS,
-        halflife_multiplier_min=settings.MIN_SIZE_MULTIPLIER,
-        halflife_multiplier_max=settings.MAX_SIZE_MULTIPLIER,
         consistent_pairs=consistent_pairs,
         use_funding_filter=not args.no_funding_filter,
-        max_funding_cost_threshold=settings.MAX_FUNDING_COST_THRESHOLD,
-        **config_overrides,
+        use_trailing_entry=use_trailing_entry,
+        use_live_exit=use_live_exit,
+        use_dynamic_tp=use_dynamic_tp,
+        lazy_load_minute_data=lazy_minute_data,
+        extra_overrides=config_overrides,
     )
+    config = BacktestConfig(**config_kwargs)
 
     print("\n" + "=" * 70)
     print("              STATISTICAL ARBITRAGE BACKTEST")
@@ -4028,68 +3997,6 @@ Examples:
     await exchange.connect()
 
     try:
-        # Create data loader with exchange
-        data_loader = AsyncDataLoaderService(
-            logger=logger,
-            exchange_client=exchange,
-            ohlcv_repository=container.ohlcv_repository,
-        )
-
-        # Create correlation and z-score services
-        correlation_service = CorrelationService(
-            logger=logger,
-            lookback_window_days=settings.LOOKBACK_WINDOW_DAYS,
-            timeframe=settings.TIMEFRAME,
-        )
-
-        z_score_service = ZScoreService(
-            logger=logger,
-            lookback_window_days=settings.LOOKBACK_WINDOW_DAYS,
-            timeframe=settings.TIMEFRAME,
-            z_entry_threshold=settings.Z_ENTRY_THRESHOLD,
-            z_tp_threshold=settings.Z_TP_THRESHOLD,
-            z_sl_threshold=settings.Z_SL_THRESHOLD,
-            adaptive_percentile=settings.ADAPTIVE_PERCENTILE,
-            dynamic_threshold_window=settings.DYNAMIC_THRESHOLD_WINDOW_BARS,
-            threshold_ema_alpha_up=settings.THRESHOLD_EMA_ALPHA_UP,
-            threshold_ema_alpha_down=settings.THRESHOLD_EMA_ALPHA_DOWN,
-        )
-
-        # Create volatility filter service
-        volatility_filter_service = VolatilityFilterService(
-            logger=logger,
-            primary_pair=settings.PRIMARY_PAIR,
-            timeframe=settings.TIMEFRAME,
-            volatility_window=settings.VOLATILITY_WINDOW,
-            volatility_threshold=settings.VOLATILITY_THRESHOLD,
-            crash_window=settings.VOLATILITY_CRASH_WINDOW,
-            crash_threshold=settings.VOLATILITY_CRASH_THRESHOLD,
-        )
-
-        # Create Hurst filter service
-        hurst_filter_service = HurstFilterService(
-            logger=logger,
-        )
-
-        # Create ADF filter service
-        adf_filter_service = ADFFilterService(
-            logger=logger,
-            pvalue_threshold=config.adf_pvalue_threshold
-            or settings.ADF_PVALUE_THRESHOLD,
-            lookback_candles=config.adf_lookback_candles
-            or settings.ADF_LOOKBACK_CANDLES,
-        )
-
-        # Create Half-Life filter service
-        halflife_filter_service = HalfLifeFilterService(
-            logger=logger,
-            max_bars=config.halflife_max_bars or settings.HALFLIFE_MAX_BARS,
-            lookback_candles=settings.HALFLIFE_LOOKBACK_CANDLES,
-        )
-        print(
-            f"\n⏱️ Half-Life filter: max_bars={config.halflife_max_bars or settings.HALFLIFE_MAX_BARS}, available={halflife_filter_service.is_available}"
-        )
-
         # Load historical funding rates if funding filter is enabled
         funding_cache = None
         if config.use_funding_filter:
@@ -4116,18 +4023,24 @@ Examples:
         else:
             print("\n💸 Funding filter: DISABLED")
 
+        services = build_backtest_services(
+            settings=settings,
+            logger=logger,
+            exchange_client=exchange,
+            ohlcv_repository=container.ohlcv_repository,
+            config=config,
+            funding_cache=funding_cache,
+        )
+
+        halflife_filter = services["halflife_filter_service"]
+        print(
+            f"\n⏱️ Half-Life filter: max_bars={config.halflife_max_bars or settings.HALFLIFE_MAX_BARS}, available={halflife_filter.is_available}"
+        )
+
         # Create and run backtester
         backtester = StatArbBacktest(
             config=config,
-            settings=settings,
-            data_loader=data_loader,
-            correlation_service=correlation_service,
-            z_score_service=z_score_service,
-            volatility_filter_service=volatility_filter_service,
-            hurst_filter_service=hurst_filter_service,
-            adf_filter_service=adf_filter_service,
-            halflife_filter_service=halflife_filter_service,
-            funding_cache=funding_cache,
+            **services,
         )
 
         result = await backtester.run(start_date, end_date)
