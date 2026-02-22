@@ -235,8 +235,7 @@ class BinanceClient:
 
         self._client: Optional[AsyncClient] = None
         self._client_lock = asyncio.Lock()
-        # Bound concurrent HTTP requests to reduce transport resets under heavy backtests.
-        self._request_semaphore = asyncio.Semaphore(6)
+        
         self._markets_cache: Dict[str, SymbolInfo] = {}
         self._funding_intervals: Dict[str, int] = {}
         self._is_connected = False
@@ -604,14 +603,13 @@ class BinanceClient:
                     await self._rate_limiter.acquire(weight=5)
                     client = await self._get_client()
 
-                    async with self._request_semaphore:
-                        candles = await client.futures_klines(
-                            symbol=binance_symbol,
-                            interval=interval,
-                            startTime=current_since,
-                            endTime=end_timestamp,
-                            limit=limit,
-                        )
+                    candles = await client.futures_klines(
+                        symbol=binance_symbol,
+                        interval=interval,
+                        startTime=current_since,
+                        endTime=end_timestamp,
+                        limit=limit,
+                    )
                     break  # Success, exit retry loop
 
                 except (asyncio.TimeoutError, TimeoutError) as e:
