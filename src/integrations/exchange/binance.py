@@ -330,20 +330,31 @@ class BinanceClient:
 
     async def _invalidate_client(self, reason: str) -> None:
         """
-        Safely drop current client so next request recreates a fresh connection pool.
+        Detach the current client so next request creates a fresh connection pool.
+
+        The old client is NOT closed immediately — closing the aiohttp connector
+        cancels all in-flight requests on it (`CancelledError`), which cascades
+        through concurrent coroutines sharing the same client.  Instead we
+        schedule a deferred close, giving in-flight requests time to finish or
+        fail on their own (and be retried with a fresh client).
         """
         async with self._client_lock:
             if self._client is None:
                 return
 
             self.logger.warning(f"Resetting Binance HTTP client ({reason})")
-            client = self._client
+            old_client = self._client
             self._client = None
-            try:
-                await client.close_connection()
-            except Exception:
-                # Ignore close errors - we are already in recovery path.
-                pass
+
+            asyncio.create_task(self._deferred_close_client(old_client))
+
+    async def _deferred_close_client(self, client: "AsyncClient") -> None:
+        """Close a detached client after a grace period for in-flight requests."""
+        await asyncio.sleep(10)
+        try:
+            await client.close_connection()
+        except Exception:
+            pass
 
     async def connect(self) -> None:
         """Connect and load markets."""
@@ -611,6 +622,15 @@ class BinanceClient:
                         limit=limit,
                     )
                     break  # Success, exit retry loop
+
+                except asyncio.CancelledError:
+                    wait_time = (attempt + 1) * 2
+                    self.logger.warning(
+                        f"Request cancelled for {symbol} (stale session), "
+                        f"attempt {attempt + 1}/{max_retries}, retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
 
                 except (asyncio.TimeoutError, TimeoutError) as e:
                     last_error = e
