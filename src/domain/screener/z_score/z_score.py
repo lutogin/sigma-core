@@ -153,7 +153,17 @@ class ZScoreService:
                 )
                 continue
 
-            coin_log_price = log_prices[symbol]
+            pair_log_prices = pd.concat(
+                [
+                    log_prices[symbol].rename("coin"),
+                    primary_log_price.rename("primary"),
+                ],
+                axis=1,
+            ).dropna()
+            if pair_log_prices.empty:
+                continue
+            coin_log_price = pair_log_prices["coin"]
+            pair_primary_log_price = pair_log_prices["primary"]
             rolling_beta = corr_result.rolling_beta
 
             # Align rolling_beta to log_prices index
@@ -164,7 +174,9 @@ class ZScoreService:
             )
 
             # Calculate spread: LogPrice_COIN - β × LogPrice_PRIMARY
-            spread_series = coin_log_price - (rolling_beta_aligned * primary_log_price)
+            spread_series = coin_log_price - (
+                rolling_beta_aligned * pair_primary_log_price
+            )
 
             # Calculate z-score for the spread
             mean_spread = spread_series.rolling(window=self._lookback_window).mean()

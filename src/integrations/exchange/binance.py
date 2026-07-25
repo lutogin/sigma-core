@@ -54,14 +54,18 @@ class RateLimiter:
         self._rate = requests_per_second
         self._burst = burst_size
         self._tokens = float(burst_size)
-        self._last_update = asyncio.get_event_loop().time()
+        # A client may be constructed outside a running event loop (tests,
+        # dependency injection, CLI setup). monotonic() has the same clock
+        # semantics without binding the limiter to whichever loop happened to
+        # exist at construction time.
+        self._last_update = time.monotonic()
         self._lock = asyncio.Lock()
 
     async def acquire(self, weight: int = 1) -> None:
         """Acquire tokens, waiting if necessary."""
         async with self._lock:
             while True:
-                now = asyncio.get_event_loop().time()
+                now = time.monotonic()
                 elapsed = now - self._last_update
                 self._tokens = min(self._burst, self._tokens + elapsed * self._rate)
                 self._last_update = now

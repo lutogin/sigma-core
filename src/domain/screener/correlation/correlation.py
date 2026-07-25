@@ -135,7 +135,9 @@ class CorrelationService:
 
         # Calculate log prices and then log returns (diff of log prices)
         log_prices = pd.DataFrame(np.log(df_close), columns=df_close.columns, index=df_close.index)
-        log_returns = log_prices.diff().dropna()
+        # Keep each symbol's own history. Dropping rows across the whole
+        # universe would make every pair start at the newest token's listing.
+        log_returns = log_prices.diff()
 
         self._logger.debug(
             f"[Correlation] Preprocessed {len(df_close.columns)} symbols: "
@@ -164,13 +166,21 @@ class CorrelationService:
             Dictionary mapping symbol -> CorrelationResult.
         """
         results = {}
-        primary_returns = log_returns[primary_symbol]
-
         for symbol in log_returns.columns:
             if symbol == primary_symbol:
                 continue
 
-            coin_returns = log_returns[symbol]
+            pair_returns = pd.concat(
+                [
+                    log_returns[symbol].rename("coin"),
+                    log_returns[primary_symbol].rename("primary"),
+                ],
+                axis=1,
+            ).dropna()
+            if pair_returns.empty:
+                continue
+            coin_returns = pair_returns["coin"]
+            primary_returns = pair_returns["primary"]
 
             # Rolling covariance between coin and primary
             rolling_cov = coin_returns.rolling(
