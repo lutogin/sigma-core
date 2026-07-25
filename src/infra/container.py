@@ -377,6 +377,8 @@ class Container:
                 target_halflife_bars=self._settings.TARGET_HALFLIFE_BARS,
                 min_size_multiplier=self._settings.MIN_SIZE_MULTIPLIER,
                 max_size_multiplier=self._settings.MAX_SIZE_MULTIPLIER,
+                max_coin_notional_pct=self._settings.MAX_COIN_NOTIONAL_PCT,
+                max_margin_utilization=self._settings.MAX_MARGIN_UTILIZATION,
             )
         return self._instances["trading_service"]
 

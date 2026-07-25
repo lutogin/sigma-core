@@ -70,8 +70,7 @@ class PositionStateService:
 
         # Subscribe to watch timeout events for cooldown
         self._event_emitter.on(
-            EventType.WATCH_TIMEOUT_COOLDOWN,
-            self._on_watch_timeout_cooldown
+            EventType.WATCH_TIMEOUT_COOLDOWN, self._on_watch_timeout_cooldown
         )
 
     @staticmethod
@@ -190,7 +189,10 @@ class PositionStateService:
             return None
 
         # Deactivate position
-        self._repository.deactivate_position(coin_symbol)
+        if not self._repository.deactivate_position(coin_symbol):
+            raise RuntimeError(
+                f"Failed to deactivate persisted position for {coin_symbol}"
+            )
 
         # Apply cooldown for adverse exits (SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
         # These indicate the pair is not behaving as expected - prevent immediate re-entry
@@ -214,6 +216,16 @@ class PositionStateService:
     def get_position(self, coin_symbol: str) -> Optional[SpreadPosition]:
         """Get active position for a coin symbol."""
         return self._repository.get_position_by_symbol(coin_symbol)
+
+    def mark_leg_closed(self, coin_symbol: str, leg: str) -> bool:
+        """Record that one exchange leg was closed successfully."""
+        marked = self._repository.mark_leg_closed(coin_symbol, leg)
+        if not marked:
+            raise RuntimeError(
+                f"Cannot persist {leg} leg closure for active spread {coin_symbol}"
+            )
+        self._logger.info(f"Marked {leg} leg closed for {coin_symbol}")
+        return True
 
     def get_active_positions(self) -> List[SpreadPosition]:
         """Get all active positions."""
@@ -240,7 +252,9 @@ class PositionStateService:
     # Cooldown Management
     # =========================================================================
 
-    async def _on_watch_timeout_cooldown(self, event: WatchTimeoutCooldownEvent) -> None:
+    async def _on_watch_timeout_cooldown(
+        self, event: WatchTimeoutCooldownEvent
+    ) -> None:
         """
         Handle watch timeout cooldown event.
 

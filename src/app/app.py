@@ -66,7 +66,7 @@ class Application:
     async def _start_trading_callback(self) -> None:
         """Callback for starting trading via Telegram."""
         if self._container and self._container.has_instance("trading_service"):
-            self._container.trading_service.enable_trading()
+            await self._container.trading_service.enable_trading()
 
     def run(self) -> None:
         """
@@ -125,36 +125,28 @@ class Application:
 
                     # Register callbacks for Telegram buttons
                     telegram_service.register_callback(
-                        "get_opportunities",
-                        communicator_service.send_opportunities
+                        "get_opportunities", communicator_service.send_opportunities
                     )
                     telegram_service.register_callback(
-                        "get_positions",
-                        communicator_service.send_positions
+                        "get_positions", communicator_service.send_positions
                     )
                     telegram_service.register_callback(
-                        "get_entry_observer",
-                        communicator_service.send_entry_observer
+                        "get_entry_observer", communicator_service.send_entry_observer
                     )
                     telegram_service.register_callback(
-                        "get_exit_observer",
-                        communicator_service.send_exit_observer
+                        "get_exit_observer", communicator_service.send_exit_observer
                     )
                     telegram_service.register_callback(
-                        "get_balances",
-                        communicator_service.send_balance
+                        "get_balances", communicator_service.send_balance
                     )
                     telegram_service.register_callback(
-                        "close_all_positions",
-                        communicator_service.close_all_positions
+                        "close_all_positions", communicator_service.close_all_positions
                     )
                     telegram_service.register_callback(
-                        "stop_trading",
-                        self._stop_trading_callback
+                        "stop_trading", self._stop_trading_callback
                     )
                     telegram_service.register_callback(
-                        "start_trading",
-                        self._start_trading_callback
+                        "start_trading", self._start_trading_callback
                     )
 
                 # Run planner (blocks until shutdown)

@@ -113,6 +113,17 @@ class PositionStateRepository:
             return True
         return False
 
+    def mark_leg_closed(self, coin_symbol: str, leg: str) -> bool:
+        """Persist a successfully closed leg while the spread remains active."""
+        if leg not in {"coin", "primary"}:
+            raise ValueError(f"Unknown spread leg: {leg}")
+        collection = self._db.get_collection(self.POSITIONS_COLLECTION)
+        result = collection.update_one(
+            {"coin_symbol": coin_symbol, "is_active": True},
+            {"$set": {f"{leg}_leg_closed": True}},
+        )
+        return result.matched_count > 0
+
     def count_active_positions(self) -> int:
         """
         Count active positions.
@@ -270,7 +281,12 @@ class PositionStateRepository:
         positions = self._db.get_collection(self.POSITIONS_COLLECTION)
         positions.create_index("coin_symbol")
         positions.create_index("is_active")
-        positions.create_index([("coin_symbol", 1), ("is_active", 1)])
+        positions.create_index(
+            [("coin_symbol", 1), ("is_active", 1)],
+            unique=True,
+            partialFilterExpression={"is_active": True},
+            name="one_active_spread_per_coin",
+        )
 
         # Cooldowns indexes
         cooldowns = self._db.get_collection(self.COOLDOWNS_COLLECTION)

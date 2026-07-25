@@ -56,6 +56,8 @@ class SpreadPosition:
     primary_size_usdt: float = 0.0  # PRIMARY leg size in USDT
     coin_contracts: float = 0.0  # COIN leg size in contracts
     primary_contracts: float = 0.0  # PRIMARY leg size in contracts
+    coin_leg_closed: bool = False
+    primary_leg_closed: bool = False
     leverage: int = 1
 
     # Entry prices
@@ -82,6 +84,7 @@ class SpreadPosition:
     @classmethod
     def from_dict(cls, data: dict) -> "SpreadPosition":
         """Create from MongoDB document."""
+        data = dict(data)
         # Handle ObjectId
         doc_id = data.pop("_id", None)
         if doc_id:
@@ -151,6 +154,7 @@ class SymbolCooldown:
     @classmethod
     def from_dict(cls, data: dict) -> "SymbolCooldown":
         """Create from MongoDB document."""
+        data = dict(data)
         # Handle ObjectId
         doc_id = data.pop("_id", None)
         if doc_id:
