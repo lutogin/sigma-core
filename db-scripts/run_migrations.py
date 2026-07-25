@@ -28,7 +28,7 @@ def run_migrations():
     settings = load_settings()
 
     # Connect to database
-    db = TimescaleDB(settings, logger)
+    db = TimescaleDB(settings.TIMESCALE_DB_URL, logger)
 
     try:
         db.connect()
@@ -80,4 +80,3 @@ if __name__ == "__main__":
     print("Script started!", flush=True)
     run_migrations()
     print("Script finished!", flush=True)
-

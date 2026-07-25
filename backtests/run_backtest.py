@@ -42,6 +42,7 @@ from src.domain.screener.volatility_filter import VolatilityFilterService
 from src.domain.screener.z_score import ZScoreService, ZScoreResult
 from src.infra.container import Container
 from src.domain.utils import get_timeframe_minutes
+
 try:
     from backtests.backtest_shared import (
         build_backtest_config_kwargs,
@@ -385,7 +386,9 @@ class BacktestConfig:
     # Base size for COIN leg (matches live TradingService when > 0).
     # If <= 0, backtest falls back to percentage mode via position_size_pct.
     position_size_usdt: float = 1000.0
-    max_spreads: int = 4  # Maximum concurrent spread positions
+    max_spreads: int = 3  # Maximum concurrent spread positions
+    max_coin_notional_pct: float = 0.10
+    max_margin_utilization: float = 0.50
 
     # Strategy thresholds (from settings)
     z_entry_threshold: float = 2.1  # |Z| >= this to enter
@@ -490,7 +493,7 @@ class BacktestConfig:
     # Size = BaseSize * (TargetHalfLife / CurrentHalfLife)
     # Faster mean reversion -> larger position, slower -> smaller position
     use_dynamic_position_size: bool = True  # Enable dynamic position sizing
-    target_halflife_bars: float = 16.0  # Target half-life in bars
+    target_halflife_bars: float = 12.0  # Target half-life in bars
     halflife_multiplier_min: float = 0.5  # Minimum position size multiplier
     halflife_multiplier_max: float = 1.25  # Avoid levering noisy fast-HL estimates
 
@@ -520,8 +523,27 @@ class BacktestConfig:
     # z_extreme_level: Max Z for watch (cancel if exceeded), allows entry above z_sl
     # Extended SL = abs(entry_z) + z_sl_extreme_offset
     # This prevents immediate SL hit for positions entered after extreme pullback
-    z_extreme_level: float = 6.0  # Max Z before watch is cancelled (SL_HIT)
-    z_sl_extreme_offset: float = 0.4  # Offset for extreme entries
+    z_extreme_level: float = 5.0  # Max Z before watch is cancelled (SL_HIT)
+    z_sl_extreme_offset: float = 0.5  # Offset for extreme entries
+
+    def __post_init__(self) -> None:
+        if self.initial_balance <= 0:
+            raise ValueError("initial_balance must be positive")
+        if self.position_size_usdt < 0 or self.position_size_pct < 0:
+            raise ValueError("position size must be non-negative")
+        if self.max_spreads <= 0:
+            raise ValueError("max_spreads must be positive")
+        if self.leverage <= 0:
+            raise ValueError("leverage must be positive")
+        if not 0 < self.max_coin_notional_pct <= 1:
+            raise ValueError("max_coin_notional_pct must be in (0, 1]")
+        if not 0 < self.max_margin_utilization <= 1:
+            raise ValueError("max_margin_utilization must be in (0, 1]")
+        ExecutionAssumptions(
+            fee_rate=self.maker_fee if self.use_limit_orders else self.taker_fee,
+            half_spread_bps=self.half_spread_bps,
+            slippage_bps=self.slippage_bps,
+        )
 
 
 @dataclass
@@ -904,8 +926,7 @@ class StatArbBacktest:
 
             # Include the just-closed candle, never anything after decision_time.
             window_data = {
-                symbol: df.iloc[: i + 1].dropna()
-                for symbol, df in aligned_data.items()
+                symbol: df.iloc[: i + 1].dropna() for symbol, df in aligned_data.items()
             }
             window_data = {
                 symbol: df for symbol, df in window_data.items() if not df.empty
@@ -958,7 +979,9 @@ class StatArbBacktest:
             df = df[~df.index.duplicated(keep="last")]
             aligned_df = df.reindex(common_index)
             if aligned_df.dropna().empty:
-                print(f"  ❌ {symbol}: no valid candles on the primary clock - SKIPPING")
+                print(
+                    f"  ❌ {symbol}: no valid candles on the primary clock - SKIPPING"
+                )
                 continue
             aligned[symbol] = aligned_df
 
@@ -1220,7 +1243,7 @@ class StatArbBacktest:
             is_entry_candidate = (
                 not np.isnan(z)
                 and abs(z) >= dyn_threshold
-                and abs(z) <= self.config.z_sl_threshold
+                and abs(z) < self.config.z_extreme_level
             )
 
             if not is_entry_candidate:
@@ -1236,11 +1259,20 @@ class StatArbBacktest:
 
             for days in self._stability_windows_days:
                 bars = days * self._bars_per_day
-                if len(primary_df) < bars or len(coin_df) < bars:
+                aligned_close = pd.concat(
+                    [
+                        coin_df["close"].rename("coin"),
+                        primary_df["close"].rename("primary"),
+                    ],
+                    axis=1,
+                    join="inner",
+                ).dropna()
+                if len(aligned_close) < bars:
                     continue
 
-                coin_close = coin_df["close"].tail(bars)
-                primary_close = primary_df["close"].tail(bars)
+                aligned_close = aligned_close.tail(bars)
+                coin_close = aligned_close["coin"]
+                primary_close = aligned_close["primary"]
                 if (coin_close <= 0).any() or (primary_close <= 0).any():
                     continue
 
@@ -1288,12 +1320,11 @@ class StatArbBacktest:
                 if halflife_ok and adf_ok:
                     pass_count += 1
 
-            required = (
-                min(self.config.stability_min_pass_windows, checked)
-                if checked > 0
-                else 0
+            required = min(
+                self.config.stability_min_pass_windows,
+                len(self._stability_windows_days),
             )
-            if required == 0 or pass_count >= required:
+            if checked >= required and pass_count >= required:
                 filtered[symbol] = z_result
 
         return filtered
@@ -1308,14 +1339,16 @@ class StatArbBacktest:
 
         for symbol, result in z_score_results.items():
             corr_ok = result.current_correlation >= self.config.min_correlation
-            beta_ok = self.config.min_beta <= result.current_beta <= self.config.max_beta
+            beta_ok = (
+                self.config.min_beta <= result.current_beta <= self.config.max_beta
+            )
             if not corr_ok or not beta_ok:
                 continue
 
             corr_result = correlation_results.get(symbol)
             if corr_result is not None:
-                beta_stable, beta_short, beta_long, beta_drift = self._evaluate_beta_drift(
-                    corr_result
+                beta_stable, beta_short, beta_long, beta_drift = (
+                    self._evaluate_beta_drift(corr_result)
                 )
                 if not beta_stable:
                     continue
@@ -1790,7 +1823,9 @@ class StatArbBacktest:
                 halflife = self._get_halflife_for_symbol(
                     symbol, window_data, correlation_results
                 )
-                hurst = self._get_hurst_for_symbol(symbol, window_data, correlation_results)
+                hurst = self._get_hurst_for_symbol(
+                    symbol, window_data, correlation_results
+                )
 
                 # 3.1 ADF degradation with confirm scans
                 if self.config.use_adf_filter:
@@ -1821,7 +1856,8 @@ class StatArbBacktest:
                 # 3.4 Correlation drop (hysteresis for open positions)
                 if (
                     exit_reason is None
-                    and z_result.current_correlation < self.config.correlation_exit_threshold
+                    and z_result.current_correlation
+                    < self.config.correlation_exit_threshold
                 ):
                     exit_reason = "CORRELATION_DROP"
 
@@ -1937,8 +1973,7 @@ class StatArbBacktest:
                 (coin_1m_full.index >= bar_start) & (coin_1m_full.index < bar_end)
             ]
             primary_1m = primary_1m_full[
-                (primary_1m_full.index >= bar_start)
-                & (primary_1m_full.index < bar_end)
+                (primary_1m_full.index >= bar_start) & (primary_1m_full.index < bar_end)
             ]
 
             if coin_1m.empty or primary_1m.empty:
@@ -2199,7 +2234,7 @@ class StatArbBacktest:
 
             # Check if signal is valid entry candidate using dynamic threshold
             # Entry: |Z| >= dynamic_threshold AND |Z| < z_extreme_level
-            # Note: z_extreme_level (6.0) > z_sl (4.0) to allow extreme signals
+            # z_extreme_level > z_sl allows pullback-confirmed extreme signals.
             if abs(z) >= dyn_threshold and abs(z) < self.config.z_extreme_level:
                 side = "short" if z >= dyn_threshold else "long"
                 entry_candidates.append((abs(z), symbol, side, z_result, dyn_threshold))
@@ -2421,7 +2456,7 @@ class StatArbBacktest:
                         ) = entry_result
 
                         if action == "ENTER":
-                            await self._execute_watch_entry(
+                            entered = await self._execute_watch_entry(
                                 watch,
                                 entry_time,
                                 entry_z,
@@ -2429,6 +2464,9 @@ class StatArbBacktest:
                                 coin_reference_price,
                                 primary_reference_price,
                             )
+                            if not entered:
+                                watches_to_remove.append((symbol, "NO_MARGIN"))
+                                continue
                             watches_to_remove.append((symbol, None))
                             # Check intraday exit
                             await self._check_intraday_exit_after_entry(
@@ -2471,7 +2509,7 @@ class StatArbBacktest:
 
                 # Check pullback on 15m (ENTRY - first priority)
                 if abs_z <= watch.max_z - current_pullback:
-                    await self._execute_watch_entry(
+                    entered = await self._execute_watch_entry(
                         watch,
                         current_time,
                         live_z,
@@ -2479,7 +2517,7 @@ class StatArbBacktest:
                         float(coin_price),
                         float(primary_price),
                     )
-                    watches_to_remove.append((symbol, None))
+                    watches_to_remove.append((symbol, None if entered else "NO_MARGIN"))
                     continue
                 # Update max_z if widening (only upward!)
                 elif abs_z > watch.max_z:
@@ -2597,9 +2635,7 @@ class StatArbBacktest:
             return None
 
         # Filter to requested time range
-        df = df_full[
-            (df_full.index >= start_time) & (df_full.index < end_time)
-        ]
+        df = df_full[(df_full.index >= start_time) & (df_full.index < end_time)]
 
         return df if not df.empty else None
 
@@ -2706,7 +2742,7 @@ class StatArbBacktest:
                 return ("FALSE_ALARM", ts, live_z, coin_price, primary_price)
 
             # 4. Check SL hit - Z exceeded extreme level (not z_sl!)
-            # We allow signals above z_sl (4.0) up to z_extreme_level (6.0)
+            # We allow signals above z_sl up to z_extreme_level.
             # Only cancel if Z exceeds the extreme level
             if abs_z >= self.config.z_extreme_level:
                 return ("SL_HIT", ts, live_z, coin_price, primary_price)
@@ -2820,8 +2856,27 @@ class StatArbBacktest:
         2. Percentage mode: balance * position_size_pct
         """
         if self.config.position_size_usdt > 0:
-            return self.config.position_size_usdt
-        return self.balance * self.config.position_size_pct
+            requested = self.config.position_size_usdt
+        else:
+            requested = self.balance * self.config.position_size_pct
+        risk_cap = max(0.0, self.balance) * self.config.max_coin_notional_pct
+        return min(requested, risk_cap)
+
+    def _used_margin(self) -> float:
+        return sum(
+            (position.coin_size + position.primary_size) / max(1, self.config.leverage)
+            for position in self.positions.values()
+        )
+
+    def _has_margin_capacity(
+        self,
+        *,
+        coin_notional: float,
+        primary_notional: float,
+    ) -> bool:
+        required = (coin_notional + primary_notional) / max(1, self.config.leverage)
+        capacity = max(0.0, self.balance) * self.config.max_margin_utilization
+        return self._used_margin() + required <= capacity
 
     async def _execute_watch_entry(
         self,
@@ -2831,7 +2886,7 @@ class StatArbBacktest:
         current_bar_idx: int,
         coin_reference_price: float,
         primary_reference_price: float,
-    ) -> None:
+    ) -> bool:
         """Execute entry after trailing pullback confirmation."""
         symbol = watch.symbol
 
@@ -2853,6 +2908,12 @@ class StatArbBacktest:
         beta = abs(watch.beta)
         coin_size = position_size
         primary_size = position_size * beta
+        if not self._has_margin_capacity(
+            coin_notional=coin_size,
+            primary_notional=primary_size,
+        ):
+            print(f"⛔ WATCH ENTRY {symbol} skipped: portfolio margin cap")
+            return False
 
         # Calculate SL threshold (may be extended for extreme entries)
         # If entry Z exceeds base SL threshold, use extended SL: entry_z + offset
@@ -2884,7 +2945,10 @@ class StatArbBacktest:
             # Frozen parameters from watch for ExitObserver
             spread_mean=watch.spread_mean,
             spread_std=watch.spread_std,
-            z_tp_threshold=self.config.z_tp_threshold,
+            z_tp_threshold=max(
+                self.config.z_tp_threshold,
+                entry_abs_z * 0.1,
+            ),
             z_sl_threshold=calculated_sl_threshold,
             initial_sl_threshold=calculated_sl_threshold,
             min_z_reached=entry_abs_z,  # Start from entry Z
@@ -2903,6 +2967,7 @@ class StatArbBacktest:
             f"β={beta:.3f}{multiplier_str}"
         )
         self._print_portfolio_state()
+        return True
 
     async def _check_intraday_exit_after_entry(
         self,
@@ -2934,8 +2999,7 @@ class StatArbBacktest:
         coin_close_times = coin_1m.index + timedelta(minutes=1)
         primary_close_times = primary_1m.index + timedelta(minutes=1)
         remaining_coin = coin_1m.loc[
-            (coin_close_times > entry_time)
-            & (coin_close_times <= candle_end_time)
+            (coin_close_times > entry_time) & (coin_close_times <= candle_end_time)
         ]
         remaining_primary = primary_1m.loc[
             (primary_close_times > entry_time)
@@ -3115,7 +3179,7 @@ class StatArbBacktest:
         window_data: Dict[str, pd.DataFrame],
         dynamic_threshold: float,
         correlation_results: Optional[Dict] = None,
-    ) -> None:
+    ) -> bool:
         """
         Open a spread position (two legs).
 
@@ -3164,6 +3228,12 @@ class StatArbBacktest:
         # Example: $3000 position, beta=0.8 → COIN=$3000, ETH=$2400
         coin_size = position_size
         primary_size = position_size * beta
+        if not self._has_margin_capacity(
+            coin_notional=coin_size,
+            primary_notional=primary_size,
+        ):
+            print(f"⛔ OPEN {symbol} skipped: portfolio margin cap")
+            return False
 
         # Calculate spread_mean and spread_std for frozen parameters
         spread_mean = self._get_spread_mean(z_result)
@@ -3199,7 +3269,10 @@ class StatArbBacktest:
             # Frozen parameters for ExitObserver
             spread_mean=spread_mean,
             spread_std=spread_std,
-            z_tp_threshold=self.config.z_tp_threshold,
+            z_tp_threshold=max(
+                self.config.z_tp_threshold,
+                entry_abs_z * 0.1,
+            ),
             z_sl_threshold=calculated_sl_threshold,
             initial_sl_threshold=calculated_sl_threshold,
             min_z_reached=entry_abs_z,  # Start from entry Z
@@ -3218,6 +3291,7 @@ class StatArbBacktest:
             f"Hedge: ${primary_size:.2f} @ {primary_price:.4f}"
         )
         self._print_portfolio_state()
+        return True
 
     def _get_spread_mean(self, result: ZScoreResult) -> float:
         """Get the latest spread mean from Z-score result."""
@@ -3277,9 +3351,7 @@ class StatArbBacktest:
         self._halflife_violation_counts.pop(symbol, None)
 
         coin_exit_reference = float(window_data[symbol]["close"].iloc[-1])
-        primary_exit_reference = float(
-            window_data[self.primary_pair]["close"].iloc[-1]
-        )
+        primary_exit_reference = float(window_data[self.primary_pair]["close"].iloc[-1])
         pnl_breakdown = calculate_spread_pnl(
             spread_side=position.side,
             coin_entry_fill=position.coin_entry_price,
@@ -3848,6 +3920,30 @@ Examples:
         help="Leverage multiplier. Default: from settings",
     )
     parser.add_argument(
+        "--env-file",
+        type=str,
+        default=None,
+        help="Explicit settings file. Default: project .env",
+    )
+    parser.add_argument(
+        "--half-spread-bps",
+        type=float,
+        default=2.0,
+        help="Estimated half-spread paid per fill. Default: 2 bps",
+    )
+    parser.add_argument(
+        "--slippage-bps",
+        type=float,
+        default=1.0,
+        help="Additional adverse slippage per fill. Default: 1 bp",
+    )
+    parser.add_argument(
+        "--use-ohlc-pseudo-ticks",
+        type=str,
+        default="false",
+        help="Use heuristic O/H/L/C intrabar ordering (true/false). Default: false",
+    )
+    parser.add_argument(
         "--no-plot",
         action="store_true",
         help="Disable chart plotting",
@@ -3910,9 +4006,7 @@ Examples:
         if normalized in ("0", "false", "no", "n", "off"):
             return False
 
-        raise ValueError(
-            f"Invalid value for {flag_name}: {value!r}. Use true/false."
-        )
+        raise ValueError(f"Invalid value for {flag_name}: {value!r}. Use true/false.")
 
     # Parse dates
     start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -3927,7 +4021,7 @@ Examples:
         sys.exit(1)
 
     # Initialize container
-    container = Container().init()
+    container = Container().init(args.env_file)
     settings = container.settings
     logger = container.logger
 
@@ -3944,10 +4038,16 @@ Examples:
 
     # Parse optional bool CLI flags
     try:
-        use_trailing_entry = _parse_bool(args.use_trailing_entry, "--use-trailing-entry")
+        use_trailing_entry = _parse_bool(
+            args.use_trailing_entry, "--use-trailing-entry"
+        )
         use_live_exit = _parse_bool(args.use_live_exit, "--use-live-exit")
         use_dynamic_tp = _parse_bool(args.use_dynamic_tp, "--use-dynamic-tp")
         lazy_minute_data = _parse_bool(args.lazy_minute_data, "--lazy-minute-data")
+        use_ohlc_pseudo_ticks = _parse_bool(
+            args.use_ohlc_pseudo_ticks,
+            "--use-ohlc-pseudo-ticks",
+        )
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -3998,6 +4098,9 @@ Examples:
         config_overrides["lazy_load_minute_data"] = lazy_minute_data
     if use_dynamic_tp is not None:
         config_overrides["use_dynamic_tp"] = use_dynamic_tp
+    config_overrides["half_spread_bps"] = args.half_spread_bps
+    config_overrides["slippage_bps"] = args.slippage_bps
+    config_overrides["use_ohlc_pseudo_ticks"] = bool(use_ohlc_pseudo_ticks)
 
     config_kwargs = build_backtest_config_kwargs(
         settings=settings,
@@ -4024,7 +4127,12 @@ Examples:
     print(f"  Initial Balance:     ${config.initial_balance:,.2f}")
     if config.position_size_usdt > 0:
         print(f"  Position Size Mode:  fixed USDT")
-        print(f"  Base COIN Size:      ${config.position_size_usdt:,.2f}")
+        effective_size = min(
+            config.position_size_usdt,
+            config.initial_balance * config.max_coin_notional_pct,
+        )
+        print(f"  Requested COIN Size: ${config.position_size_usdt:,.2f}")
+        print(f"  Effective Max Size:  ${effective_size:,.2f}")
         print(f"  Equivalent Risk:     {config.position_size_pct * 100:.1f}%")
     else:
         print(f"  Position Size Mode:  percent")
@@ -4033,6 +4141,15 @@ Examples:
         f"  Max Spreads:         {config.max_spreads} (COIN vs {settings.PRIMARY_PAIR})"
     )
     print(f"  Leverage:            {config.leverage}x")
+    print(f"  Margin Utilization:  <= {config.max_margin_utilization * 100:.0f}%")
+    print(
+        f"  Execution Costs:     taker + {config.half_spread_bps:.1f}bps half-spread "
+        f"+ {config.slippage_bps:.1f}bps slippage per fill"
+    )
+    print(
+        f"  Intrabar Model:      "
+        f"{'heuristic OHLC pseudo-ticks' if config.use_ohlc_pseudo_ticks else 'synchronized 1m closes'}"
+    )
     print(f"\n  Z Entry Threshold:   ±{config.z_entry_threshold}")
     print(f"  Z TP Threshold:      ±{config.z_tp_threshold}")
     print(f"  Z SL Threshold:      ±{config.z_sl_threshold}")

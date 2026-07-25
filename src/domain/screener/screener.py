@@ -63,7 +63,9 @@ class LastScanState:
     hurst_values: Optional[Dict[str, float]] = None
     adf_pvalues: Optional[Dict[str, float]] = None
     halflife_values: Optional[Dict[str, float]] = None
-    dynamic_thresholds: Optional[Dict[str, float]] = None  # symbol -> dynamic_entry_threshold
+    dynamic_thresholds: Optional[Dict[str, float]] = (
+        None  # symbol -> dynamic_entry_threshold
+    )
 
     def is_empty(self) -> bool:
         """Check if state is empty (no scan performed yet)."""
@@ -72,7 +74,7 @@ class LastScanState:
     def get_age_seconds(self) -> float:
         """Get age of scan in seconds."""
         if self.scan_time is None:
-            return float('inf')
+            return float("inf")
         return (datetime.now(timezone.utc) - self.scan_time).total_seconds()
 
 
@@ -116,6 +118,7 @@ class ScreenerService:
         enable_stability_filter: bool = True,
         stability_windows_days: Optional[list[int]] = None,
         stability_min_pass_windows: int = 2,
+        z_extreme_level: float = 5.0,
     ):
         """
         Initialize Screener Service.
@@ -160,6 +163,10 @@ class ScreenerService:
         if not self._stability_windows_days:
             self._stability_windows_days = [3, 6, 9]
         self._stability_min_pass_windows = max(1, stability_min_pass_windows)
+        self._z_extreme_level = max(
+            self._z_score_service.z_sl_threshold,
+            z_extreme_level,
+        )
 
         # Internal state for last scan results
         self._last_scan_state = LastScanState()
@@ -327,7 +334,7 @@ class ScreenerService:
             lambda: self._correlation_service.calculate(
                 primary_symbol=self._primary_pair,
                 ohlcv=raw_data,
-            )
+            ),
         )
 
         if not correlation_results:
@@ -341,7 +348,7 @@ class ScreenerService:
                 primary_symbol=self._primary_pair,
                 correlation_results=correlation_results,
                 ohlcv=raw_data,
-            )
+            ),
         )
 
         symbols_scanned = len(z_score_results)
@@ -354,10 +361,7 @@ class ScreenerService:
 
         # 7. Stability-over-time filter across multiple windows
         filtered_results, _ = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: self._filter_by_stability(
-                filtered_results, raw_data
-            )
+            None, lambda: self._filter_by_stability(filtered_results, raw_data)
         )
 
         # 8. Filter by Hurst exponent (CPU-bound, run in thread pool)
@@ -365,15 +369,18 @@ class ScreenerService:
             None,
             lambda: self._filter_by_hurst(
                 filtered_results, raw_data, correlation_results
-            )
+            ),
         )
 
         # 9. Filter by Half-Life mean-reversion speed (CPU-bound, run in thread pool)
-        filtered_results, halflife_values = await asyncio.get_event_loop().run_in_executor(
+        (
+            filtered_results,
+            halflife_values,
+        ) = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: self._filter_by_halflife(
                 filtered_results, raw_data, correlation_results, hurst_values
-            )
+            ),
         )
 
         # 10. Filter by ADF stationarity (CPU-bound, run in thread pool)
@@ -381,7 +388,7 @@ class ScreenerService:
             None,
             lambda: self._filter_by_adf(
                 filtered_results, raw_data, correlation_results, halflife_values
-            )
+            ),
         )
 
         # 11. Log results
@@ -521,7 +528,6 @@ class ScreenerService:
 
         filtered: Dict[str, ZScoreResult] = {}
         skipped: list[str] = []
-        z_sl = self._z_score_service.z_sl_threshold
         adf_threshold = self._adf_filter_service.threshold
         halflife_threshold = self._halflife_filter_service.threshold
 
@@ -533,7 +539,7 @@ class ScreenerService:
             z = result.current_z_score
             z_entry = result.dynamic_entry_threshold
             is_entry_candidate = (
-                not np.isnan(z) and abs(z) >= z_entry and abs(z) <= z_sl
+                not np.isnan(z) and abs(z) >= z_entry and abs(z) < self._z_extreme_level
             )
             if not is_entry_candidate:
                 filtered[symbol] = result
@@ -549,11 +555,20 @@ class ScreenerService:
 
             for days in self._stability_windows_days:
                 bars = days * self._bars_per_day
-                if len(primary_df) < bars or len(coin_df) < bars:
+                aligned_close = pd.concat(
+                    [
+                        coin_df["close"].rename("coin"),
+                        primary_df["close"].rename("primary"),
+                    ],
+                    axis=1,
+                    join="inner",
+                ).dropna()
+                if len(aligned_close) < bars:
                     continue
 
-                coin_close = coin_df["close"].tail(bars)
-                primary_close = primary_df["close"].tail(bars)
+                aligned_close = aligned_close.tail(bars)
+                coin_close = aligned_close["coin"]
+                primary_close = aligned_close["primary"]
                 if (coin_close <= 0).any() or (primary_close <= 0).any():
                     continue
 
@@ -587,8 +602,11 @@ class ScreenerService:
                 ):
                     pass_count += 1
 
-            required = min(self._stability_min_pass_windows, checked) if checked > 0 else 0
-            if required == 0 or pass_count >= required:
+            required = min(
+                self._stability_min_pass_windows,
+                len(self._stability_windows_days),
+            )
+            if checked >= required and pass_count >= required:
                 filtered[symbol] = result
                 stability_passes[symbol] = pass_count
             else:
@@ -692,9 +710,6 @@ class ScreenerService:
         if not self._hurst_filter_service:
             return z_score_results, hurst_values
 
-        # Get SL threshold from z_score_service (static)
-        z_sl = self._z_score_service.z_sl_threshold
-
         filtered = {}
         skipped = []
 
@@ -710,9 +725,8 @@ class ScreenerService:
             z_entry = result.dynamic_entry_threshold
 
             # Check if this is an entry candidate
-            # Entry candidate: |Z| >= dynamic_entry_threshold AND |Z| <= sl_threshold
             is_entry_candidate = (
-                not np.isnan(z) and abs(z) >= z_entry and abs(z) <= z_sl
+                not np.isnan(z) and abs(z) >= z_entry and abs(z) < self._z_extreme_level
             )
 
             if not is_entry_candidate:
@@ -847,7 +861,9 @@ class ScreenerService:
                     f"✅ {symbol}: Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f} < {self._adf_filter_service.threshold} (stationary)"
                 )
             else:
-                skipped.append(f"{symbol} (Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f})")
+                skipped.append(
+                    f"{symbol} (Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f})"
+                )
                 self._logger.warning(
                     f"⚠️ {symbol}: Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f} >= {self._adf_filter_service.threshold} (non-stationary, skip)"
                 )
@@ -890,7 +906,10 @@ class ScreenerService:
         """
         halflife_values: Dict[str, float] = {}
 
-        if not self._halflife_filter_service or not self._halflife_filter_service.is_available:
+        if (
+            not self._halflife_filter_service
+            or not self._halflife_filter_service.is_available
+        ):
             return z_score_results, halflife_values
 
         filtered = {}
@@ -942,7 +961,9 @@ class ScreenerService:
                     f"<= {self._halflife_filter_service.threshold} (fast reversion)"
                 )
             else:
-                skipped.append(f"{symbol} (Z={z:.2f}, H={hurst:.3f}, HL={halflife:.1f})")
+                skipped.append(
+                    f"{symbol} (Z={z:.2f}, H={hurst:.3f}, HL={halflife:.1f})"
+                )
                 self._logger.warning(
                     f"⚠️ {symbol}: Z={z:.2f}, Hurst={hurst:.3f}, HL={halflife:.1f} bars "
                     f"> {self._halflife_filter_service.threshold} (slow reversion, skip)"
@@ -982,7 +1003,9 @@ class ScreenerService:
 
         # Extend warmup for stability/beta-drift windows if enabled.
         if self._enable_stability_filter and self._stability_windows_days:
-            data_window_days = max(data_window_days, max(self._stability_windows_days) + 2)
+            data_window_days = max(
+                data_window_days, max(self._stability_windows_days) + 2
+            )
         if self._enable_beta_drift_guard:
             data_window_days = max(data_window_days, self._beta_drift_long_days + 2)
         start_time = end_time - timedelta(days=data_window_days)
@@ -1102,7 +1125,7 @@ class ScreenerService:
         hurst_values = hurst_values or {}
         adf_pvalues = adf_pvalues or {}
         halflife_values = halflife_values or {}
-        z_sl = self._z_score_service.z_sl_threshold
+        z_limit = self._z_extreme_level
 
         # Build list of tuples for sorting
         data = []
@@ -1166,9 +1189,9 @@ class ScreenerService:
             # Determine signal based on z-score and dynamic threshold
             if np.isnan(z):
                 signal = "N/A"
-            elif z >= dyn_thr and z <= z_sl:
+            elif z >= dyn_thr and z < z_limit:
                 signal = "🔴 SHORT"
-            elif z <= -dyn_thr and z >= -z_sl:
+            elif z <= -dyn_thr and z > -z_limit:
                 signal = "🟢 LONG"
             elif abs(z) >= 1.5:
                 signal = "⚠️ WATCH"
@@ -1184,7 +1207,11 @@ class ScreenerService:
             # ADF: show value only for entry candidates, "-" otherwise
             adf_str = f"{adf:>8.4f}" if adf is not None else f"{'—':>8}"
             # Half-Life: show value only for entry candidates, "-" otherwise
-            hl_str = f"{halflife:>6.1f}" if halflife is not None and halflife != float("inf") else f"{'—':>6}"
+            hl_str = (
+                f"{halflife:>6.1f}"
+                if halflife is not None and halflife != float("inf")
+                else f"{'—':>6}"
+            )
 
             lines.append(
                 f"{row['symbol']:<20} {z_str} {dyn_thr_str} {beta_str} {corr_str} {hurst_str} {adf_str} {hl_str} {signal:>12}"

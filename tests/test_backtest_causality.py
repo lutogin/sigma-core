@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from backtests.run_backtest import (
+    BacktestConfig,
     HistoricalFundingCache,
     StatArbBacktest,
     iter_synchronized_minute_prices,
@@ -111,3 +112,15 @@ def test_latest_funding_is_normalized_only_for_entry_comparison() -> None:
 def test_rate_limiter_can_be_constructed_without_an_event_loop() -> None:
     limiter = RateLimiter(requests_per_second=10.0, burst_size=20)
     assert limiter._tokens == 20.0
+
+
+def test_fixed_notional_is_capped_by_equity_risk_budget() -> None:
+    backtest = StatArbBacktest.__new__(StatArbBacktest)
+    backtest.config = BacktestConfig(
+        initial_balance=10_000.0,
+        position_size_usdt=10_000.0,
+        max_coin_notional_pct=0.10,
+    )
+    backtest.balance = 10_000.0
+
+    assert backtest._get_base_position_size() == pytest.approx(1_000.0)

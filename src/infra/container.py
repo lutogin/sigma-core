@@ -5,7 +5,8 @@ Uses lazy initialization to avoid circular imports.
 All dependencies are created on first access.
 """
 
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional, Union
 
 from src.config.settings import Settings
 
@@ -24,7 +25,10 @@ class Container:
         self._settings: Settings = None  # type: ignore
         self._initialized = False
 
-    def init(self) -> "Container":
+    def init(
+        self,
+        env_file: Optional[Union[str, Path]] = None,
+    ) -> "Container":
         """
         Initialize the container with configuration.
 
@@ -33,7 +37,7 @@ class Container:
         """
         from src.config import load_settings
 
-        self._settings = load_settings()
+        self._settings = load_settings(env_file)
         self._initialized = True
         return self
 
@@ -269,6 +273,7 @@ class Container:
                 enable_stability_filter=self._settings.ENABLE_STABILITY_FILTER,
                 stability_windows_days=self._settings.STABILITY_WINDOWS_DAYS,
                 stability_min_pass_windows=self._settings.STABILITY_MIN_PASS_WINDOWS,
+                z_extreme_level=self._settings.Z_EXTREME_LEVEL,
             )
         return self._instances["screener_service"]
 

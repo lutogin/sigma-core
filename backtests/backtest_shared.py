@@ -65,10 +65,12 @@ def build_backtest_config_kwargs(
     """
     Build kwargs for BacktestConfig with consistent defaults across runners.
     """
-    trailing_pullback, trailing_pullback_extreme, _ = compute_trailing_pullback_calibration(
-        timeframe=settings.TIMEFRAME,
-        trailing_pullback_base=settings.TRAILING_ENTRY_PULLBACK,
-        trailing_pullback_extreme_base=settings.TRAILING_ENTRY_PULLBACK_EXTREME,
+    trailing_pullback, trailing_pullback_extreme, _ = (
+        compute_trailing_pullback_calibration(
+            timeframe=settings.TIMEFRAME,
+            trailing_pullback_base=settings.TRAILING_ENTRY_PULLBACK,
+            trailing_pullback_extreme_base=settings.TRAILING_ENTRY_PULLBACK_EXTREME,
+        )
     )
 
     kwargs: Dict[str, Any] = {
@@ -76,7 +78,13 @@ def build_backtest_config_kwargs(
         "position_size_pct": position_size_pct,
         "position_size_usdt": position_size_usdt,
         "max_spreads": max_spreads,
+        "max_coin_notional_pct": settings.MAX_COIN_NOTIONAL_PCT,
+        "max_margin_utilization": settings.MAX_MARGIN_UTILIZATION,
         "leverage": leverage,
+        "use_limit_orders": False,
+        "half_spread_bps": 2.0,
+        "slippage_bps": 1.0,
+        "use_ohlc_pseudo_ticks": False,
         "z_entry_threshold": settings.Z_ENTRY_THRESHOLD,
         "z_tp_threshold": settings.Z_TP_THRESHOLD,
         "z_sl_threshold": settings.Z_SL_THRESHOLD,
@@ -193,8 +201,7 @@ def build_backtest_services(
     adf_filter_service = ADFFilterService(
         logger=logger,
         pvalue_threshold=config.adf_pvalue_threshold or settings.ADF_PVALUE_THRESHOLD,
-        lookback_candles=config.adf_lookback_candles
-        or settings.ADF_LOOKBACK_CANDLES,
+        lookback_candles=config.adf_lookback_candles or settings.ADF_LOOKBACK_CANDLES,
     )
 
     halflife_filter_service = HalfLifeFilterService(
@@ -214,4 +221,3 @@ def build_backtest_services(
         "halflife_filter_service": halflife_filter_service,
         "funding_cache": funding_cache,
     }
-
