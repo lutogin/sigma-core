@@ -40,6 +40,7 @@ try:
     from backtests.run_backtest import (
         BacktestConfig,
         BacktestResult,
+        HistoricalFundingCache,
         StatArbBacktest,
         Trade,
     )
@@ -52,6 +53,7 @@ except ImportError:
     from run_backtest import (
         BacktestConfig,
         BacktestResult,
+        HistoricalFundingCache,
         StatArbBacktest,
         Trade,
     )
@@ -257,6 +259,14 @@ class UniverseWFResult:
     max_portfolio_dd: float
     coin_selection_turnover: float  # How often coins change between steps
 
+    # Train-only selection ending exactly at the result timestamp. This is the
+    # candidate set for the next live period; historical OOS steps qualify it.
+    live_selection_start: datetime
+    live_selection_end: datetime
+    live_selection_results: List[CoinTrainResult]
+    live_selected_coins: List[str]
+    live_selection_scores: Dict[str, float]
+
 
 # =============================================================================
 # Universe Walk-Forward Runner
@@ -448,8 +458,35 @@ class UniverseWalkForwardRunner:
             # Print step summary
             self._print_step_summary(step_result)
 
+        # Build a current train-only selection for the period immediately after
+        # this result. Historical OOS performance is used later as a gate, not
+        # as the source of pair identities.
+        live_selection_start = end_date - timedelta(days=self.train_days)
+        print("\n" + "=" * 80)
+        print("🔭 NEXT LIVE SELECTION")
+        print(f"   Train only: {live_selection_start.date()} → {end_date.date()}")
+        print("=" * 80)
+        live_selection_results = await self._run_train_phase(
+            live_selection_start,
+            end_date,
+        )
+        live_selected_coins, live_selection_scores = self._select_coins(
+            live_selection_results
+        )
+        print(
+            "   Current candidates: "
+            + (", ".join(live_selected_coins) if live_selected_coins else "none")
+        )
+
         # Calculate final results
-        result = self._calculate_final_results(start_date, end_date)
+        result = self._calculate_final_results(
+            start_date,
+            end_date,
+            live_selection_start=live_selection_start,
+            live_selection_results=live_selection_results,
+            live_selected_coins=live_selected_coins,
+            live_selection_scores=live_selection_scores,
+        )
 
         # Print final report
         self._print_final_report(result)
@@ -835,6 +872,11 @@ class UniverseWalkForwardRunner:
         self,
         start_date: datetime,
         end_date: datetime,
+        *,
+        live_selection_start: datetime,
+        live_selection_results: List[CoinTrainResult],
+        live_selected_coins: List[str],
+        live_selection_scores: Dict[str, float],
     ) -> UniverseWFResult:
         """Calculate aggregated results."""
         total_pnl = sum(step.portfolio_pnl for step in self.steps)
@@ -866,6 +908,11 @@ class UniverseWalkForwardRunner:
             total_trades=total_trades,
             max_portfolio_dd=max_dd,
             coin_selection_turnover=turnover,
+            live_selection_start=live_selection_start,
+            live_selection_end=end_date,
+            live_selection_results=live_selection_results,
+            live_selected_coins=live_selected_coins,
+            live_selection_scores=live_selection_scores,
         )
 
     def _print_final_report(self, result: UniverseWFResult) -> None:
@@ -911,6 +958,14 @@ class UniverseWalkForwardRunner:
         print(f"  Total Trades:            {result.total_trades}")
         print(f"  Max Portfolio Drawdown:  ${result.max_portfolio_dd:,.2f}")
         print(f"  Selection Turnover:      {result.coin_selection_turnover * 100:.1f}%")
+        print(
+            "  Next Live Candidates:    "
+            + (
+                ", ".join(result.live_selected_coins)
+                if result.live_selected_coins
+                else "none"
+            )
+        )
 
         # Profitable vs losing steps
         profitable_steps = sum(1 for s in result.steps if s.portfolio_pnl > 0)
@@ -1152,6 +1207,7 @@ class UniverseWalkForwardRunner:
                 "rank_metric": result.rank_metric,
                 "account_model": "independent_per_coin",
                 "strategy_config": asdict(self.base_config),
+                "universe_size": len(self.coins),
             },
             "summary": {
                 "total_portfolio_pnl": result.total_portfolio_pnl,
@@ -1163,6 +1219,25 @@ class UniverseWalkForwardRunner:
             "best_train_candidates_over_period": best_train_candidates,
             "ranked_fallback_over_period": ranked_fallback,
             "coin_period_stats": coin_period_stats,
+            "live_selection": {
+                "train_start": result.live_selection_start.isoformat(),
+                "train_end": result.live_selection_end.isoformat(),
+                "selected_coins": result.live_selected_coins,
+                "selection_scores": result.live_selection_scores,
+                "train_results": [
+                    {
+                        "coin": row.coin,
+                        "net_pnl": row.net_pnl,
+                        "total_trades": row.total_trades,
+                        "max_drawdown": row.max_drawdown,
+                        "sharpe_ratio": row.sharpe_ratio,
+                        "profit_factor": row.profit_factor,
+                        "costs": row.costs,
+                        "score": row.score,
+                    }
+                    for row in result.live_selection_results
+                ],
+            },
             "steps": [
                 {
                     "step_num": s.step_num,
@@ -1465,12 +1540,29 @@ Examples:
             return
         print(f"Using {len(coins)} tradable symbols after exchange validation.")
 
+        funding_cache = None
+        if base_config.use_funding_filter:
+            funding_cache = HistoricalFundingCache(logger=logger)
+            funding_start = start_date - timedelta(
+                days=settings.LOOKBACK_WINDOW_DAYS * 3 + 2
+            )
+            await funding_cache.load(
+                exchange_client=exchange,
+                symbols=[
+                    settings.PRIMARY_PAIR,
+                    *(f"{coin}/USDT:USDT" for coin in coins),
+                ],
+                start_date=funding_start,
+                end_date=end_date,
+            )
+
         # Create services
         services = {
             "logger": logger,
             "settings": settings,
             "exchange": exchange,
             "ohlcv_repository": container.ohlcv_repository,
+            "funding_cache": funding_cache,
         }
 
         # Create and run runner

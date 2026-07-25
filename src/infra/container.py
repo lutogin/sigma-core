@@ -266,6 +266,7 @@ class Container:
                 consistent_pairs=self._settings.CONSISTENT_PAIRS,
                 timeframe=self._settings.TIMEFRAME,
                 trading_pair_repository=self.trading_pair_repository,
+                position_state_service=self.position_state_service,
                 enable_beta_drift_guard=self._settings.ENABLE_BETA_DRIFT_GUARD,
                 beta_drift_short_days=self._settings.BETA_DRIFT_SHORT_DAYS,
                 beta_drift_long_days=self._settings.BETA_DRIFT_LONG_DAYS,

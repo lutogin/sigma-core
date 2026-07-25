@@ -6,7 +6,8 @@ Data models for trading pairs configuration stored in MongoDB.
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
+from uuid import uuid4
 
 
 @dataclass
@@ -43,6 +44,7 @@ class TradingPair:
     @classmethod
     def from_dict(cls, data: dict) -> "TradingPair":
         """Create from MongoDB document."""
+        data = dict(data)
         # Handle ObjectId
         doc_id = data.pop("_id", None)
         if doc_id:
@@ -74,3 +76,32 @@ class TradingPair:
         status = "active" if self.is_active else "inactive"
         return f"TradingPair({self.symbol}, {status})"
 
+
+@dataclass
+class TradingPairVersion:
+    """Immutable, auditable set of pairs produced by one walk-forward run."""
+
+    version_id: str = field(default_factory=lambda: uuid4().hex)
+    symbols: list[str] = field(default_factory=list)
+    ecosystem: str = "ETH"
+    source_result: str = ""
+    source_sha256: str = ""
+    metrics: dict[str, Any] = field(default_factory=dict)
+    strategy_config: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["created_at"] = self.created_at.isoformat()
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TradingPairVersion":
+        values = dict(data)
+        values.pop("_id", None)
+        created_at = values.get("created_at")
+        if isinstance(created_at, str):
+            values["created_at"] = datetime.fromisoformat(created_at)
+        elif isinstance(created_at, datetime) and created_at.tzinfo is None:
+            values["created_at"] = created_at.replace(tzinfo=timezone.utc)
+        return cls(**values)

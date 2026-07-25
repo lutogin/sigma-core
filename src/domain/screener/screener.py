@@ -112,6 +112,7 @@ class ScreenerService:
         consistent_pairs: list[str],
         timeframe: str,
         trading_pair_repository: Optional[TradingPairRepository] = None,
+        position_state_service=None,
         enable_beta_drift_guard: bool = True,
         beta_drift_short_days: int = 3,
         beta_drift_long_days: int = 9,
@@ -147,6 +148,7 @@ class ScreenerService:
         self._consistent_pairs = consistent_pairs
         self._timeframe = timeframe
         self._trading_pair_repository = trading_pair_repository
+        self._position_state = position_state_service
         self._bars_per_day = max(1, 24 * 60 // get_timeframe_minutes(timeframe))
 
         # Beta drift guard (regime stability)
@@ -257,14 +259,15 @@ class ScreenerService:
         Returns:
             List of trading pair symbols.
         """
+        pairs = list(self._consistent_pairs)
         if self._trading_pair_repository is not None:
             try:
-                pairs = self._trading_pair_repository.get_active_symbols()
-                if pairs:
+                repository_pairs = self._trading_pair_repository.get_active_symbols()
+                if repository_pairs:
                     self._logger.debug(
-                        f"Loaded {len(pairs)} trading pairs from MongoDB"
+                        f"Loaded {len(repository_pairs)} trading pairs from MongoDB"
                     )
-                    return pairs
+                    pairs = repository_pairs
                 else:
                     self._logger.warning(
                         "No active trading pairs in MongoDB, using config fallback"
@@ -274,8 +277,30 @@ class ScreenerService:
                     f"Failed to load trading pairs from MongoDB: {e}, using config fallback"
                 )
 
-        # Fallback to config
-        return self._consistent_pairs
+        # A refreshed universe may remove a symbol while its spread is still
+        # open. Keep loading that coin until the position closes so structural
+        # exits and the real-time exit observer retain complete market data.
+        if self._position_state is not None:
+            try:
+                active_position_pairs = [
+                    position.coin_symbol
+                    for position in self._position_state.get_active_positions()
+                ]
+                missing = [
+                    symbol for symbol in active_position_pairs if symbol not in pairs
+                ]
+                if missing:
+                    self._logger.info(
+                        f"Keeping {len(missing)} removed pair(s) in monitoring "
+                        f"universe until their positions close: {', '.join(missing)}"
+                    )
+                    pairs = [*pairs, *missing]
+            except Exception as exc:
+                self._logger.error(
+                    f"Failed to load open-position symbols for monitoring: {exc}"
+                )
+
+        return list(dict.fromkeys(pairs))
 
     # =========================================================================
     # Main Scan Method
@@ -1000,8 +1025,9 @@ class ScreenerService:
         Uses single DB query to load cached data, then batch fetches
         missing data from exchange.
 
-        IMPORTANT: Only uses intersection of timestamps across all symbols.
-        No forward fill - only real closed candles are used.
+        Each coin keeps its own history. Downstream pair estimators align that
+        coin with the primary pair only; one recent listing or data gap must
+        not truncate every other pair in the universe.
         """
         end_time = datetime.now(timezone.utc)
         # Calculate required data window:
@@ -1050,67 +1076,62 @@ class ScreenerService:
         if self._primary_pair not in raw_data:
             self._logger.warning(
                 f"Primary pair {self._primary_pair} not found in data. "
-                "Cannot align time index."
+                "Cannot calculate pair metrics."
             )
             return raw_data
 
-        primary_index = raw_data[self._primary_pair].index
-
-        # Find common timestamps across ALL symbols (intersection)
-        # This ensures we only use timestamps where ALL symbols have data
-        common_index = primary_index
+        clean_data: Dict[str, pd.DataFrame] = {}
         for symbol, df in raw_data.items():
-            if symbol != self._primary_pair:
-                common_index = common_index.intersection(df.index)
-
-        self._logger.info(
-            f"Common timestamps: {len(common_index)} "
-            f"(primary has {len(primary_index)})"
-        )
-
-        if len(common_index) == 0:
-            self._logger.error("No common timestamps found across symbols!")
-            return {}
-
-        # Align all DataFrames to common index (no ffill - only real data)
-        aligned_data: Dict[str, pd.DataFrame] = {}
-        for symbol, df in raw_data.items():
-            aligned_df = df.loc[common_index].copy()
-
-            # Verify no NaN values
-            nan_count = aligned_df.isna().sum().sum()
+            clean_df = df.sort_index().copy()
+            nan_count = clean_df.isna().sum().sum()
             if nan_count > 0:
                 self._logger.warning(
-                    f"{symbol}: {nan_count} NaN values found after alignment, dropping"
+                    f"{symbol}: {nan_count} NaN values found, dropping affected rows"
                 )
-                aligned_df = aligned_df.dropna()
+                clean_df = clean_df.dropna()
 
-            aligned_data[symbol] = aligned_df
+            if not clean_df.empty:
+                clean_data[symbol] = clean_df
+
+        primary_df = clean_data.get(self._primary_pair)
+        if primary_df is None or primary_df.empty:
+            self._logger.error("Primary pair has no clean OHLCV rows")
+            return {}
+
+        primary_latest = primary_df.index[-1]
+        for symbol in list(clean_data):
+            if symbol == self._primary_pair:
+                continue
+            common_index = clean_data[symbol].index.intersection(primary_df.index)
+            if len(common_index) == 0 or common_index[-1] != primary_latest:
+                symbol_latest = clean_data[symbol].index[-1]
+                self._logger.warning(
+                    f"{symbol}: latest synchronized candle is stale "
+                    f"(coin={symbol_latest}, primary={primary_latest}); skipping pair"
+                )
+                clean_data.pop(symbol)
 
         # Log per-symbol candle count for debugging
-        candle_counts = {s: len(df) for s, df in aligned_data.items()}
+        candle_counts = {s: len(df) for s, df in clean_data.items()}
         min_candles = min(candle_counts.values()) if candle_counts else 0
         max_candles = max(candle_counts.values()) if candle_counts else 0
 
         self._logger.info(
-            f"Aligned {len(aligned_data)} symbols to common time index "
-            f"({len(common_index)} candles, per-symbol: {min_candles}-{max_candles})"
+            f"Loaded {len(clean_data)} independent symbol histories "
+            f"(per-symbol candles: {min_candles}-{max_candles})"
         )
 
         # Log first/last timestamp for primary pair (for debugging timezone issues)
-        if self._primary_pair in aligned_data:
-            primary_df = aligned_data[self._primary_pair]
-            if not primary_df.empty:
-                first_ts = primary_df.index[0]
-                last_ts = primary_df.index[-1]
-                last_close = primary_df["close"].iloc[-1]
-                self._logger.info(
-                    f"📊 Data range: {first_ts.isoformat()} → {last_ts.isoformat()} "
-                    f"({len(primary_df)} candles for {self._primary_pair}) | "
-                    f"last_close=${last_close:.2f}"
-                )
+        first_ts = primary_df.index[0]
+        last_ts = primary_df.index[-1]
+        last_close = primary_df["close"].iloc[-1]
+        self._logger.info(
+            f"📊 Data range: {first_ts.isoformat()} → {last_ts.isoformat()} "
+            f"({len(primary_df)} candles for {self._primary_pair}) | "
+            f"last_close=${last_close:.2f}"
+        )
 
-        return aligned_data
+        return clean_data
 
     def _format_results(
         self,

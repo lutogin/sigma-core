@@ -2289,19 +2289,29 @@ class StatArbBacktest:
             if symbol not in adf_accepted:
                 continue
 
-            # Funding filter: Check if funding cost is acceptable
-            if self.config.use_funding_filter and self.funding_cache is not None:
-                net_funding = self.funding_cache.calculate_net_funding(
-                    coin_symbol=symbol,
-                    primary_symbol=self.primary_pair,
-                    timestamp=current_time,
-                    spread_side=side,
+            # Funding data is part of the entry model. If the filter is
+            # enabled, missing history must not silently behave as zero cost.
+            if self.config.use_funding_filter:
+                net_funding = (
+                    self.funding_cache.calculate_net_funding(
+                        coin_symbol=symbol,
+                        primary_symbol=self.primary_pair,
+                        timestamp=current_time,
+                        spread_side=side,
+                    )
+                    if self.funding_cache is not None
+                    else None
                 )
 
-                if (
-                    net_funding is not None
-                    and net_funding < self.config.max_funding_cost_threshold
-                ):
+                if net_funding is None:
+                    self.funding_blocked_count += 1
+                    print(
+                        f"⛔ FUNDING FILTER: {symbol} ({side.upper()}) blocked | "
+                        "historical funding data unavailable"
+                    )
+                    continue
+
+                if net_funding < self.config.max_funding_cost_threshold:
                     self.funding_blocked_count += 1
                     print(
                         f"⛔ FUNDING FILTER: {symbol} ({side.upper()}) blocked | "
