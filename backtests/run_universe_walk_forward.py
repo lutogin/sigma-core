@@ -20,7 +20,7 @@ import asyncio
 import json
 import sys
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Literal
@@ -31,17 +31,30 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
 from src.infra.container import Container
 
-import run_backtest as run_backtest_module
-from backtest_shared import (
-    build_backtest_config_kwargs,
-    build_backtest_services,
-)
-from run_backtest import (
-    BacktestConfig,
-    BacktestResult,
-    StatArbBacktest,
-    Trade,
-)
+try:
+    from backtests import run_backtest as run_backtest_module
+    from backtests.backtest_shared import (
+        build_backtest_config_kwargs,
+        build_backtest_services,
+    )
+    from backtests.run_backtest import (
+        BacktestConfig,
+        BacktestResult,
+        StatArbBacktest,
+        Trade,
+    )
+except ImportError:
+    import run_backtest as run_backtest_module
+    from backtest_shared import (
+        build_backtest_config_kwargs,
+        build_backtest_services,
+    )
+    from run_backtest import (
+        BacktestConfig,
+        BacktestResult,
+        StatArbBacktest,
+        Trade,
+    )
 
 
 class _SilentLogger:
@@ -269,15 +282,16 @@ class UniverseWalkForwardRunner:
         services: Dict,
         base_config: BacktestConfig,
         coins: List[str],
-        train_days: int = 30,
-        trade_days: int = 7,
-        top_k: int = 10,
-        min_trades_train: int = 15,
+        train_days: int = 60,
+        trade_days: int = 14,
+        top_k: int = 5,
+        min_trades_train: int = 3,
         rank_metric: str = "netPnL",
         kill_loss_streak: int = 3,
         kill_negative_r: float = 1.0,
-        workers: int = 10,
+        workers: int = 6,
         allow_negative_train_selection: bool = False,
+        allow_sparse_train_selection: bool = False,
         verbose_coin_backtests: bool = False,
     ):
         self.services = services
@@ -292,6 +306,7 @@ class UniverseWalkForwardRunner:
         self.kill_negative_r = kill_negative_r
         self.workers = workers
         self.allow_negative_train_selection = allow_negative_train_selection
+        self.allow_sparse_train_selection = allow_sparse_train_selection
         self.verbose_coin_backtests = verbose_coin_backtests
 
         # Silence inner backtest logs by default to keep universe WF readable/fast.
@@ -322,29 +337,23 @@ class UniverseWalkForwardRunner:
         self,
         trades: List[Trade],
     ) -> Tuple[List[Trade], bool, Optional[str]]:
-        """
-        Apply kill-switch online over trade sequence.
-
-        Once triggered, all subsequent trades are ignored (coin disabled until window end).
-        """
+        """Keep trades only until the independent coin account is disabled."""
         if not trades:
             return trades, False, None
 
-        ordered_trades = sorted(trades, key=lambda t: t.exit_time)
+        ordered_trades = sorted(trades, key=lambda trade: trade.exit_time)
         kept: List[Trade] = []
         running_pnl = 0.0
         loss_streak = 0
-        r_value = max(1e-6, self._base_r_value())
-        kill_floor = -self.kill_negative_r * r_value
+        kill_floor = -self.kill_negative_r * max(
+            1e-6,
+            self._base_r_value(),
+        )
 
         for trade in ordered_trades:
             kept.append(trade)
             running_pnl += trade.pnl
-
-            if trade.pnl < 0:
-                loss_streak += 1
-            else:
-                loss_streak = 0
+            loss_streak = loss_streak + 1 if trade.pnl < 0 else 0
 
             if loss_streak >= self.kill_loss_streak:
                 return kept, True, f"LOSS_STREAK_{loss_streak}"
@@ -389,9 +398,14 @@ class UniverseWalkForwardRunner:
         print(f"   Train: {self.train_days} days | Trade: {self.trade_days} days")
         print(f"   TopK: {self.top_k} | MinTrades: {self.min_trades_train}")
         print(f"   Rank Metric: {self.rank_metric}")
-        print(f"   Kill Switch: lossStreak >= {self.kill_loss_streak} or PnL < -{self.kill_negative_r}R")
+        print(
+            f"   Kill Switch: lossStreak >= {self.kill_loss_streak} or PnL < -{self.kill_negative_r}R"
+        )
         print(
             f"   Selection: allow_negative_train={'ON' if self.allow_negative_train_selection else 'OFF'}"
+        )
+        print(
+            f"   Sparse fallback: {'ON' if self.allow_sparse_train_selection else 'OFF'}"
         )
         print(f"   Parallel workers: {self.workers}")
         print(
@@ -408,11 +422,14 @@ class UniverseWalkForwardRunner:
         print("=" * 100 + "\n")
 
         # Generate WF windows
+        self.steps = []
         windows = self._generate_windows(start_date, end_date)
         print(f"📅 Generated {len(windows)} walk-forward steps\n")
 
         # Run each step
-        for step_num, (train_start, train_end, trade_start, trade_end) in enumerate(windows, 1):
+        for step_num, (train_start, train_end, trade_start, trade_end) in enumerate(
+            windows, 1
+        ):
             print(f"\n{'='*80}")
             print(f"📊 STEP {step_num}/{len(windows)}")
             print(f"   Train: {train_start.date()} → {train_end.date()}")
@@ -438,7 +455,6 @@ class UniverseWalkForwardRunner:
         self._print_final_report(result)
 
         return result
-
 
     def _generate_windows(
         self,
@@ -498,7 +514,8 @@ class UniverseWalkForwardRunner:
         )
         trade_elapsed = time.perf_counter() - trade_started
 
-        # Calculate portfolio metrics
+        # Each coin intentionally has an independent account so its OOS
+        # quality is not affected by another coin's signal ordering.
         portfolio_pnl = sum(r.net_pnl for r in trade_results)
         portfolio_dd = min((r.max_drawdown for r in trade_results), default=0)
 
@@ -522,7 +539,6 @@ class UniverseWalkForwardRunner:
             portfolio_dd=portfolio_dd,
         )
 
-
     async def _run_train_phase(
         self,
         train_start: datetime,
@@ -533,25 +549,33 @@ class UniverseWalkForwardRunner:
 
         async def run_coin(
             coin: str, idx: int
-        ) -> Tuple[Literal["with_trades", "no_trades", "error"], Optional[CoinTrainResult]]:
+        ) -> Tuple[
+            Literal["with_trades", "no_trades", "error"], Optional[CoinTrainResult]
+        ]:
             async with semaphore:
                 try:
                     result = await self._run_single_coin_backtest(
                         coin, train_start, train_end
                     )
                     if result and result.total_trades > 0:
-                        # Calculate score
+                        reliability = result.total_trades / (
+                            result.total_trades + max(3, self.min_trades_train)
+                        )
                         if self.rank_metric == "netSharpe":
-                            score = result.sharpe_ratio
+                            raw_score = result.sharpe_ratio
                         else:  # netPnL (default)
-                            # score = netPnL / max(1, abs(maxDD))
                             dd_divisor = max(1.0, abs(result.max_drawdown))
-                            score = result.total_pnl / dd_divisor
+                            raw_score = result.total_pnl / dd_divisor
+                        score = raw_score * reliability
 
-                        # Trade records include net PnL (after fees/funding).
-                        # Funding is observable separately; exact fee decomposition is not available here.
-                        estimated_costs = sum(max(0.0, -t.funding_pnl) for t in result.trades)
-                        gross_pnl_estimated = result.total_pnl + estimated_costs
+                        estimated_costs = sum(
+                            trade.fees + max(0.0, -trade.funding_pnl)
+                            for trade in result.trades
+                        )
+                        gross_pnl_estimated = sum(
+                            trade.pnl + trade.fees - trade.funding_pnl
+                            for trade in result.trades
+                        )
 
                         train_result = CoinTrainResult(
                             coin=coin,
@@ -597,14 +621,15 @@ class UniverseWalkForwardRunner:
 
         no_trades_count = sum(1 for status, _ in coin_results if status == "no_trades")
         error_count = sum(1 for status, _ in coin_results if status == "error")
-        results = [r for status, r in coin_results if status == "with_trades" and r is not None]
+        results = [
+            r for status, r in coin_results if status == "with_trades" and r is not None
+        ]
         print(
             f"  ↳ Train diagnostics: with_trades={len(results)} | "
             f"no_trades={no_trades_count} | errors={error_count}"
         )
 
         return results
-
 
     def _select_coins(
         self,
@@ -649,7 +674,7 @@ class UniverseWalkForwardRunner:
 
         # For sparse strategies, fill remaining slots with profitable candidates
         # that have at least one trade in train.
-        if len(selected) < self.top_k:
+        if len(selected) < self.top_k and self.allow_sparse_train_selection:
             relaxed_positive = [
                 r for r in train_results if r.total_trades >= 1 and r.net_pnl > 0
             ]
@@ -687,118 +712,96 @@ class UniverseWalkForwardRunner:
         trade_end: datetime,
         selected_coins: List[str],
     ) -> List[CoinTradeResult]:
-        """Run backtest for selected coins with kill switch."""
+        """Run each selected coin on its own account, then apply its kill switch."""
         semaphore = asyncio.Semaphore(self.workers)
-        results = []
 
-        async def run_coin(coin: str, idx: int) -> Optional[CoinTradeResult]:
+        async def run_coin(
+            coin: str,
+            idx: int,
+        ) -> Optional[CoinTradeResult]:
             async with semaphore:
                 try:
                     result = await self._run_single_coin_backtest(
-                        coin, trade_start, trade_end
+                        coin,
+                        trade_start,
+                        trade_end,
                     )
+                    if result is None:
+                        return None
 
-                    if result:
-                        # Check kill switch conditions
-                        was_killed = False
-                        kill_reason = None
+                    (
+                        effective_trades,
+                        was_killed,
+                        kill_reason,
+                    ) = self._apply_online_kill_switch(result.trades)
+                    (
+                        net_pnl,
+                        total_trades,
+                        winning_trades,
+                        win_rate,
+                        max_drawdown,
+                    ) = self._rebuild_trade_metrics(effective_trades)
 
-                        effective_trades = result.trades
-                        if result.trades:
-                            (
-                                effective_trades,
-                                was_killed,
-                                kill_reason,
-                            ) = self._apply_online_kill_switch(result.trades)
-
-                        (
-                            net_pnl,
-                            total_trades,
-                            winning_trades,
-                            win_rate,
-                            max_drawdown,
-                        ) = self._rebuild_trade_metrics(effective_trades)
-
-                        trade_result = CoinTradeResult(
-                            coin=coin,
-                            symbol=f"{coin}/USDT:USDT",
-                            net_pnl=net_pnl,
-                            total_trades=total_trades,
-                            winning_trades=winning_trades,
-                            win_rate=win_rate,
-                            max_drawdown=max_drawdown,
-                            was_killed=was_killed,
-                            kill_reason=kill_reason,
-                            trades=effective_trades,
-                        )
-
-                        async with self._print_lock:
-                            emoji = "🟢" if net_pnl > 0 else "🔴"
-                            kill_str = f" ⚠️ KILLED: {kill_reason}" if was_killed else ""
-                            print(
-                                f"  [{idx}/{len(selected_coins)}] {emoji} {coin}: "
-                                f"PnL=${net_pnl:+.2f} | "
-                                f"Trades={total_trades}{kill_str}"
-                            )
-
-                        return trade_result
-                    else:
-                        return CoinTradeResult(
-                            coin=coin,
-                            symbol=f"{coin}/USDT:USDT",
-                            net_pnl=0,
-                            total_trades=0,
-                            winning_trades=0,
-                            win_rate=0,
-                            max_drawdown=0,
-                            was_killed=False,
-                            trades=[],
-                        )
-
-                except Exception as e:
+                    trade_result = CoinTradeResult(
+                        coin=coin,
+                        symbol=f"{coin}/USDT:USDT",
+                        net_pnl=net_pnl,
+                        total_trades=total_trades,
+                        winning_trades=winning_trades,
+                        win_rate=win_rate,
+                        max_drawdown=max_drawdown,
+                        was_killed=was_killed,
+                        kill_reason=kill_reason,
+                        trades=effective_trades,
+                    )
                     async with self._print_lock:
-                        print(f"  [{idx}/{len(selected_coins)}] ❌ {coin}: {e}")
+                        emoji = "🟢" if net_pnl > 0 else "🔴"
+                        kill_str = f" ⚠️ KILLED: {kill_reason}" if was_killed else ""
+                        print(
+                            f"  [{idx}/{len(selected_coins)}] {emoji} {coin}: "
+                            f"PnL=${net_pnl:+.2f} | "
+                            f"Trades={total_trades}{kill_str}"
+                        )
+                    return trade_result
+                except Exception as exc:
+                    async with self._print_lock:
+                        print(f"  [{idx}/{len(selected_coins)}] ❌ {coin}: {exc}")
                     return None
 
-        # Run selected coins in parallel
-        tasks = [run_coin(coin, i) for i, coin in enumerate(selected_coins, 1)]
-        coin_results = await asyncio.gather(*tasks)
+        coin_results = await asyncio.gather(
+            *(run_coin(coin, idx) for idx, coin in enumerate(selected_coins, 1))
+        )
+        return [result for result in coin_results if result is not None]
 
-        # Filter out None results
-        results = [r for r in coin_results if r is not None]
-
-        return results
-
-    def _build_isolated_backtest_services(self) -> Dict[str, Any]:
+    def _build_isolated_backtest_services(
+        self,
+        config: Optional[BacktestConfig] = None,
+    ) -> Dict[str, Any]:
         """
         Build per-run service instances.
 
-        Important: ZScoreService keeps internal EMA state for dynamic thresholds.
-        Reusing one instance across many coins/windows contaminates results.
+        Service instances stay isolated between train coins and OOS windows.
         """
         settings = self.services["settings"]
         logger = (
-            self.services["logger"]
-            if self.verbose_coin_backtests
-            else _SilentLogger()
+            self.services["logger"] if self.verbose_coin_backtests else _SilentLogger()
         )
         return build_backtest_services(
             settings=settings,
             logger=logger,
             exchange_client=self.services["exchange"],
             ohlcv_repository=self.services["ohlcv_repository"],
-            config=self.base_config,
+            config=config or self.base_config,
             data_loader_override=self._cached_data_loader,
             funding_cache=self.services.get("funding_cache"),
         )
-
 
     async def _run_single_coin_backtest(
         self,
         coin: str,
         start_date: datetime,
         end_date: datetime,
-        ) -> Optional[BacktestResult]:
+    ) -> Optional[BacktestResult]:
         """Run backtest for a single coin."""
         symbol = f"{coin}/USDT:USDT"
         effective_end = end_date - timedelta(seconds=1)
@@ -811,7 +814,7 @@ class UniverseWalkForwardRunner:
         )
 
         # Create backtester with isolated stateful services
-        local_services = self._build_isolated_backtest_services()
+        local_services = self._build_isolated_backtest_services(config)
         backtester = StatArbBacktest(config=config, **local_services)
 
         return await backtester.run(start_date, effective_end)
@@ -834,12 +837,11 @@ class UniverseWalkForwardRunner:
         end_date: datetime,
     ) -> UniverseWFResult:
         """Calculate aggregated results."""
-        total_pnl = sum(s.portfolio_pnl for s in self.steps)
+        total_pnl = sum(step.portfolio_pnl for step in self.steps)
         total_trades = sum(
-            sum(r.total_trades for r in s.trade_results)
-            for s in self.steps
+            sum(r.total_trades for r in s.trade_results) for s in self.steps
         )
-        max_dd = min((s.portfolio_dd for s in self.steps), default=0)
+        max_dd = min((step.portfolio_dd for step in self.steps), default=0)
 
         # Calculate turnover (how often coins change)
         turnover = 0.0
@@ -865,7 +867,6 @@ class UniverseWalkForwardRunner:
             max_portfolio_dd=max_dd,
             coin_selection_turnover=turnover,
         )
-
 
     def _print_final_report(self, result: UniverseWFResult) -> None:
         """Print final walk-forward report."""
@@ -929,7 +930,9 @@ class UniverseWalkForwardRunner:
         sorted_coins = sorted(coin_counts.items(), key=lambda x: x[1], reverse=True)
         for coin, count in sorted_coins[:15]:
             pct = count / len(result.steps) * 100
-            print(f"  {coin:<15} | Selected {count}/{len(result.steps)} steps ({pct:.0f}%)")
+            print(
+                f"  {coin:<15} | Selected {count}/{len(result.steps)} steps ({pct:.0f}%)"
+            )
 
         # Coins that were killed
         killed_coins: Dict[str, int] = {}
@@ -942,7 +945,9 @@ class UniverseWalkForwardRunner:
             print("\n" + "-" * 100)
             print("COINS KILLED BY KILL SWITCH")
             print("-" * 100)
-            for coin, count in sorted(killed_coins.items(), key=lambda x: x[1], reverse=True):
+            for coin, count in sorted(
+                killed_coins.items(), key=lambda x: x[1], reverse=True
+            ):
                 print(f"  {coin:<15} | Killed {count} times")
 
         best_period = self._build_best_coins_over_period(result, top_n=10)
@@ -990,7 +995,9 @@ class UniverseWalkForwardRunner:
                     f"trade_trades={item['trade_total_trades']}"
                 )
 
-    def _build_coin_period_stats(self, result: UniverseWFResult) -> List[Dict[str, Any]]:
+    def _build_coin_period_stats(
+        self, result: UniverseWFResult
+    ) -> List[Dict[str, Any]]:
         """Build per-coin aggregate stats across all WF steps."""
         total_steps = max(1, len(result.steps))
         stats: Dict[str, Dict[str, Any]] = {}
@@ -1143,6 +1150,8 @@ class UniverseWalkForwardRunner:
                 "top_k": result.top_k,
                 "min_trades_train": result.min_trades_train,
                 "rank_metric": result.rank_metric,
+                "account_model": "independent_per_coin",
+                "strategy_config": asdict(self.base_config),
             },
             "summary": {
                 "total_portfolio_pnl": result.total_portfolio_pnl,
@@ -1181,7 +1190,9 @@ class UniverseWalkForwardRunner:
             ],
         }
 
-        with open(filepath, "w", encoding="utf-8") as f:
+        output_path = Path(filepath)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
         print(f"\n💾 Results saved to: {filepath}")
@@ -1212,19 +1223,19 @@ Examples:
         "--end", type=str, default=None, help="End date (YYYY-MM-DD). Default: today"
     )
     parser.add_argument(
-        "--trainDays", type=int, default=30, help="Training window in days. Default: 30"
+        "--trainDays", type=int, default=60, help="Training window in days. Default: 60"
     )
     parser.add_argument(
-        "--tradeDays", type=int, default=7, help="Trading window in days. Default: 7"
+        "--tradeDays", type=int, default=14, help="Trading window in days. Default: 14"
     )
     parser.add_argument(
-        "--topK", type=int, default=10, help="Number of top coins to select. Default: 10"
+        "--topK", type=int, default=5, help="Number of top coins to select. Default: 5"
     )
     parser.add_argument(
         "--minTradesTrain",
         type=int,
-        default=1,
-        help="Minimum trades in train phase to qualify. Default: 1",
+        default=3,
+        help="Minimum trades in train phase to qualify. Default: 3",
     )
     parser.add_argument(
         "--rankMetric",
@@ -1240,16 +1251,34 @@ Examples:
         "--leverage", type=int, default=None, help="Leverage. Default: from settings"
     )
     parser.add_argument(
+        "--env-file",
+        type=str,
+        default=None,
+        help="Explicit settings file. Default: project .env",
+    )
+    parser.add_argument(
+        "--half-spread-bps",
+        type=float,
+        default=2.0,
+        help="Estimated half-spread paid per fill. Default: 2 bps",
+    )
+    parser.add_argument(
+        "--slippage-bps",
+        type=float,
+        default=1.0,
+        help="Additional adverse slippage per fill. Default: 1 bp",
+    )
+    parser.add_argument(
         "--workers",
         type=int,
-        default=10,
-        help="Number of parallel workers. Default: 10",
+        default=6,
+        help="Number of parallel workers. Default: 6",
     )
     parser.add_argument(
         "--coinsFile",
         type=str,
-        default="backtests/to_test.json",
-        help="JSON file with coin list. Default: backtests/to_test.json",
+        default="backtests/eth_ecosystem_universe.json",
+        help="JSON file with coin list. Default: ETH ecosystem universe",
     )
     parser.add_argument(
         "--killLossStreak",
@@ -1294,6 +1323,12 @@ Examples:
         help="Allow fallback selection with non-positive train PnL (true/false). Default: false",
     )
     parser.add_argument(
+        "--allow-sparse-train-selection",
+        type=str,
+        default="false",
+        help="Backfill topK with positive one-trade candidates (true/false). Default: false",
+    )
+    parser.add_argument(
         "--verbose-coin-backtests",
         type=str,
         default="false",
@@ -1301,6 +1336,17 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    if args.trainDays <= 0 or args.tradeDays <= 0:
+        parser.error("--trainDays and --tradeDays must be positive")
+    if args.topK <= 0 or args.minTradesTrain <= 0:
+        parser.error("--topK and --minTradesTrain must be positive")
+    if args.balance <= 0 or args.workers <= 0:
+        parser.error("--balance and --workers must be positive")
+    if args.killLossStreak <= 0 or args.killNegativeR < 0:
+        parser.error("kill-switch values must be positive/non-negative")
+    if args.half_spread_bps < 0 or args.slippage_bps < 0:
+        parser.error("execution cost assumptions must be non-negative")
 
     def _parse_bool(value: str, flag_name: str) -> bool:
         normalized = value.strip().lower()
@@ -1326,23 +1372,34 @@ Examples:
         print(f"Error: {args.coinsFile} not found")
         sys.exit(1)
 
-    with open(coins_file, encoding="utf-8") as f:
+    with coins_file.open(encoding="utf-8") as f:
         coins = json.load(f)
+    if not isinstance(coins, list) or not all(
+        isinstance(coin, str) and coin.strip() for coin in coins
+    ):
+        parser.error("--coinsFile must contain a JSON array of non-empty strings")
+    coins = list(dict.fromkeys(coin.strip().upper() for coin in coins))
 
     print(f"Loaded {len(coins)} coins from {args.coinsFile}")
 
     # Initialize container
-    container = Container().init()
+    container = Container().init(args.env_file)
     settings = container.settings
     logger = container.logger
 
     # Create base config
     try:
-        use_trailing_entry = _parse_bool(args.use_trailing_entry, "--use-trailing-entry")
+        use_trailing_entry = _parse_bool(
+            args.use_trailing_entry, "--use-trailing-entry"
+        )
         use_live_exit = _parse_bool(args.use_live_exit, "--use-live-exit")
         lazy_minute_data = _parse_bool(args.lazy_minute_data, "--lazy-minute-data")
         allow_negative_train_selection = _parse_bool(
             args.allow_negative_train_selection, "--allow-negative-train-selection"
+        )
+        allow_sparse_train_selection = _parse_bool(
+            args.allow_sparse_train_selection,
+            "--allow-sparse-train-selection",
         )
         verbose_coin_backtests = _parse_bool(
             args.verbose_coin_backtests, "--verbose-coin-backtests"
@@ -1367,6 +1424,11 @@ Examples:
         use_dynamic_tp=True,
         lazy_load_minute_data=lazy_minute_data,
         use_adf_filter=True,
+        extra_overrides={
+            "half_spread_bps": args.half_spread_bps,
+            "slippage_bps": args.slippage_bps,
+            "use_ohlc_pseudo_ticks": False,
+        },
     )
     base_config = BacktestConfig(**base_config_kwargs)
 
@@ -1425,6 +1487,7 @@ Examples:
             kill_negative_r=args.killNegativeR,
             workers=args.workers,
             allow_negative_train_selection=allow_negative_train_selection,
+            allow_sparse_train_selection=allow_sparse_train_selection,
             verbose_coin_backtests=verbose_coin_backtests,
         )
 
