@@ -565,6 +565,11 @@ class OrchestratorService:
         The spread_series contains the raw spread values.
         We need to get the mean from the rolling window to calculate live Z-score.
         """
+        if result.spread_mean_series is not None:
+            valid_model_means = result.spread_mean_series.dropna()
+            if not valid_model_means.empty:
+                return float(valid_model_means.iloc[-1])
+
         if result.spread_series is None or result.spread_series.empty:
             return 0.0
 
@@ -586,6 +591,11 @@ class OrchestratorService:
         The spread_series contains the raw spread values.
         We need to get the std from the rolling window to calculate live Z-score.
         """
+        if result.spread_std_series is not None:
+            valid_model_stds = result.spread_std_series.replace(0, np.nan).dropna()
+            if not valid_model_stds.empty:
+                return float(valid_model_stds.iloc[-1])
+
         if result.spread_series is None or result.spread_series.empty:
             return 0.0
 
@@ -649,11 +659,15 @@ class OrchestratorService:
         we recalculate missing values so structural degradation is observed even when
         |Z| is outside entry-candidate zone.
         """
-        needs_adf = self._screener_service.adf_threshold is not None and adf_pvalue is None
+        needs_adf = (
+            self._screener_service.adf_threshold is not None and adf_pvalue is None
+        )
         needs_halflife = (
             self._screener_service.halflife_threshold is not None and halflife is None
         )
-        needs_hurst = self._screener_service.hurst_threshold is not None and hurst is None
+        needs_hurst = (
+            self._screener_service.hurst_threshold is not None and hurst is None
+        )
 
         if not (needs_adf or needs_halflife or needs_hurst):
             return adf_pvalue, halflife, hurst

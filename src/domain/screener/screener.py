@@ -29,6 +29,7 @@ from src.domain.screener.volatility_filter import (
     VolatilityCheckResult,
 )
 from src.domain.screener.z_score import ZScoreResult, ZScoreService
+from src.domain.screener.statistics import benjamini_hochberg_passes
 from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
 from src.domain.trading_pairs import TradingPairRepository
 from src.domain.utils import get_timeframe_minutes
@@ -458,14 +459,13 @@ class ScreenerService:
         long_bars = self._beta_drift_long_days * self._bars_per_day
 
         if len(beta_series) < long_bars:
-            # Not enough history yet - don't block signal.
-            return True, None, None, None
+            return False, np.nan, np.nan, np.inf
 
         short_beta = float(beta_series.tail(short_bars).median())
         long_beta = float(beta_series.tail(long_bars).median())
 
         if not np.isfinite(short_beta) or not np.isfinite(long_beta):
-            return True, short_beta, long_beta, None
+            return False, short_beta, long_beta, np.inf
 
         denom = max(abs(long_beta), 1e-6)
         relative_drift = abs(short_beta - long_beta) / denom
@@ -477,21 +477,21 @@ class ScreenerService:
         coin_log_prices: pd.Series,
         primary_log_prices: pd.Series,
     ) -> Optional[float]:
-        """Estimate beta on a fixed window using log-return covariance."""
-        returns = pd.concat(
-            [coin_log_prices.diff(), primary_log_prices.diff()],
+        """Estimate the fixed-window log-price OLS hedge coefficient."""
+        levels = pd.concat(
+            [coin_log_prices, primary_log_prices],
             axis=1,
             keys=["coin", "primary"],
         ).dropna()
 
-        if len(returns) < 30:
+        if len(levels) < 30:
             return None
 
-        var_primary = returns["primary"].var()
+        var_primary = levels["primary"].var()
         if var_primary is None or not np.isfinite(var_primary) or var_primary <= 0:
             return None
 
-        cov = returns["coin"].cov(returns["primary"])
+        cov = levels["coin"].cov(levels["primary"])
         if cov is None or not np.isfinite(cov):
             return None
 
@@ -821,6 +821,7 @@ class ScreenerService:
             self._logger.warning("No primary pair data for ADF calculation")
             return z_score_results, adf_pvalues
 
+        tested: Dict[str, tuple[ZScoreResult, float, float]] = {}
         for symbol, result in z_score_results.items():
             # Only check ADF for symbols that passed Half-Life filter
             # (i.e., symbols that are in halflife_values)
@@ -851,21 +852,33 @@ class ScreenerService:
             )
 
             adf_pvalues[symbol] = pvalue
+            tested[symbol] = (
+                result,
+                pvalue,
+                halflife_values.get(symbol, float("inf")),
+            )
 
+        accepted = benjamini_hochberg_passes(
+            adf_pvalues,
+            self._adf_filter_service.threshold,
+        )
+        for symbol, (result, pvalue, halflife) in tested.items():
             z = result.current_z_score
-            halflife = halflife_values.get(symbol, float("inf"))
-
-            if self._adf_filter_service.is_stationary(pvalue):
+            if symbol in accepted:
                 filtered[symbol] = result
                 self._logger.info(
-                    f"✅ {symbol}: Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f} < {self._adf_filter_service.threshold} (stationary)"
+                    f"✅ {symbol}: Z={z:.2f}, HL={halflife:.1f}, "
+                    f"ADF p={pvalue:.4f} passed BH-FDR "
+                    f"q={self._adf_filter_service.threshold}"
                 )
             else:
                 skipped.append(
                     f"{symbol} (Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f})"
                 )
                 self._logger.warning(
-                    f"⚠️ {symbol}: Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f} >= {self._adf_filter_service.threshold} (non-stationary, skip)"
+                    f"⚠️ {symbol}: Z={z:.2f}, HL={halflife:.1f}, "
+                    f"ADF p={pvalue:.4f} failed BH-FDR "
+                    f"q={self._adf_filter_service.threshold}"
                 )
 
         if skipped:
@@ -1007,7 +1020,10 @@ class ScreenerService:
                 data_window_days, max(self._stability_windows_days) + 2
             )
         if self._enable_beta_drift_guard:
-            data_window_days = max(data_window_days, self._beta_drift_long_days + 2)
+            data_window_days = max(
+                data_window_days,
+                self._lookback_window_days + self._beta_drift_long_days + 2,
+            )
         start_time = end_time - timedelta(days=data_window_days)
 
         # Get trading pairs (from MongoDB if available, otherwise from config)

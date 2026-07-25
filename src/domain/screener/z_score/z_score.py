@@ -32,6 +32,8 @@ class ZScoreResult:
     current_beta: float
     current_correlation: float
     dynamic_entry_threshold: float  # Adaptive threshold based on 95th percentile
+    spread_mean_series: pd.Series | None = None
+    spread_std_series: pd.Series | None = None
 
 
 class ZScoreService:
@@ -86,9 +88,6 @@ class ZScoreService:
         self._dynamic_threshold_window = dynamic_threshold_window
         self._threshold_ema_alpha_up = threshold_ema_alpha_up
         self._threshold_ema_alpha_down = threshold_ema_alpha_down
-
-        # Store smoothed thresholds per symbol for EMA calculation
-        self._smoothed_thresholds: Dict[str, float] = {}
 
     @property
     def z_entry_threshold(self) -> float:
@@ -164,37 +163,34 @@ class ZScoreService:
                 continue
             coin_log_price = pair_log_prices["coin"]
             pair_primary_log_price = pair_log_prices["primary"]
-            rolling_beta = corr_result.rolling_beta
-
-            # Align rolling_beta to log_prices index
-            # rolling_beta is calculated on log_returns which has 1 fewer point
-            # Reindex to log_prices index, forward-fill the first value
-            rolling_beta_aligned = rolling_beta.reindex(
-                coin_log_price.index, method="ffill"
+            rolling_beta = corr_result.rolling_beta.reindex(coin_log_price.index)
+            rolling_intercept = corr_result.rolling_intercept.reindex(
+                coin_log_price.index
             )
+            rolling_residual_std = corr_result.rolling_residual_std.reindex(
+                coin_log_price.index
+            ).replace(0, np.nan)
 
-            # Calculate spread: LogPrice_COIN - β × LogPrice_PRIMARY
-            spread_series = coin_log_price - (
-                rolling_beta_aligned * pair_primary_log_price
-            )
-
-            # Calculate z-score for the spread
-            mean_spread = spread_series.rolling(window=self._lookback_window).mean()
-            std_spread = spread_series.rolling(window=self._lookback_window).std()
-            z_score_series = (spread_series - mean_spread) / std_spread
+            # The live observers freeze beta, spread mean and std at entry.
+            # Keep the same representation here: raw hedged spread, with its
+            # OLS intercept as mean and OLS residual standard error as std.
+            spread_series = coin_log_price - (rolling_beta * pair_primary_log_price)
+            z_score_series = (spread_series - rolling_intercept) / rolling_residual_std
 
             # Debug: log data quality for z-score calculation
             spread_valid = len(spread_series.dropna())
             z_score_valid = len(z_score_series.dropna())
             self._logger.debug(
                 f"[ZScore] {symbol}: coin_log={len(coin_log_price)}, "
-                f"primary_log={len(primary_log_price)}, beta_aligned={len(rolling_beta_aligned)}, "
+                f"primary_log={len(primary_log_price)}, beta_aligned={len(rolling_beta)}, "
                 f"spread_valid={spread_valid}, z_score_valid={z_score_valid}, "
                 f"lookback_window={self._lookback_window}"
             )
 
             # Calculate dynamic entry threshold based on historical z-score distribution
-            dynamic_threshold = self._calculate_dynamic_threshold(symbol, z_score_series)
+            dynamic_threshold = self._calculate_dynamic_threshold(
+                symbol, z_score_series
+            )
 
             # Get current (latest) values
             current_spread = self._get_latest_value(spread_series)
@@ -211,6 +207,8 @@ class ZScoreService:
                 current_beta=current_beta,
                 current_correlation=current_correlation,
                 dynamic_entry_threshold=dynamic_threshold,
+                spread_mean_series=rolling_intercept,
+                spread_std_series=rolling_residual_std,
             )
 
             self._logger.debug(
@@ -280,148 +278,54 @@ class ZScoreService:
         valid = series.dropna()
         return valid.iloc[-1] if len(valid) > 0 else np.nan
 
-    def _calculate_dynamic_threshold(self, symbol: str, z_score_series: pd.Series) -> float:
+    def _calculate_dynamic_threshold(
+        self, symbol: str, z_score_series: pd.Series
+    ) -> float:
+        """Return a deterministic, causal adaptive entry threshold.
+
+        The current Z observation is excluded, so an extreme signal cannot
+        raise its own entry hurdle. Recomputing from the same history also
+        yields exactly the same threshold after a process restart.
         """
-        Calculate dynamic entry threshold with EMA smoothing.
+        history = z_score_series.replace([np.inf, -np.inf], np.nan).dropna()
+        if not history.empty:
+            history = history.iloc[:-1]
 
-        Algorithm:
-        1. Calculate raw threshold from percentile of absolute Z-scores
-        2. Apply floor at minimum threshold (z_entry_threshold)
-        3. Apply EMA smoothing to prevent sudden jumps
-        4. On first call, warm up EMA using historical rolling windows
-
-        EMA formula: new_threshold = alpha * raw + (1 - alpha) * previous
-        With alpha=0.1: 10% new value, 90% previous value
-
-        This ensures threshold changes gradually, preventing:
-        - Sudden spikes from blocking entries
-        - Rapid drops from allowing premature entries
-
-        Args:
-            symbol: Symbol for threshold state tracking.
-            z_score_series: Historical Z-score series.
-
-        Returns:
-            Smoothed dynamic threshold = EMA(max(z_entry_threshold, percentile))
-        """
-        # Log input series size before any processing
-        total_z_scores = len(z_score_series)
-        non_nan_z_scores = len(z_score_series.dropna())
-
-        # Use the dynamic threshold window (440+ candles by default)
-        recent_z = z_score_series.tail(self._dynamic_threshold_window).dropna()
-
-        self._logger.debug(
-            f"[DynThreshold] {symbol}: input_series={total_z_scores}, "
-            f"non_nan={non_nan_z_scores}, window={self._dynamic_threshold_window}, "
-            f"after_tail_dropna={len(recent_z)}"
-        )
-
-        if len(recent_z) < 50:
+        if len(history) < 50:
             self._logger.warning(
-                f"Insufficient data for dynamic threshold calculation for {symbol}, "
-                f"using static threshold: {self._z_entry_threshold}"
+                f"Insufficient prior Z history for {symbol}; "
+                f"using static threshold {self._z_entry_threshold}"
             )
             return self._z_entry_threshold
 
-        # Check if we need to warm up EMA for this symbol
-        if symbol not in self._smoothed_thresholds:
-            smoothed_threshold = self._warmup_ema_threshold(symbol, recent_z)
-            self._smoothed_thresholds[symbol] = smoothed_threshold
-            self._logger.debug(
-                f"[DynThreshold] {symbol}: EMA warmup complete, "
-                f"initial_threshold={smoothed_threshold:.4f}"
+        raw_thresholds = (
+            history.abs()
+            .rolling(
+                window=self._dynamic_threshold_window,
+                min_periods=50,
             )
-            return smoothed_threshold
-
-        # Step 1: Calculate raw percentile threshold
-        abs_z = recent_z.abs()
-        raw_threshold = float(np.percentile(abs_z, self._adaptive_percentile))
-
-        # Step 2: Apply floor at minimum threshold
-        raw_threshold = max(self._z_entry_threshold, raw_threshold)
-
-        # Step 3: Apply asymmetric EMA smoothing
-        # - Rising threshold: use slow alpha (don't miss opportunities)
-        # - Falling threshold: use faster alpha (capture more entries)
-        previous_threshold = self._smoothed_thresholds[symbol]
-        if raw_threshold > previous_threshold:
-            alpha = self._threshold_ema_alpha_up  # Slow rise
-        else:
-            alpha = self._threshold_ema_alpha_down  # Faster fall
-        smoothed_threshold = (alpha * raw_threshold) + ((1 - alpha) * previous_threshold)
-
-        # Step 4: Final floor check (ensure never below min threshold after EMA)
-        smoothed_threshold = max(self._z_entry_threshold, smoothed_threshold)
-
-        # Store for next iteration
-        self._smoothed_thresholds[symbol] = smoothed_threshold
-
-        direction = "↑" if raw_threshold > previous_threshold else "↓"
-        self._logger.debug(
-            f"[DynThreshold] {symbol}: raw_p{self._adaptive_percentile}={raw_threshold:.4f}, "
-            f"prev_ema={previous_threshold:.4f}, new_ema={smoothed_threshold:.4f} "
-            f"({direction} α={alpha:.3f})"
+            .quantile(self._adaptive_percentile / 100.0)
+            .dropna()
+            .clip(lower=self._z_entry_threshold)
         )
+        if raw_thresholds.empty:
+            return self._z_entry_threshold
 
-        return smoothed_threshold
+        smoothed = float(raw_thresholds.iloc[0])
+        for raw in raw_thresholds.iloc[1:]:
+            alpha = (
+                self._threshold_ema_alpha_up
+                if raw > smoothed
+                else self._threshold_ema_alpha_down
+            )
+            smoothed = alpha * float(raw) + (1 - alpha) * smoothed
 
-    def _warmup_ema_threshold(self, symbol: str, z_series: pd.Series) -> float:
-        """
-        Warm up EMA threshold using historical rolling windows.
-
-        Simulates N iterations of EMA calculation on historical data
-        to get a "settled" threshold value on first call.
-
-        Args:
-            symbol: Symbol name for logging.
-            z_series: Z-score series (already trimmed to window size).
-
-        Returns:
-            Warmed-up EMA threshold.
-        """
-        window_size = self._dynamic_threshold_window
-        warmup_steps = 20  # Number of historical points to simulate
-        step_size = window_size // warmup_steps
-
+        result = max(self._z_entry_threshold, smoothed)
         self._logger.debug(
-            f"[DynThreshold] {symbol}: warmup starting, "
-            f"z_series_len={len(z_series)}, window_size={window_size}, "
-            f"warmup_steps={warmup_steps}"
+            f"[DynThreshold] {symbol}: causal_p{self._adaptive_percentile}="
+            f"{float(raw_thresholds.iloc[-1]):.4f}, smoothed={result:.4f}"
         )
-
-        if len(z_series) < window_size:
-            # Not enough data, return simple percentile
-            abs_z = z_series.abs()
-            raw = float(np.percentile(abs_z, self._adaptive_percentile))
-            return max(self._z_entry_threshold, raw)
-
-        # Initialize with first window's percentile
-        first_window = z_series.iloc[:window_size]
-        ema_threshold = float(np.percentile(first_window.abs(), self._adaptive_percentile))
-        ema_threshold = max(self._z_entry_threshold, ema_threshold)
-
-        # Roll through history, updating EMA at each step (with asymmetric alpha)
-        for i in range(1, warmup_steps):
-            end_idx = min(window_size + (i * step_size), len(z_series))
-            start_idx = end_idx - window_size
-
-            if start_idx < 0:
-                continue
-
-            window = z_series.iloc[start_idx:end_idx]
-            raw_threshold = float(np.percentile(window.abs(), self._adaptive_percentile))
-            raw_threshold = max(self._z_entry_threshold, raw_threshold)
-
-            # Apply asymmetric EMA
-            if raw_threshold > ema_threshold:
-                alpha = self._threshold_ema_alpha_up  # Slow rise
-            else:
-                alpha = self._threshold_ema_alpha_down  # Faster fall
-            ema_threshold = (alpha * raw_threshold) + ((1 - alpha) * ema_threshold)
-
-        # Final floor check
-        return max(self._z_entry_threshold, ema_threshold)
+        return result
 
     def format_results(
         self,

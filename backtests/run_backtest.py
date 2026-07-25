@@ -40,6 +40,7 @@ from src.domain.screener.adf_filter import ADFFilterService
 from src.domain.screener.halflife_filter import HalfLifeFilterService
 from src.domain.screener.volatility_filter import VolatilityFilterService
 from src.domain.screener.z_score import ZScoreService, ZScoreResult
+from src.domain.screener.statistics import benjamini_hochberg_passes
 from src.infra.container import Container
 from src.domain.utils import get_timeframe_minutes
 
@@ -820,7 +821,10 @@ class StatArbBacktest:
         if self.config.enable_stability_filter and self._stability_windows_days:
             warmup_days = max(warmup_days, max(self._stability_windows_days) + 2)
         if self.config.enable_beta_drift_guard:
-            warmup_days = max(warmup_days, self._beta_drift_long_days + 2)
+            warmup_days = max(
+                warmup_days,
+                self.lookback_window_days + self._beta_drift_long_days + 2,
+            )
         data_start = start_date - timedelta(days=warmup_days)
 
         print(
@@ -1177,12 +1181,12 @@ class StatArbBacktest:
         long_bars = self._beta_drift_long_days * self._bars_per_day
 
         if len(beta_series) < long_bars:
-            return True, None, None, None
+            return False, np.nan, np.nan, np.inf
 
         beta_short = float(beta_series.tail(short_bars).median())
         beta_long = float(beta_series.tail(long_bars).median())
         if not np.isfinite(beta_short) or not np.isfinite(beta_long):
-            return True, beta_short, beta_long, None
+            return False, beta_short, beta_long, np.inf
 
         denom = max(abs(beta_long), 1e-6)
         beta_drift = abs(beta_short - beta_long) / denom
@@ -1198,20 +1202,20 @@ class StatArbBacktest:
         coin_log_prices: pd.Series,
         primary_log_prices: pd.Series,
     ) -> Optional[float]:
-        """Estimate beta on a fixed window using log-return covariance."""
-        returns = pd.concat(
-            [coin_log_prices.diff(), primary_log_prices.diff()],
+        """Estimate the fixed-window log-price OLS hedge coefficient."""
+        levels = pd.concat(
+            [coin_log_prices, primary_log_prices],
             axis=1,
             keys=["coin", "primary"],
         ).dropna()
-        if len(returns) < 30:
+        if len(levels) < 30:
             return None
 
-        var_primary = returns["primary"].var()
+        var_primary = levels["primary"].var()
         if var_primary is None or not np.isfinite(var_primary) or var_primary <= 0:
             return None
 
-        cov = returns["coin"].cov(returns["primary"])
+        cov = levels["coin"].cov(levels["primary"])
         if cov is None or not np.isfinite(cov):
             return None
 
@@ -2242,26 +2246,48 @@ class StatArbBacktest:
         # Sort candidates by Z-score strength (highest first)
         entry_candidates.sort(key=lambda x: x[0], reverse=True)
 
-        # Open positions for valid candidates up to max_spreads
+        # Run structural tests for the candidate set first. ADF is corrected
+        # across the whole set instead of treating every p-value as an
+        # independent 5% decision.
+        quality_candidates = []
+        adf_pvalues: Dict[str, float] = {}
         for _, symbol, side, z_result, dyn_threshold in entry_candidates:
-            if len(self.positions) >= self.config.max_spreads:
-                break
-
-            # Final filter: Check Hurst exponent (mean-reversion quality)
             if not self._check_hurst_for_symbol(
                 symbol, window_data, correlation_results
             ):
-                continue  # Spread is trending, skip entry
+                continue
 
-            # Additional filter: Check Half-Life (after Hurst passes)
             if not self._check_halflife_for_symbol(
                 symbol, window_data, correlation_results
             ):
-                continue  # Spread reverts too slowly, skip entry
+                continue
 
-            # Additional filter: Check ADF stationarity (after Half-Life passes)
-            if not self._check_adf_for_symbol(symbol, window_data, correlation_results):
-                continue  # Spread is non-stationary, skip entry
+            if self.config.use_adf_filter:
+                pvalue = self._get_adf_for_symbol(
+                    symbol,
+                    window_data,
+                    correlation_results,
+                )
+                if pvalue is None:
+                    continue
+                adf_pvalues[symbol] = pvalue
+
+            quality_candidates.append((symbol, side, z_result, dyn_threshold))
+
+        adf_accepted = (
+            benjamini_hochberg_passes(
+                adf_pvalues,
+                self.config.adf_pvalue_threshold,
+            )
+            if self.config.use_adf_filter
+            else {candidate[0] for candidate in quality_candidates}
+        )
+
+        for symbol, side, z_result, dyn_threshold in quality_candidates:
+            if len(self.positions) >= self.config.max_spreads:
+                break
+            if symbol not in adf_accepted:
+                continue
 
             # Funding filter: Check if funding cost is acceptable
             if self.config.use_funding_filter and self.funding_cache is not None:
@@ -2322,25 +2348,8 @@ class StatArbBacktest:
         correlation_results: Optional[Dict] = None,
     ) -> None:
         """Start watching a symbol for trailing entry."""
-        # Calculate spread_mean and spread_std using ROLLING calculation
-        # This must match ZScoreService which uses rolling(window).mean()/std()
-        # NOT the static mean/std of the tail!
-        lookback = min(len(z_result.spread_series), 288)  # ~3 days of 15m candles
-
-        # Use ROLLING mean/std at the current point (last value of rolling series)
-        rolling_mean = z_result.spread_series.rolling(window=lookback).mean()
-        rolling_std = z_result.spread_series.rolling(window=lookback).std()
-
-        spread_mean = (
-            float(rolling_mean.iloc[-1]) if len(rolling_mean.dropna()) > 0 else 0.0
-        )
-        spread_std = (
-            float(rolling_std.iloc[-1]) if len(rolling_std.dropna()) > 0 else 1.0
-        )
-
-        # Ensure std is not zero
-        if spread_std == 0 or np.isnan(spread_std):
-            spread_std = 1.0
+        spread_mean = self._get_spread_mean(z_result)
+        spread_std = self._get_spread_std(z_result)
 
         # Calculate halflife for dynamic position sizing if enabled
         halflife = None
@@ -3295,6 +3304,11 @@ class StatArbBacktest:
 
     def _get_spread_mean(self, result: ZScoreResult) -> float:
         """Get the latest spread mean from Z-score result."""
+        if result.spread_mean_series is not None:
+            valid_model_means = result.spread_mean_series.dropna()
+            if not valid_model_means.empty:
+                return float(valid_model_means.iloc[-1])
+
         if result.spread_series is None or result.spread_series.empty:
             return 0.0
 
@@ -3311,6 +3325,11 @@ class StatArbBacktest:
 
     def _get_spread_std(self, result: ZScoreResult) -> float:
         """Get the latest spread std from Z-score result."""
+        if result.spread_std_series is not None:
+            valid_model_stds = result.spread_std_series.replace(0, np.nan).dropna()
+            if not valid_model_stds.empty:
+                return float(valid_model_stds.iloc[-1])
+
         if result.spread_series is None or result.spread_series.empty:
             return 1.0
 
