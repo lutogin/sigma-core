@@ -4,7 +4,7 @@
 # Optimized for fast local builds with layer caching
 # ============================================================================
 
-FROM python:3.14-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
@@ -23,7 +23,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Set Python environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    SIGMA_HEALTH_FILE=/tmp/sigma-core-health \
+    SIGMA_HEALTH_MAX_AGE_SECONDS=1800
 
 # Copy application code (this layer changes most often)
 COPY . .
@@ -32,8 +34,8 @@ COPY . .
 RUN mkdir -p /app/logs /app/cache
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10m --retries=3 \
+    CMD python src/infra/healthcheck.py
 
 # Default command
 CMD ["python", "main.py"]

@@ -10,6 +10,9 @@ def test_settings_have_fail_closed_balanced_defaults(monkeypatch) -> None:
         "MAX_COIN_NOTIONAL_PCT",
         "MAX_MARGIN_UTILIZATION",
         "MAX_OPEN_SPREADS",
+        "SCAN_CRON_EXPRESSION",
+        "SIGMA_HEALTH_FILE",
+        "SIGMA_HEALTH_MAX_AGE_SECONDS",
         "TRAILING_ENTRY_TIMEOUT_MINUTES",
     ]
     for key in keys:
@@ -24,6 +27,9 @@ def test_settings_have_fail_closed_balanced_defaults(monkeypatch) -> None:
     assert settings.MAX_MARGIN_UTILIZATION == 0.50
     assert settings.TRAILING_ENTRY_TIMEOUT_MINUTES == 90
     assert settings.FALSE_ALARM_HYSTERESIS == 0.45
+    assert settings.SCAN_CRON_EXPRESSION == "*/15 * * * *"
+    assert settings.SIGMA_HEALTH_FILE == "/tmp/sigma-core-health"
+    assert settings.SIGMA_HEALTH_MAX_AGE_SECONDS == 1800
     assert settings.CONSISTENT_PAIRS == Settings.CONSISTENT_PAIRS
 
 

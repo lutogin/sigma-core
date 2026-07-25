@@ -396,6 +396,7 @@ class Container:
                 trading_service=self.trading_service,
                 entry_observer_service=self.entry_observer_service,
                 scan_cron_expression=self._settings.SCAN_CRON_EXPRESSION,
+                health_file=self._settings.SIGMA_HEALTH_FILE,
             )
         return self._instances["planner_service"]
 

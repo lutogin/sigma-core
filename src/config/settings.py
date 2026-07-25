@@ -182,6 +182,8 @@ class Settings:
 
     # Planner/Scan settings
     SCAN_CRON_EXPRESSION: str = "*/15 * * * *"  # Every 15 minutes
+    SIGMA_HEALTH_FILE: str = "/tmp/sigma-core-health"
+    SIGMA_HEALTH_MAX_AGE_SECONDS: int = 1800
 
     # Exchange Settings
     EXCHANGE_NAME: str = "binance"
@@ -365,6 +367,15 @@ class Settings:
         # Position state
         self.COOLDOWN_BARS = int(os.getenv("COOLDOWN_BARS", "16"))
         self.MAX_POSITION_BARS = int(os.getenv("MAX_POSITION_BARS", "96"))
+
+        # Planner/health
+        self.SCAN_CRON_EXPRESSION = os.getenv("SCAN_CRON_EXPRESSION", "*/15 * * * *")
+        self.SIGMA_HEALTH_FILE = os.getenv(
+            "SIGMA_HEALTH_FILE", "/tmp/sigma-core-health"
+        )
+        self.SIGMA_HEALTH_MAX_AGE_SECONDS = int(
+            os.getenv("SIGMA_HEALTH_MAX_AGE_SECONDS", "1800")
+        )
 
         # Exchange
         self.EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "binance")

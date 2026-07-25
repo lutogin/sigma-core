@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   omega-bot:
     # Pull pre-built image from Docker Hub
@@ -41,6 +39,4 @@ services:
         max-size: '20m' # Maximum log file size before rotation
         max-file: '3' # Keep 3 rotated log files
         compress: 'true' # Compress rotated logs
-
-
-    # No healthcheck needed - trading bot without API server
+    # The image healthcheck validates PID 1 and the latest successful scan marker.

@@ -8,6 +8,8 @@ Uses SchedulerService for cron/interval based task execution.
 import asyncio
 from typing import TYPE_CHECKING, Optional
 
+from src.infra.healthcheck import clear_health, mark_healthy
+
 if TYPE_CHECKING:
     from src.domain.entry_observer import EntryObserverService
     from src.domain.orchestrator import OrchestratorService
@@ -35,6 +37,7 @@ class PlannerService:
         scan_cron_expression: str,
         trading_service: Optional["TradingService"] = None,
         entry_observer_service: Optional["EntryObserverService"] = None,
+        health_file: str = "/tmp/sigma-core-health",
     ):
         """
         Initialize Planner Service.
@@ -46,6 +49,7 @@ class PlannerService:
             scan_cron_expression: Cron expression for scan schedule.
             trading_service: Trading service for timeout checks (optional).
             entry_observer_service: Entry observer for trailing entry logic (optional).
+            health_file: Marker updated only after a successful scanner cycle.
         """
         self._logger = logger
         self._scheduler = scheduler_service
@@ -53,6 +57,7 @@ class PlannerService:
         self._scan_cron_expression = scan_cron_expression
         self._trading_service = trading_service
         self._entry_observer = entry_observer_service
+        self._health_file = health_file
         self._shutdown_event: asyncio.Event | None = None
 
     async def run(self) -> None:
@@ -67,6 +72,7 @@ class PlannerService:
         """
         self._logger.info("🗓️  Planner starting...")
         self._shutdown_event = asyncio.Event()
+        clear_health(self._health_file)
 
         # Start EntryObserverService (subscribes to PendingEntrySignalEvent)
         if self._entry_observer:
@@ -81,7 +87,11 @@ class PlannerService:
 
         # Run initial scan immediately
         self._logger.info("📡 Running initial scan...")
-        await self._run_scan_job()
+        initial_scan_succeeded = await self._run_scan_job()
+        if not initial_scan_succeeded:
+            self._logger.error(
+                "Initial scan failed; process will remain unhealthy until a scan succeeds"
+            )
 
         self._logger.info(
             f"⏰ Next scans scheduled at minute 00, 15, 30, 45 of each hour (cron: {self._scan_cron_expression})"
@@ -105,6 +115,7 @@ class PlannerService:
         if self._shutdown_event:
             self._shutdown_event.set()
         await self._scheduler.stop()
+        clear_health(self._health_file)
 
     def _schedule_tasks(self) -> None:
         """Schedule all periodic tasks."""
@@ -119,7 +130,7 @@ class PlannerService:
             f"📅 Scheduled 'orchestrator_scan' with cron: {self._scan_cron_expression}"
         )
 
-    async def _run_scan_job(self) -> None:
+    async def _run_scan_job(self) -> bool:
         """Execute the orchestrator scan with pre-checks."""
         try:
             # 1. Check for position timeouts before scanning
@@ -132,6 +143,9 @@ class PlannerService:
 
             # 2. Run the orchestrator scan
             await self._orchestrator.run()
+            mark_healthy(self._health_file)
+            return True
 
         except Exception as e:
             self._logger.error(f"Scan job failed: {e}", exc_info=True)
+            return False

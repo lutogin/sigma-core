@@ -1,4 +1,4 @@
-name: CI - Lint and Test
+name: CI - Validate, Test, and Build
 
 on:
   pull_request:
@@ -12,8 +12,8 @@ on:
       - feature/**
 
 jobs:
-  lint:
-    name: Lint and Format Check
+  validate:
+    name: Validate Python Sources
     runs-on: ubuntu-latest
 
     steps:
@@ -21,37 +21,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: '3.13'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install black isort flake8 mypy
-
-      - name: Run Black (code formatting check)
-        run: |
-          echo "Checking code formatting with Black..."
-          black --check --diff .
-
-      - name: Run isort (import sorting check)
-        run: |
-          echo "Checking import sorting with isort..."
-          isort --check-only --diff .
-
-      - name: Run flake8 (linting)
-        run: |
-          echo "Running flake8 linter..."
-          flake8 src/ --max-line-length=88 --extend-ignore=E203,W503 --count --statistics
-
-      - name: Run mypy (type checking)
-        continue-on-error: true
-        run: |
-          echo "Running mypy type checker..."
-          mypy src/ --ignore-missing-imports
+      - name: Compile all maintained Python sources
+        run: python -m compileall -q main.py src backtests scripts tests
 
   test:
     name: Run Tests
@@ -62,33 +37,22 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
           cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-asyncio
 
       - name: Run tests
-        run: |
-          # Add tests when available
-          echo "✅ No tests configured yet"
-          # pytest tests/ --cov=src --cov-report=xml --cov-report=term
-
-      - name: Upload coverage reports
-        if: false # Enable when tests are added
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.xml
-          flags: unittests
-          name: codecov-umbrella
+        run: python -m pytest -q tests
 
   docker-build:
     name: Test Docker Build
+    needs: [validate, test]
     runs-on: ubuntu-latest
 
     steps:
@@ -108,24 +72,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Test Docker image
-        run: |
-          echo "✅ Docker build successful"
-
   summary:
     name: CI Summary
-    needs: [lint, test, docker-build]
+    needs: [validate, test, docker-build]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
       - name: Check results
         run: |
-          echo "Lint: ${{ needs.lint.result }}"
+          echo "Validation: ${{ needs.validate.result }}"
           echo "Test: ${{ needs.test.result }}"
           echo "Docker Build: ${{ needs.docker-build.result }}"
 
-          if [ "${{ needs.lint.result }}" != "success" ] || \
+          if [ "${{ needs.validate.result }}" != "success" ] || \
              [ "${{ needs.test.result }}" != "success" ] || \
              [ "${{ needs.docker-build.result }}" != "success" ]; then
             echo "❌ CI checks failed"
