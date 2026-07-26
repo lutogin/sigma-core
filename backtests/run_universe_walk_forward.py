@@ -798,6 +798,10 @@ class UniverseWalkForwardRunner:
             f"  ↳ Train diagnostics: with_trades={len(results)} | "
             f"no_trades={no_trades_count} | errors={error_count}"
         )
+        if error_count:
+            raise RuntimeError(
+                f"Train phase failed closed: {error_count} coin backtest(s) errored"
+            )
 
         return results
 
@@ -936,7 +940,7 @@ class UniverseWalkForwardRunner:
                 except Exception as exc:
                     async with self._print_lock:
                         print(f"  [{idx}/{len(selected_coins)}] ❌ {coin}: {exc}")
-                    return None
+                    raise RuntimeError(f"OOS backtest failed for {coin}") from exc
 
         coin_results = await asyncio.gather(
             *(run_coin(coin, idx) for idx, coin in enumerate(selected_coins, 1))

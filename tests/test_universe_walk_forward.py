@@ -97,6 +97,24 @@ async def test_trade_phase_keeps_independent_account_per_coin() -> None:
     assert [result.coin for result in results] == ["LINK", "AAVE"]
 
 
+@pytest.mark.asyncio
+async def test_train_phase_fails_closed_if_any_coin_errors() -> None:
+    runner = _bare_runner()
+    runner.coins = ["LINK", "BROKEN"]
+    runner.rank_metric = "netPnL"
+
+    async def fake_single_coin(self, coin, _start, _end):
+        if coin == "BROKEN":
+            raise RuntimeError("incomplete data")
+        return SimpleNamespace(total_trades=0)
+
+    runner._run_single_coin_backtest = MethodType(fake_single_coin, runner)
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    with pytest.raises(RuntimeError, match="failed closed"):
+        await runner._run_train_phase(start, start + timedelta(days=7))
+
+
 def test_kill_switch_discards_trades_after_trigger_on_same_coin() -> None:
     runner = _bare_runner()
     start = datetime(2025, 1, 1, tzinfo=timezone.utc)

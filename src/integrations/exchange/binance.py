@@ -667,9 +667,9 @@ class BinanceClient:
                         await asyncio.sleep(wait_time)
                         last_error = e
                     else:
-                        # Other API errors - don't retry
-                        self.logger.error(f"API error fetching OHLCV for {symbol}: {e}")
-                        return self._ohlcv_to_dataframe(all_data)
+                        raise RuntimeError(
+                            f"Binance rejected OHLCV history for {symbol}: {e}"
+                        ) from e
 
                 except Exception as e:
                     last_error = e
@@ -692,11 +692,12 @@ class BinanceClient:
 
             # Check if all retries failed
             if candles is None:
-                self.logger.error(
+                message = (
                     f"Failed to fetch OHLCV for {symbol} after {max_retries} attempts: "
                     f"{repr(last_error)}"
                 )
-                break
+                self.logger.error(message)
+                raise RuntimeError(message) from last_error
 
             if not candles:
                 break

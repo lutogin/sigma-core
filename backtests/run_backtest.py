@@ -849,6 +849,11 @@ class StatArbBacktest:
 
         if not raw_data or self.primary_pair not in raw_data:
             raise ValueError("Failed to load data for primary pair")
+        missing_symbols = sorted(set(all_symbols) - set(raw_data))
+        if missing_symbols:
+            raise ValueError(
+                "Incomplete OHLCV history for: " + ", ".join(missing_symbols)
+            )
 
         # Align all data to primary pair's index
         aligned_data = self._align_data(raw_data)
@@ -1012,6 +1017,7 @@ class StatArbBacktest:
         than 15m candles, using "frozen" entry parameters.
         """
         self._minute_data_cache = {}
+        failures = []
 
         for i, symbol in enumerate(symbols):
             try:
@@ -1030,16 +1036,22 @@ class StatArbBacktest:
                     print(f"    ✓ {len(df)} candles loaded")
                 else:
                     print(f"    ⚠️ No 1m data for {symbol}")
+                    failures.append(symbol)
 
                 # Rate limiting
                 await asyncio.sleep(0.1)
 
             except Exception as e:
                 print(f"    ❌ Failed to load 1m data for {symbol}: {e}")
+                failures.append(symbol)
 
         print(
             f"  Loaded 1m data for {len(self._minute_data_cache)}/{len(symbols)} symbols\n"
         )
+        if failures:
+            raise RuntimeError(
+                "Incomplete 1m history for: " + ", ".join(sorted(set(failures)))
+            )
 
     async def _ensure_minute_data_for_symbol(
         self,
@@ -1086,11 +1098,13 @@ class StatArbBacktest:
 
                 print(f"    ⚠️ No 1m data for {symbol}")
                 self._minute_data_failed.add(symbol)
-                return None
+                raise RuntimeError(f"No complete 1m history for {symbol}")
             except Exception as e:
                 print(f"    ❌ Failed to load 1m data for {symbol}: {e}")
                 self._minute_data_failed.add(symbol)
-                return None
+                raise RuntimeError(
+                    f"Failed to load complete 1m history for {symbol}"
+                ) from e
 
     async def _process_candle(
         self,

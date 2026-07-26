@@ -80,131 +80,14 @@ class AsyncDataLoaderService:
             timeframe_minutes = get_timeframe_minutes(timeframe)
             start_time = end_time - timedelta(minutes=num_bars * timeframe_minutes)
 
-        df_result = pd.DataFrame()
-
-        # Try cache first
-        if self._ohlcv_repo:
-            try:
-                df_result = self._ohlcv_repo.load_data(
-                    symbol=symbol,
-                    interval=timeframe,
-                    start_date=start_time,
-                    end_date=end_time,
-                )
-
-                # Check for missing ranges
-                missing_ranges = self._ohlcv_repo.get_missing_date_ranges(
-                    symbol, timeframe, start_time, end_time
-                )
-
-                if missing_ranges:
-                    self._logger.debug(
-                        f"Found {len(missing_ranges)} missing ranges for {symbol}, "
-                        f"fetching from exchange"
-                    )
-
-                    for range_start, range_end in missing_ranges:
-                        range_start = max(range_start, start_time)
-                        range_end = min(range_end, end_time)
-                        if range_start >= range_end:
-                            continue
-                        missing_df = await self._exchange.fetch_ohlcv(
-                            symbol=symbol,
-                            interval=timeframe,
-                            start_date=range_start,
-                            end_date=range_end,
-                        )
-
-                        if not missing_df.empty:
-                            # Save to cache
-                            self._ohlcv_repo.save_data(symbol, timeframe, missing_df)
-
-                            # Merge with result
-                            if df_result.empty:
-                                df_result = missing_df
-                            else:
-                                df_result = pd.concat(
-                                    [df_result, missing_df]
-                                ).sort_index()
-                                df_result = df_result[
-                                    ~df_result.index.duplicated(keep="last")
-                                ]
-
-                # Edge gap detection: check if first/last candles match requested range
-                # This catches partial day gaps that date-based detection misses
-                if not df_result.empty:
-                    timeframe_minutes = get_timeframe_minutes(timeframe)
-                    tolerance = timedelta(minutes=timeframe_minutes * 2)
-
-                    # Check start edge: first candle might be AFTER requested start
-                    first_cached = df_result.index[0]
-                    if first_cached > start_time + tolerance:
-                        self._logger.debug(
-                            f"Edge gap detected for {symbol}: cache starts at "
-                            f"{first_cached.isoformat()}, need data from {start_time.isoformat()}"
-                        )
-                        early_df = await self._exchange.fetch_ohlcv(
-                            symbol=symbol,
-                            interval=timeframe,
-                            start_date=start_time,
-                            end_date=first_cached - timedelta(minutes=1),
-                        )
-                        if not early_df.empty:
-                            self._ohlcv_repo.save_data(symbol, timeframe, early_df)
-                            df_result = pd.concat([early_df, df_result]).sort_index()
-                            df_result = df_result[
-                                ~df_result.index.duplicated(keep="last")
-                            ]
-
-                    # Check end edge: last candle might be BEFORE requested end
-                    last_cached = df_result.index[-1]
-                    if last_cached < end_time - tolerance:
-                        self._logger.debug(
-                            f"Edge gap detected for {symbol}: cache ends at "
-                            f"{last_cached.isoformat()}, need data until {end_time.isoformat()}"
-                        )
-                        late_df = await self._exchange.fetch_ohlcv(
-                            symbol=symbol,
-                            interval=timeframe,
-                            start_date=last_cached + timedelta(minutes=1),
-                            end_date=end_time,
-                        )
-                        if not late_df.empty:
-                            self._ohlcv_repo.save_data(symbol, timeframe, late_df)
-                            df_result = pd.concat([df_result, late_df]).sort_index()
-                            df_result = df_result[
-                                ~df_result.index.duplicated(keep="last")
-                            ]
-
-            except Exception as e:
-                self._logger.error(
-                    f"Error loading from cache for {symbol}: {e}, "
-                    f"falling back to exchange"
-                )
-                df_result = pd.DataFrame()
-
-        # Fallback to exchange if cache unavailable or empty
-        if df_result.empty:
-            self._logger.debug(
-                f"Loading {symbol} OHLCV from exchange "
-                f"({start_time.isoformat()} to {end_time.isoformat()})"
-            )
-
-            df_result = await self._exchange.fetch_ohlcv(
-                symbol=symbol,
-                interval=timeframe,
-                start_date=start_time,
-                end_date=end_time,
-            )
-
-            # Save to cache if available
-            if self._ohlcv_repo and not df_result.empty:
-                try:
-                    self._ohlcv_repo.save_data(symbol, timeframe, df_result)
-                except Exception as e:
-                    self._logger.warning(f"Failed to save {symbol} to cache: {e}")
-
-        return df_result
+        result = await self.load_ohlcv_bulk(
+            symbols=[symbol],
+            start_time=start_time,
+            end_time=end_time,
+            batch_size=1,
+            timeframe=timeframe,
+        )
+        return result.get(symbol, pd.DataFrame())
 
     async def load_ohlcv_pair_with_cache(
         self,
@@ -371,9 +254,9 @@ class AsyncDataLoaderService:
                 symbol_dfs: Dict[str, List[pd.DataFrame]] = {}
                 for symbol, fetch_result in zip(task_info, batch_results):
                     if isinstance(fetch_result, Exception):
-                        self._logger.warning(
-                            f"Error fetching {symbol}: {repr(fetch_result)}"
-                        )
+                        raise RuntimeError(
+                            f"OHLCV fetch failed for {symbol}"
+                        ) from fetch_result
                     elif (
                         isinstance(fetch_result, pd.DataFrame)
                         and not fetch_result.empty
@@ -425,6 +308,15 @@ class AsyncDataLoaderService:
                 df = df.dropna()
 
                 if not df.empty:
+                    available_expected = expected_index[
+                        expected_index >= df.index.min()
+                    ]
+                    missing_after_listing = available_expected.difference(df.index)
+                    if len(missing_after_listing) > 0:
+                        raise RuntimeError(
+                            f"{symbol} has {len(missing_after_listing)} missing "
+                            f"{timeframe} candles after listing"
+                        )
                     final_result[symbol] = df
                     # Calculate close time of last candle (open_time + timeframe)
                     last_candle_close = df.index.max() + timedelta(
