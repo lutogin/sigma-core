@@ -154,7 +154,20 @@ def evaluate_promotion(
 
         half_spread = _finite_float(strategy_config.get("half_spread_bps"))
         slippage = _finite_float(strategy_config.get("slippage_bps"))
-        commission = _finite_float(strategy_config.get("commission_rate"))
+        # Universe reports serialize BacktestConfig verbatim. Older reports
+        # used a single ``commission_rate`` field, while current reports expose
+        # maker/taker fees plus the fill mode used by the simulator.
+        fee_key = (
+            "maker_fee"
+            if strategy_config.get("use_limit_orders") is True
+            else "taker_fee"
+        )
+        commission = _finite_float(
+            strategy_config.get(
+                fee_key,
+                strategy_config.get("commission_rate"),
+            )
+        )
         if half_spread is None or half_spread < policy.min_half_spread_bps:
             errors.append(
                 f"half-spread assumption must be >= {policy.min_half_spread_bps} bps"
@@ -164,7 +177,7 @@ def evaluate_promotion(
                 f"slippage assumption must be >= {policy.min_slippage_bps} bps"
             )
         if commission is None or commission <= 0:
-            errors.append("commission_rate must be positive")
+            errors.append(f"{fee_key} must be positive")
 
     current_candidates = live_selection.get("selected_coins")
     if not isinstance(current_candidates, list) or not current_candidates:

@@ -1344,6 +1344,18 @@ class UniverseWalkForwardRunner:
                 "rank_metric": result.rank_metric,
                 "account_model": "independent_per_coin",
                 "strategy_config": asdict(self.base_config),
+                "execution_assumptions": {
+                    "fee_rate": (
+                        self.base_config.maker_fee
+                        if self.base_config.use_limit_orders
+                        else self.base_config.taker_fee
+                    ),
+                    "fee_type": (
+                        "maker" if self.base_config.use_limit_orders else "taker"
+                    ),
+                    "half_spread_bps": self.base_config.half_spread_bps,
+                    "slippage_bps": self.base_config.slippage_bps,
+                },
                 "universe_size": len(self.coins),
             },
             "summary": {

@@ -19,7 +19,9 @@ def _result(*, pnl: float = 25.0) -> dict:
                 "use_ohlc_pseudo_ticks": False,
                 "half_spread_bps": 2.0,
                 "slippage_bps": 1.0,
-                "commission_rate": 0.0004,
+                "maker_fee": 0.0002,
+                "taker_fee": 0.0004,
+                "use_limit_orders": False,
             },
         },
         "summary": {"total_portfolio_pnl": pnl},
@@ -149,3 +151,18 @@ def test_pair_promotion_rejects_optimistic_execution_assumptions() -> None:
 
     assert decision.can_activate is False
     assert any("slippage" in error for error in decision.errors)
+
+
+def test_pair_promotion_validates_fee_used_by_execution_model() -> None:
+    result = _result()
+    result["metadata"]["strategy_config"]["taker_fee"] = 0
+
+    decision = evaluate_promotion(
+        result,
+        active_symbols=[],
+        policy=PromotionPolicy(),
+        now=datetime(2026, 7, 26, tzinfo=timezone.utc),
+    )
+
+    assert decision.can_activate is False
+    assert any("taker_fee" in error for error in decision.errors)
