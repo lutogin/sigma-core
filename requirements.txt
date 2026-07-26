@@ -1,41 +1,10 @@
-# Types
-types-requests
-pandas-stubs
+-r requirements-runtime.txt
 
-# Exchange & Data
-python-binance
-websockets<14.0
+# Types and static checks
+types-requests==2.33.0.20260712
+pandas-stubs==3.0.3.260530
+pylint==4.0.6
 
-# Data Processing
-pandas
-numpy
-hurst
-statsmodels
-
-# Visualization
-matplotlib
-seaborn
-
-# Infra
-python-dotenv
-loguru
-loguru-loki-handler
-requests
-pyee
-apscheduler
-asyncio-redis
-redis
-
-# Database
-pymongo
-psycopg2-binary
-
-# Linting
-pylint
-
-# Telegram
-aiogram>=3.0.0
-
-# Testing
-pytest
-pytest-asyncio
+# Tests
+pytest==9.1.1
+pytest-asyncio==1.4.0

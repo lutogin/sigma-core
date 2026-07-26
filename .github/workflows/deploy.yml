@@ -108,7 +108,7 @@ jobs:
               ${{ env.DOCKER_IMAGE }}:latest
 
             # Recreate only the bot service; its databases are not part of this compose file.
-            docker compose up -d --remove-orphans --force-recreate
+            docker compose up -d --force-recreate omega-bot
 
             # Show logs for verification
             echo "=== Container Status ==="
@@ -150,7 +150,7 @@ jobs:
               docker image tag \
                 ${{ env.DOCKER_IMAGE }}:rollback \
                 ${{ env.DOCKER_IMAGE }}:latest
-              docker compose up -d --force-recreate
+              docker compose up -d --force-recreate omega-bot
               echo "Previous image restored."
             else
               echo "No rollback image was available."

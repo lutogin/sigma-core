@@ -40,3 +40,39 @@ services:
         max-file: '3' # Keep 3 rotated log files
         compress: 'true' # Compress rotated logs
     # The image healthcheck validates PID 1 and the latest successful scan marker.
+
+  pair-refresh:
+    image: lutogin/sigma-trading-bot:latest
+    profiles:
+      - maintenance
+    restart: 'no'
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: 1
+      PYTHONDONTWRITEBYTECODE: 1
+      TZ: UTC
+    volumes:
+      - ./logs:/app/logs
+      # The named volume keeps the lock and audit JSON across one-shot runs.
+      - pair-refresh-results:/app/backtests/results
+    command:
+      - python
+      - scripts/refresh_trading_pairs.py
+      - --activate
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 3.7G
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '20m'
+        max-file: '3'
+        compress: 'true'
+
+volumes:
+  pair-refresh-results:

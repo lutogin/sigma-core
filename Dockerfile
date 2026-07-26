@@ -21,10 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Python dependencies
-COPY requirements.txt .
+# Install only runtime dependencies; CI installs the developer/test layer.
+COPY requirements-runtime.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements-runtime.txt
 
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime
@@ -51,9 +51,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Copy application code
 COPY --chown=bot:bot . .
 
-# Create directories for logs and cache
-RUN mkdir -p /app/logs /app/cache && \
-    chown -R bot:bot /app/logs /app/cache
+# Create writable runtime directories, including the maintenance volume mountpoint.
+RUN mkdir -p /app/logs /app/cache /app/backtests/results && \
+    chown -R bot:bot /app/logs /app/cache /app/backtests/results
 
 # Switch to non-root user
 USER bot
