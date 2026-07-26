@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from src.infra.mongo import MongoDatabase
-from src.domain.trading_pairs.models import TradingPair
+from src.domain.trading_pairs.models import TradingPair, TradingPairVersion
 
 
 class TradingPairRepository:
@@ -22,6 +22,8 @@ class TradingPairRepository:
     """
 
     COLLECTION_NAME = "trading_pairs"
+    VERSION_COLLECTION_NAME = "trading_pair_versions"
+    STATE_COLLECTION_NAME = "trading_pair_state"
 
     def __init__(self, mongo_db: MongoDatabase, logger):
         """
@@ -132,8 +134,130 @@ class TradingPairRepository:
         Returns:
             List of symbol strings (e.g., ["LINK/USDT:USDT", "UNI/USDT:USDT"]).
         """
+        active_version = self.get_active_version()
+        if active_version is not None:
+            return list(active_version.symbols)
+
         pairs = self.get_active()
         return [pair.symbol for pair in pairs]
+
+    # =========================================================================
+    # Versioned Walk-Forward Pair Sets
+    # =========================================================================
+
+    @staticmethod
+    def _normalize_version_symbols(symbols: List[str]) -> List[str]:
+        normalized: List[str] = []
+        seen = set()
+        for value in symbols:
+            symbol = value.strip().upper()
+            if "/" not in symbol:
+                symbol = f"{symbol}/USDT:USDT"
+            if symbol == "ETH/USDT:USDT":
+                continue
+            if symbol and symbol not in seen:
+                normalized.append(symbol)
+                seen.add(symbol)
+        if not normalized:
+            raise ValueError("A trading-pair version cannot be empty")
+        return normalized
+
+    def create_version(self, version: TradingPairVersion) -> str:
+        """Persist an immutable candidate set produced by walk-forward."""
+        version.symbols = self._normalize_version_symbols(version.symbols)
+        collection = self._db.get_collection(self.VERSION_COLLECTION_NAME)
+        collection.insert_one(version.to_dict())
+        self._logger.info(
+            f"Created trading-pair version {version.version_id} "
+            f"with {len(version.symbols)} symbols"
+        )
+        return version.version_id
+
+    def get_version(self, version_id: str) -> Optional[TradingPairVersion]:
+        collection = self._db.get_collection(self.VERSION_COLLECTION_NAME)
+        doc = collection.find_one({"version_id": version_id})
+        return TradingPairVersion.from_dict(doc) if doc else None
+
+    def list_versions(self, limit: int = 20) -> List[TradingPairVersion]:
+        collection = self._db.get_collection(self.VERSION_COLLECTION_NAME)
+        cursor = collection.find({}).sort("created_at", -1).limit(max(1, limit))
+        return [TradingPairVersion.from_dict(doc) for doc in cursor]
+
+    def get_active_version_id(self, ecosystem: str = "ETH") -> Optional[str]:
+        collection = self._db.get_collection(self.STATE_COLLECTION_NAME)
+        state = collection.find_one({"_id": ecosystem})
+        if not state:
+            return None
+        return state.get("active_version_id")
+
+    def get_active_version(
+        self,
+        ecosystem: str = "ETH",
+    ) -> Optional[TradingPairVersion]:
+        version_id = self.get_active_version_id(ecosystem)
+        if not version_id:
+            return None
+        version = self.get_version(version_id)
+        if version is None:
+            self._logger.error(
+                f"Active trading-pair version {version_id} is missing; "
+                "falling back to legacy active pairs"
+            )
+        return version
+
+    def activate_version(
+        self,
+        version_id: str,
+        ecosystem: str = "ETH",
+    ) -> Optional[str]:
+        """Atomically move the active pointer to an immutable pair set.
+
+        Returns the previously active version id, which can be used for an
+        explicit rollback. The single-document pointer update is atomic even
+        on a standalone MongoDB instance.
+        """
+        version = self.get_version(version_id)
+        if version is None:
+            raise ValueError(f"Trading-pair version not found: {version_id}")
+        if version.ecosystem != ecosystem:
+            raise ValueError(
+                f"Version ecosystem {version.ecosystem} does not match {ecosystem}"
+            )
+
+        from pymongo import ReturnDocument
+
+        state_collection = self._db.get_collection(self.STATE_COLLECTION_NAME)
+        now = datetime.now(timezone.utc).isoformat()
+        old_state = state_collection.find_one_and_update(
+            {"_id": ecosystem},
+            [
+                {
+                    "$set": {
+                        "previous_version_id": {
+                            "$ifNull": ["$active_version_id", None]
+                        },
+                        "active_version_id": version_id,
+                        "activated_at": now,
+                    }
+                }
+            ],
+            upsert=True,
+            return_document=ReturnDocument.BEFORE,
+        )
+        previous = old_state.get("active_version_id") if old_state else None
+        self._logger.info(
+            f"Activated trading-pair version {version_id}; previous={previous}"
+        )
+        return previous
+
+    def rollback(self, ecosystem: str = "ETH") -> str:
+        state_collection = self._db.get_collection(self.STATE_COLLECTION_NAME)
+        state = state_collection.find_one({"_id": ecosystem})
+        if not state or not state.get("previous_version_id"):
+            raise ValueError("No previous trading-pair version to roll back to")
+        target = str(state["previous_version_id"])
+        self.activate_version(target, ecosystem=ecosystem)
+        return target
 
     def get_by_ecosystem(self, ecosystem: str) -> List[TradingPair]:
         """
@@ -313,5 +437,8 @@ class TradingPairRepository:
         # Compound index for ecosystem + active
         collection.create_index([("ecosystem", 1), ("is_active", 1)])
 
-        self._logger.info("Trading pairs indexes created")
+        versions = self._db.get_collection(self.VERSION_COLLECTION_NAME)
+        versions.create_index("version_id", unique=True)
+        versions.create_index([("ecosystem", 1), ("created_at", -1)])
 
+        self._logger.info("Trading pairs indexes created")

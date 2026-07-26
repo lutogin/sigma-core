@@ -21,9 +21,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
           cache: 'pip'
 
       - name: Install dependencies
@@ -31,29 +31,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # pip install pytest black isort flake8 mypy
+      - name: Compile Python sources
+        run: python -m compileall -q main.py src backtests scripts tests
 
-      # - name: Run Black (code formatting check)
-      #   run: black --check --diff .
-
-      # - name: Run isort (import sorting check)
-      #   run: isort --check-only --diff .
-
-      # - name: Run flake8 (linting)
-      #   run: flake8 src/ --max-line-length=88 --extend-ignore=E203,W503
-
-      # - name: Run mypy (type checking)
-      #   run: mypy src/ --ignore-missing-imports
-
-      # - name: Run tests
-      #   run: |
-      #     # Add tests when available
-      #     echo "✅ No tests configured yet"
+      - name: Run tests
+        run: python -m pytest -q tests
 
   build-and-push:
     name: Build and Push Docker Image
     needs: test
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
 
     steps:
       - name: Checkout code
@@ -79,6 +68,7 @@ jobs:
             type=ref,event=branch
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -105,21 +95,24 @@ jobs:
           script: |
             cd ${{ secrets.APP_PATH }}
 
-            # Pull latest image
-            docker pull ${{ env.DOCKER_IMAGE }}:latest
+            # Keep a local rollback tag until the new image passes its healthcheck.
+            if docker inspect ${{ env.CONTAINER_NAME }} >/dev/null 2>&1; then
+              previous_image=$(docker inspect --format '{{.Image}}' ${{ env.CONTAINER_NAME }})
+              docker image tag "$previous_image" ${{ env.DOCKER_IMAGE }}:rollback
+            fi
 
-            # Stop and remove old container
-            docker compose down
+            # Deploy the exact digest built by this workflow, not a mutable tag.
+            docker pull ${{ env.DOCKER_IMAGE }}@${{ needs.build-and-push.outputs.digest }}
+            docker image tag \
+              ${{ env.DOCKER_IMAGE }}@${{ needs.build-and-push.outputs.digest }} \
+              ${{ env.DOCKER_IMAGE }}:latest
 
-            # Start new container with latest image
-            docker compose up -d --remove-orphans
-
-            # Clean up old images
-            docker image prune -af --filter "until=24h"
+            # Recreate only the bot service; its databases are not part of this compose file.
+            docker compose up -d --force-recreate omega-bot
 
             # Show logs for verification
             echo "=== Container Status ==="
-            docker ps | grep ${{ env.CONTAINER_NAME }}
+            docker ps --filter name=${{ env.CONTAINER_NAME }}
 
             echo "=== Recent Logs ==="
             docker compose logs --tail=50
@@ -132,18 +125,37 @@ jobs:
           key: ${{ secrets.DO_SSH_KEY }}
           port: ${{ secrets.DO_SSH_PORT || 22 }}
           script: |
-            # Wait for container to start
-            sleep 10
+            cd ${{ secrets.APP_PATH }}
 
-            # Check if container is running
-            if docker ps | grep -q ${{ env.CONTAINER_NAME }}; then
-              echo "✅ Deployment successful! Container is running."
-              exit 0
+            # A successful process start is insufficient: wait for a completed scan.
+            for attempt in $(seq 1 60); do
+              health=$(docker inspect \
+                --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' \
+                ${{ env.CONTAINER_NAME }} 2>/dev/null || echo missing)
+              if [ "$health" = "healthy" ]; then
+                echo "Deployment successful: scanner is healthy."
+                docker image rm ${{ env.DOCKER_IMAGE }}:rollback >/dev/null 2>&1 || true
+                docker image prune -af --filter "until=24h"
+                exit 0
+              fi
+              if [ "$health" = "unhealthy" ] || [ "$health" = "missing" ]; then
+                break
+              fi
+              sleep 10
+            done
+
+            echo "Deployment failed health verification; restoring previous image."
+            docker compose logs --tail=100
+            if docker image inspect ${{ env.DOCKER_IMAGE }}:rollback >/dev/null 2>&1; then
+              docker image tag \
+                ${{ env.DOCKER_IMAGE }}:rollback \
+                ${{ env.DOCKER_IMAGE }}:latest
+              docker compose up -d --force-recreate omega-bot
+              echo "Previous image restored."
             else
-              echo "❌ Deployment failed! Container is not running."
-              docker compose logs --tail=100
-              exit 1
+              echo "No rollback image was available."
             fi
+            exit 1
 
   notify:
     name: Notify Deployment Status

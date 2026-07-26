@@ -4,7 +4,7 @@
 # Optimized for fast local builds with layer caching
 # ============================================================================
 
-FROM python:3.14-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
@@ -13,27 +13,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first for better caching
-COPY requirements.txt .
+# Copy only runtime requirements first for better caching
+COPY requirements-runtime.txt .
 
 # Install Python dependencies (this layer will be cached if requirements.txt doesn't change)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements-runtime.txt
 
 # Set Python environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    SIGMA_HEALTH_FILE=/tmp/sigma-core-health \
+    SIGMA_HEALTH_MAX_AGE_SECONDS=1800
 
 # Copy application code (this layer changes most often)
 COPY . .
 
-# Create directories for logs and cache
-RUN mkdir -p /app/logs /app/cache
+# Create directories for logs, cache and recurring backtest results
+RUN mkdir -p /app/logs /app/cache /app/backtests/results
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10m --retries=3 \
+    CMD python src/infra/healthcheck.py
 
 # Default command
 CMD ["python", "main.py"]

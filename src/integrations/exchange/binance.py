@@ -28,7 +28,6 @@ import pandas as pd
 from binance import AsyncClient, BinanceSocketManager
 from binance.exceptions import BinanceAPIException
 
-
 # =============================================================================
 # Rate Limiter
 # =============================================================================
@@ -54,14 +53,18 @@ class RateLimiter:
         self._rate = requests_per_second
         self._burst = burst_size
         self._tokens = float(burst_size)
-        self._last_update = asyncio.get_event_loop().time()
+        # A client may be constructed outside a running event loop (tests,
+        # dependency injection, CLI setup). monotonic() has the same clock
+        # semantics without binding the limiter to whichever loop happened to
+        # exist at construction time.
+        self._last_update = time.monotonic()
         self._lock = asyncio.Lock()
 
     async def acquire(self, weight: int = 1) -> None:
         """Acquire tokens, waiting if necessary."""
         async with self._lock:
             while True:
-                now = asyncio.get_event_loop().time()
+                now = time.monotonic()
                 elapsed = now - self._last_update
                 self._tokens = min(self._burst, self._tokens + elapsed * self._rate)
                 self._last_update = now
@@ -235,7 +238,7 @@ class BinanceClient:
 
         self._client: Optional[AsyncClient] = None
         self._client_lock = asyncio.Lock()
-        
+
         self._markets_cache: Dict[str, SymbolInfo] = {}
         self._funding_intervals: Dict[str, int] = {}
         self._is_connected = False
@@ -286,14 +289,18 @@ class BinanceClient:
                         api_key=self.api_key or "",
                         api_secret=self.api_secret or "",
                         testnet=self.testnet,
-                        requests_params={"timeout": 60},  # Increased from 30 to 60 seconds
+                        requests_params={
+                            "timeout": 60
+                        },  # Increased from 30 to 60 seconds
                     )
                 except Exception as exc:
                     # Some environments cannot resolve api.binance.com while futures endpoints
                     # (fapi.binance.com / testnet.binancefuture.com) are available.
                     # Fallback to futures-only bootstrap to avoid hard dependency on spot DNS.
                     err = str(exc).lower()
-                    spot_dns_issue = "api.binance.com" in err or "nodename nor servname" in err
+                    spot_dns_issue = (
+                        "api.binance.com" in err or "nodename nor servname" in err
+                    )
                     if not spot_dns_issue:
                         raise
 
@@ -310,7 +317,9 @@ class BinanceClient:
                     )
                     # Keep timestamp offset for signed futures requests.
                     server_time = await client.futures_time()
-                    client.timestamp_offset = server_time["serverTime"] - int(time.time() * 1000)
+                    client.timestamp_offset = server_time["serverTime"] - int(
+                        time.time() * 1000
+                    )
                     self._client = client
             return self._client
 
@@ -358,6 +367,8 @@ class BinanceClient:
 
     async def connect(self) -> None:
         """Connect and load markets."""
+        if self.is_connected:
+            return
         try:
             self.logger.info("Connecting to Binance USDT-M Futures...")
 
@@ -511,8 +522,9 @@ class BinanceClient:
                 )
             except Exception as e:
                 self.logger.error(f"Failed to load 24h volumes: {e}")
-                # If failed, don't filter by volume
-                min_volume_usdt = 0
+                raise RuntimeError(
+                    "Cannot enforce the requested liquidity filter"
+                ) from e
 
         symbols = []
         for symbol, info in self._markets_cache.items():
@@ -579,7 +591,7 @@ class BinanceClient:
         :param symbol: Trading symbol
         :param interval: Timeframe (e.g., '1h', '4h', '1d')
         :param start_date: Start date
-        :param end_date: End date
+        :param end_date: Exclusive end timestamp
         :param limit: Limit per request
         :param max_retries: Maximum retry attempts for transient failures
         :return: DataFrame with OHLCV data
@@ -599,7 +611,7 @@ class BinanceClient:
 
         all_data: List[Any] = []
         current_since = int(start_date_utc.timestamp() * 1000)
-        end_timestamp = int((end_date_utc + timedelta(days=1)).timestamp() * 1000)
+        end_timestamp = int(end_date_utc.timestamp() * 1000)
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         while current_since < end_timestamp:
@@ -641,7 +653,9 @@ class BinanceClient:
                         f"retrying in {wait_time}s..."
                     )
                     await asyncio.sleep(wait_time)
-                    await self._invalidate_client(reason=f"timeout while fetching {symbol}")
+                    await self._invalidate_client(
+                        reason=f"timeout while fetching {symbol}"
+                    )
 
                 except BinanceAPIException as e:
                     # Rate limit error - wait longer
@@ -653,14 +667,14 @@ class BinanceClient:
                         await asyncio.sleep(wait_time)
                         last_error = e
                     else:
-                        # Other API errors - don't retry
-                        self.logger.error(f"API error fetching OHLCV for {symbol}: {e}")
-                        return self._ohlcv_to_dataframe(all_data)
+                        raise RuntimeError(
+                            f"Binance rejected OHLCV history for {symbol}: {e}"
+                        ) from e
 
                 except Exception as e:
                     last_error = e
                     if self._is_transient_network_error(e):
-                        wait_time = min(20.0, (2 ** attempt) + random.uniform(0.2, 1.0))
+                        wait_time = min(20.0, (2**attempt) + random.uniform(0.2, 1.0))
                         self.logger.warning(
                             f"Transient network error fetching OHLCV for {symbol}: {repr(e)} | "
                             f"attempt {attempt + 1}/{max_retries}, retrying in {wait_time:.1f}s"
@@ -678,11 +692,12 @@ class BinanceClient:
 
             # Check if all retries failed
             if candles is None:
-                self.logger.error(
+                message = (
                     f"Failed to fetch OHLCV for {symbol} after {max_retries} attempts: "
                     f"{repr(last_error)}"
                 )
-                break
+                self.logger.error(message)
+                raise RuntimeError(message) from last_error
 
             if not candles:
                 break
@@ -691,10 +706,7 @@ class BinanceClient:
             # 1. Only candles that started before end_timestamp
             # 2. Only CLOSED candles (close_time <= now)
             #    k[6] is close_time in ms - candle is closed when close_time is in the past
-            filtered = [
-                k for k in candles
-                if k[0] < end_timestamp and k[6] <= now_ms
-            ]
+            filtered = [k for k in candles if k[0] < end_timestamp and k[6] <= now_ms]
             all_data.extend(filtered)
 
             if len(candles) < limit or not filtered:
@@ -1109,7 +1121,14 @@ class BinanceClient:
                     asset=asset["asset"],
                     free=float(asset.get("availableBalance", 0)),
                     used=float(asset.get("initialMargin", 0)),
-                    total=float(asset.get("walletBalance", 0)),
+                    # Margin balance includes unrealized PnL and is the equity
+                    # actually supporting cross-margin risk.
+                    total=float(
+                        asset.get(
+                            "marginBalance",
+                            asset.get("walletBalance", 0),
+                        )
+                    ),
                 )
                 balances.append(balance)
 
@@ -1187,7 +1206,9 @@ class BinanceClient:
                 self.logger.info(f"Position mode changed to {mode_name}")
                 return True
 
-            self.logger.error(f"Unexpected response from position mode change: {response}")
+            self.logger.error(
+                f"Unexpected response from position mode change: {response}"
+            )
             return False
 
         except Exception as e:
@@ -1296,6 +1317,37 @@ class BinanceClient:
     # Trading Operations
     # =========================================================================
 
+    async def _create_futures_order_with_recovery(
+        self,
+        client: AsyncClient,
+        *,
+        binance_symbol: str,
+        params: Dict[str, Any],
+        client_order_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """Recover an acknowledged order after an ambiguous transport error."""
+        try:
+            return await client.futures_create_order(**params)
+        except Exception as original_error:
+            if not client_order_id:
+                raise
+            for delay in (0.0, 0.1, 0.25):
+                if delay:
+                    await asyncio.sleep(delay)
+                try:
+                    recovered = await client.futures_get_order(
+                        symbol=binance_symbol,
+                        origClientOrderId=client_order_id,
+                    )
+                except Exception:
+                    continue
+                self.logger.warning(
+                    f"Recovered order by client id after create error: "
+                    f"{client_order_id}"
+                )
+                return recovered
+            raise original_error
+
     async def set_leverage(self, symbol: str, leverage: int) -> None:
         """Set leverage for symbol."""
         client = await self._get_client()
@@ -1344,6 +1396,7 @@ class BinanceClient:
         amount: float,
         leverage: Optional[int] = None,
         position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
+        client_order_id: Optional[str] = None,
     ) -> Order:
         """
         Open a position.
@@ -1382,12 +1435,22 @@ class BinanceClient:
                 f"(positionSide={position_side})"
             )
 
-            response = await client.futures_create_order(
+            order_params = dict(
                 symbol=binance_symbol,
                 side=side.upper(),
                 type="MARKET",
                 quantity=float(precise_amount),
                 positionSide=position_side,
+                newOrderRespType="RESULT",
+            )
+            if client_order_id:
+                order_params["newClientOrderId"] = client_order_id[:36]
+            effective_client_id = order_params.get("newClientOrderId")
+            response = await self._create_futures_order_with_recovery(
+                client,
+                binance_symbol=binance_symbol,
+                params=order_params,
+                client_order_id=effective_client_id,
             )
 
             return self._map_order_response(symbol, response)
@@ -1407,12 +1470,14 @@ class BinanceClient:
         fallback_to_market: bool = True,
         max_slippage_percent: float = 0.1,
         position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
+        client_order_id: Optional[str] = None,
     ) -> Order:
         """
-        Open position with limit order, ensuring execution (like market but cheaper).
+        Open with bounded aggressive IOC orders.
 
-        Uses aggressive limit pricing to get maker fees while guaranteeing fill.
-        For stat-arb where every basis point matters.
+        IOC prevents a stale remainder from resting while the other spread leg
+        moves. These fills are expected to be taker-like and are modeled that
+        way in the backtest.
 
         Strategy:
         1. Place limit order at best bid/ask (aggressive, should fill immediately)
@@ -1433,6 +1498,8 @@ class BinanceClient:
         client = await self._get_client()
         binance_symbol = self._symbol_to_binance(symbol)
         side_upper = side.upper() if isinstance(side, str) else side.value
+        requested_amount = 0.0
+        filled_orders: List[Order] = []
 
         try:
             # Setup leverage and margin
@@ -1443,7 +1510,8 @@ class BinanceClient:
             precise_amount = await self.amount_to_precision(
                 symbol, Decimal(str(amount))
             )
-            remaining_amount = float(precise_amount)
+            requested_amount = float(precise_amount)
+            remaining_amount = requested_amount
 
             # Determine position_side for Hedge Mode
             if position_side is None:
@@ -1482,12 +1550,25 @@ class BinanceClient:
                         f"{'falling back to market' if fallback_to_market else 'aborting'}"
                     )
                     if fallback_to_market:
-                        return await self.open_position(
+                        market_order = await self.open_position(
                             symbol,
                             side,
                             remaining_amount,
                             leverage,
                             position_side,
+                            (f"{client_order_id[:34]}-m" if client_order_id else None),
+                        )
+                        filled_orders.append(market_order)
+                        return self._combine_fill_orders(
+                            symbol,
+                            filled_orders,
+                            requested_amount,
+                        )
+                    if filled_orders:
+                        return self._combine_fill_orders(
+                            symbol,
+                            filled_orders,
+                            requested_amount,
                         )
                     raise ValueError(f"Price slippage exceeded {max_slippage_percent}%")
 
@@ -1503,17 +1584,28 @@ class BinanceClient:
                     except Exception:
                         pass  # Order might already be filled or cancelled
 
-                # Place limit order with IOC (Immediate-Or-Cancel) for fast execution
-                # Or use regular LIMIT for potential maker rebate
+                # IOC prevents an unhedged stale remainder from resting.
                 try:
-                    response = await client.futures_create_order(
+                    order_params = dict(
                         symbol=binance_symbol,
                         side=side_upper,
                         type="LIMIT",
                         quantity=float(precise_amount),
                         price=float(precise_price),
                         positionSide=position_side,
-                        timeInForce="GTC",  # Good-Till-Cancel
+                        timeInForce="IOC",
+                        newOrderRespType="RESULT",
+                    )
+                    if client_order_id:
+                        order_params["newClientOrderId"] = (
+                            f"{client_order_id[:32]}-{attempt}"
+                        )[:36]
+                    effective_client_id = order_params.get("newClientOrderId")
+                    response = await self._create_futures_order_with_recovery(
+                        client,
+                        binance_symbol=binance_symbol,
+                        params=order_params,
+                        client_order_id=effective_client_id,
                     )
 
                     order = self._map_order_response(symbol, response)
@@ -1524,33 +1616,46 @@ class BinanceClient:
                         f"(attempt {attempt + 1}/{max_retries + 1})"
                     )
 
-                    # Wait and check if filled
-                    await asyncio.sleep(retry_interval)
+                    final_order = order
+                    if order.status == "open":
+                        await asyncio.sleep(retry_interval)
+                        final_order = await self.get_order(symbol, order.id)
 
-                    # Check order status
-                    updated_order = await self.get_order(symbol, order.id)
+                    if final_order.filled > 0:
+                        filled_orders.append(final_order)
 
-                    if updated_order.status == "closed":
+                    aggregate = self._combine_fill_orders(
+                        symbol,
+                        filled_orders,
+                        requested_amount,
+                    )
+                    if aggregate.status == "closed":
                         self.logger.info(
-                            f"Limit order filled for {symbol}: "
-                            f"{precise_amount} @ {updated_order.price}"
+                            f"Limit entry filled for {symbol}: "
+                            f"{aggregate.filled} @ {aggregate.price}"
                         )
-                        return updated_order
+                        return aggregate
 
-                    if updated_order.filled > 0:
-                        # Partially filled - calculate remaining
-                        remaining = float(precise_amount) - updated_order.filled
-                        if remaining <= 0:
-                            return updated_order
-
+                    remaining_amount = aggregate.remaining
+                    if final_order.filled > 0:
                         self.logger.info(
-                            f"Partial fill: {updated_order.filled}/{precise_amount}, "
-                            f"continuing with {remaining}"
+                            f"Partial fill: cumulative "
+                            f"{aggregate.filled}/{requested_amount}, "
+                            f"continuing with {remaining_amount}"
                         )
-                        remaining_amount = remaining
-                        precise_amount = await self.amount_to_precision(
-                            symbol, Decimal(str(remaining))
+                    next_precise_amount = await self.amount_to_precision(
+                        symbol, Decimal(str(remaining_amount))
+                    )
+                    if float(next_precise_amount) > remaining_amount + max(
+                        1e-12,
+                        requested_amount * 1e-8,
+                    ):
+                        self.logger.warning(
+                            f"Remaining {remaining_amount} for {symbol} is below "
+                            "exchange minimum/step; returning partial fill for rollback"
                         )
+                        return aggregate
+                    precise_amount = next_precise_amount
 
                 except BinanceAPIException as e:
                     self.logger.error(f"Order attempt failed: {e}")
@@ -1572,12 +1677,26 @@ class BinanceClient:
                     f"Limit order not filled after {max_retries + 1} attempts, "
                     f"falling back to market order"
                 )
-                return await self.open_position(
+                market_order = await self.open_position(
                     symbol,
                     side,
                     remaining_amount,
                     leverage,
                     position_side,
+                    f"{client_order_id[:34]}-m" if client_order_id else None,
+                )
+                filled_orders.append(market_order)
+                return self._combine_fill_orders(
+                    symbol,
+                    filled_orders,
+                    requested_amount,
+                )
+
+            if filled_orders:
+                return self._combine_fill_orders(
+                    symbol,
+                    filled_orders,
+                    requested_amount,
                 )
 
             raise TimeoutError(
@@ -1592,6 +1711,12 @@ class BinanceClient:
                 except Exception:
                     pass
             self.logger.error(f"Failed to open limit position for {symbol}: {e}")
+            if filled_orders:
+                return self._combine_fill_orders(
+                    symbol,
+                    filled_orders,
+                    requested_amount,
+                )
             raise
 
     async def close_position(
@@ -1600,6 +1725,7 @@ class BinanceClient:
         side: TradeSide,
         amount: float,
         position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
+        client_order_id: Optional[str] = None,
     ) -> Order:
         """
         Close a position.
@@ -1634,12 +1760,22 @@ class BinanceClient:
                 f"(positionSide={position_side})"
             )
 
-            response = await client.futures_create_order(
+            order_params = dict(
                 symbol=binance_symbol,
                 side=side_upper,
                 type="MARKET",
                 quantity=float(precise_amount),
                 positionSide=position_side,
+                newOrderRespType="RESULT",
+            )
+            if client_order_id:
+                order_params["newClientOrderId"] = client_order_id[:36]
+            effective_client_id = order_params.get("newClientOrderId")
+            response = await self._create_futures_order_with_recovery(
+                client,
+                binance_symbol=binance_symbol,
+                params=order_params,
+                client_order_id=effective_client_id,
             )
 
             return self._map_order_response(symbol, response)
@@ -1660,10 +1796,7 @@ class BinanceClient:
         position_side: Optional[Literal["LONG", "SHORT", "BOTH"]] = None,
     ) -> Order:
         """
-        Close position with limit order, ensuring execution (like market but cheaper).
-
-        Uses aggressive limit pricing to get maker fees while guaranteeing fill.
-        For stat-arb where every basis point matters.
+        Close with bounded aggressive IOC orders, then optionally use market.
 
         :param symbol: Trading symbol
         :param side: Order side (buy/sell) - the side that CLOSES the position
@@ -1746,7 +1879,8 @@ class BinanceClient:
                         quantity=float(precise_amount),
                         price=float(precise_price),
                         positionSide=position_side,
-                        timeInForce="GTC",
+                        timeInForce="IOC",
+                        newOrderRespType="RESULT",
                     )
 
                     order = self._map_order_response(symbol, response)
@@ -1756,6 +1890,9 @@ class BinanceClient:
                         f"Placed close limit order {order.id} at {precise_price} "
                         f"(attempt {attempt + 1}/{max_retries + 1})"
                     )
+
+                    if order.status == "closed":
+                        return order
 
                     await asyncio.sleep(retry_interval)
 
@@ -1816,6 +1953,7 @@ class BinanceClient:
         symbol: str,
         amount: Optional[float] = None,
         close_side: Optional[TradeSide] = None,
+        client_order_id: Optional[str] = None,
     ) -> Order:
         """
         Close position immediately.
@@ -1844,7 +1982,11 @@ class BinanceClient:
                 "LONG" if position.side == "long" else "SHORT"
             )
             order = await self.close_position(
-                symbol, determined_side, position.contracts, position_side
+                symbol,
+                determined_side,
+                position.contracts,
+                position_side,
+                client_order_id,
             )
             await self.cancel_all_orders(symbol)
         else:
@@ -1867,7 +2009,11 @@ class BinanceClient:
                 position_side = "SHORT" if side_upper == "BUY" else "LONG"
 
             order = await self.close_position(
-                symbol, determined_side, amount, position_side
+                symbol,
+                determined_side,
+                amount,
+                position_side,
+                client_order_id,
             )
             # Don't cancel all orders on partial close
 
@@ -1898,7 +2044,7 @@ class BinanceClient:
                     "total_positions": 0,
                     "closed_successfully": 0,
                     "failed": 0,
-                    "results": []
+                    "results": [],
                 }
 
             self.logger.info(f"Closing {len(positions)} open positions...")
@@ -1918,14 +2064,16 @@ class BinanceClient:
                     # Use flash_close_position to close entire position
                     order = await self.flash_close_position(position.symbol)
 
-                    results.append({
-                        "symbol": position.symbol,
-                        "side": position.side,
-                        "contracts": position.contracts,
-                        "status": "success",
-                        "order_id": order.id,
-                        "error": None
-                    })
+                    results.append(
+                        {
+                            "symbol": position.symbol,
+                            "side": position.side,
+                            "contracts": position.contracts,
+                            "status": "success",
+                            "order_id": order.id,
+                            "error": None,
+                        }
+                    )
                     closed_count += 1
 
                     self.logger.info(
@@ -1934,14 +2082,16 @@ class BinanceClient:
 
                 except Exception as e:
                     error_msg = str(e)
-                    results.append({
-                        "symbol": position.symbol,
-                        "side": position.side,
-                        "contracts": position.contracts,
-                        "status": "failed",
-                        "order_id": None,
-                        "error": error_msg
-                    })
+                    results.append(
+                        {
+                            "symbol": position.symbol,
+                            "side": position.side,
+                            "contracts": position.contracts,
+                            "status": "failed",
+                            "order_id": None,
+                            "error": error_msg,
+                        }
+                    )
                     failed_count += 1
 
                     self.logger.error(
@@ -1961,7 +2111,7 @@ class BinanceClient:
                 "total_positions": len(positions),
                 "closed_successfully": closed_count,
                 "failed": failed_count,
-                "results": results
+                "results": results,
             }
 
         except Exception as e:
@@ -2201,7 +2351,11 @@ class BinanceClient:
             symbol=symbol,
             side=response.get("side", "").lower(),
             type=response.get("type", "").lower(),
-            price=float(response.get("price", 0) or response.get("stopPrice", 0)),
+            price=float(
+                response.get("avgPrice", 0)
+                or response.get("price", 0)
+                or response.get("stopPrice", 0)
+            ),
             amount=float(response.get("origQty", 0)),
             filled=float(response.get("executedQty", 0)),
             remaining=float(response.get("origQty", 0))
@@ -2210,6 +2364,52 @@ class BinanceClient:
             timestamp=int(response.get("updateTime", 0) or response.get("time", 0)),
             close_position=bool(response.get("closePosition", False)),
             reduce_only=bool(response.get("reduceOnly", False)),
+        )
+
+    @staticmethod
+    def _combine_fill_orders(
+        symbol: str,
+        orders: List[Order],
+        requested_amount: float,
+    ) -> Order:
+        """Aggregate fills from multiple IOC/market child orders."""
+        if not orders:
+            return Order(
+                id="",
+                client_order_id="",
+                symbol=symbol,
+                side="",
+                type="limit",
+                price=0.0,
+                amount=requested_amount,
+                filled=0.0,
+                remaining=requested_amount,
+                status="open",
+                timestamp=0,
+            )
+
+        total_filled = sum(max(0.0, order.filled) for order in orders)
+        remaining = max(0.0, requested_amount - total_filled)
+        tolerance = max(1e-12, requested_amount * 1e-8)
+        weighted_notional = sum(
+            max(0.0, order.filled) * max(0.0, order.price) for order in orders
+        )
+        average_price = weighted_notional / total_filled if total_filled > 0 else 0.0
+        latest = orders[-1]
+        return Order(
+            id=",".join(order.id for order in orders if order.id),
+            client_order_id=latest.client_order_id,
+            symbol=symbol,
+            side=latest.side,
+            type=latest.type,
+            price=average_price,
+            amount=requested_amount,
+            filled=total_filled,
+            remaining=remaining,
+            status="closed" if remaining <= tolerance else "open",
+            timestamp=max((order.timestamp for order in orders), default=0),
+            close_position=latest.close_position,
+            reduce_only=latest.reduce_only,
         )
 
     # =========================================================================

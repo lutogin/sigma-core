@@ -40,13 +40,33 @@ from src.domain.screener.adf_filter import ADFFilterService
 from src.domain.screener.halflife_filter import HalfLifeFilterService
 from src.domain.screener.volatility_filter import VolatilityFilterService
 from src.domain.screener.z_score import ZScoreService, ZScoreResult
+from src.domain.screener.statistics import benjamini_hochberg_passes
 from src.infra.container import Container
 from src.domain.utils import get_timeframe_minutes
-from backtest_shared import (
-    build_backtest_config_kwargs,
-    build_backtest_services,
-    compute_trailing_pullback_calibration,
-)
+
+try:
+    from backtests.backtest_shared import (
+        build_backtest_config_kwargs,
+        build_backtest_services,
+        compute_trailing_pullback_calibration,
+    )
+    from backtests.execution_model import (
+        ExecutionAssumptions,
+        calculate_spread_pnl,
+        entry_fill_prices,
+    )
+except ImportError:
+    # Support direct execution: python backtests/run_backtest.py
+    from backtest_shared import (
+        build_backtest_config_kwargs,
+        build_backtest_services,
+        compute_trailing_pullback_calibration,
+    )
+    from execution_model import (
+        ExecutionAssumptions,
+        calculate_spread_pnl,
+        entry_fill_prices,
+    )
 
 # =============================================================================
 # OHLC Pseudo-Tick Generator (for realistic 1m simulation)
@@ -75,10 +95,10 @@ def iter_pseudo_ticks(df_1m: pd.DataFrame):
     """
     # Intra-minute offsets to maintain temporal order
     offsets = [
-        timedelta(seconds=0),  # open
-        timedelta(seconds=15),  # first extreme
-        timedelta(seconds=30),  # second extreme
-        timedelta(seconds=45),  # close
+        timedelta(seconds=1),  # first executable observation after minute open
+        timedelta(seconds=20),  # heuristic first extreme
+        timedelta(seconds=40),  # heuristic second extreme
+        timedelta(seconds=59),  # close
     ]
 
     for ts, row in df_1m.iterrows():
@@ -99,6 +119,39 @@ def iter_pseudo_ticks(df_1m: pd.DataFrame):
             yield (ts + off, px)
 
 
+def iter_minute_closes(df_1m: pd.DataFrame):
+    """Yield observations when a 1m close actually becomes knowable.
+
+    Binance indexes a candle by open time. Its close cannot be used until one
+    minute later.
+    """
+    for ts, row in df_1m.iterrows():
+        yield ts + timedelta(minutes=1), float(row["close"])
+
+
+def iter_synchronized_minute_prices(
+    coin_1m: pd.DataFrame,
+    primary_1m: pd.DataFrame,
+    *,
+    use_ohlc_pseudo_ticks: bool,
+):
+    """Yield synchronized historical observations for a two-leg spread."""
+    common_minutes = coin_1m.index.intersection(primary_1m.index)
+    if use_ohlc_pseudo_ticks:
+        coin_ticks = dict(iter_pseudo_ticks(coin_1m.loc[common_minutes]))
+        primary_ticks = dict(iter_pseudo_ticks(primary_1m.loc[common_minutes]))
+        for ts in sorted(coin_ticks.keys() & primary_ticks.keys()):
+            yield ts, coin_ticks[ts], primary_ticks[ts]
+        return
+
+    for minute_open in common_minutes:
+        yield (
+            minute_open + timedelta(minutes=1),
+            float(coin_1m.loc[minute_open, "close"]),
+            float(primary_1m.loc[minute_open, "close"]),
+        )
+
+
 # =============================================================================
 # Historical Funding Rate Cache
 # =============================================================================
@@ -114,9 +167,10 @@ class HistoricalFundingCache:
 
     def __init__(self, logger):
         self._logger = logger
-        # symbol -> list of (funding_time, rate_8h_normalized)
+        # Raw exchange events: symbol -> [(funding_time, funding_rate)].
+        # Never normalize event rates before PnL accounting.
         self._cache: Dict[str, List[Tuple[datetime, float]]] = {}
-        # symbol -> funding_interval_hours (for normalization)
+        # The interval is only used to compare current funding across symbols.
         self._intervals: Dict[str, int] = {}
 
     async def load(
@@ -139,6 +193,7 @@ class HistoricalFundingCache:
             f"Loading historical funding rates for {len(symbols)} symbols..."
         )
 
+        failures = []
         for symbol in symbols:
             try:
                 rates = await exchange_client.get_historical_funding_rates(
@@ -151,17 +206,11 @@ class HistoricalFundingCache:
                     # Store interval for this symbol
                     self._intervals[symbol] = rates[0].funding_interval_hours
 
-                    # Normalize all rates to 8h and store
-                    normalized = []
-                    for r in rates:
-                        rate_8h = self._normalize_to_8h(
-                            r.funding_rate, r.funding_interval_hours
-                        )
-                        normalized.append((r.funding_time, rate_8h))
-
-                    # Sort by time
-                    normalized.sort(key=lambda x: x[0])
-                    self._cache[symbol] = normalized
+                    raw_events = [
+                        (r.funding_time, float(r.funding_rate)) for r in rates
+                    ]
+                    raw_events.sort(key=lambda x: x[0])
+                    self._cache[symbol] = raw_events
 
                     self._logger.debug(
                         f"  {symbol}: {len(rates)} funding records, "
@@ -177,9 +226,14 @@ class HistoricalFundingCache:
             except Exception as e:
                 self._logger.warning(f"  {symbol}: Failed to load funding - {e}")
                 self._cache[symbol] = []
+                failures.append(symbol)
 
         total_records = sum(len(v) for v in self._cache.values())
         self._logger.info(f"Loaded {total_records} total funding records")
+        if failures:
+            raise RuntimeError(
+                "Historical funding load failed for: " + ", ".join(failures)
+            )
 
     def _normalize_to_8h(self, rate: float, interval_hours: int) -> float:
         """Normalize funding rate to 8-hour equivalent."""
@@ -187,7 +241,13 @@ class HistoricalFundingCache:
             return rate
         return rate * (8 / interval_hours)
 
-    def get_rate_at(self, symbol: str, timestamp: datetime) -> Optional[float]:
+    def get_rate_at(
+        self,
+        symbol: str,
+        timestamp: datetime,
+        *,
+        normalize_to_8h: bool = True,
+    ) -> Optional[float]:
         """
         Get the funding rate (normalized to 8h) at a specific timestamp.
 
@@ -198,7 +258,8 @@ class HistoricalFundingCache:
             timestamp: Timestamp to get rate for
 
         Returns:
-            Funding rate normalized to 8h, or None if not found
+            Latest raw funding rate, optionally normalized to 8h for comparing
+            entry costs across symbols.
         """
         if symbol not in self._cache or not self._cache[symbol]:
             return None
@@ -217,7 +278,12 @@ class HistoricalFundingCache:
             else:
                 right = mid - 1
 
-        return result
+        if result is None or not normalize_to_8h:
+            return result
+        return self._normalize_to_8h(
+            result,
+            self._intervals.get(symbol, 8),
+        )
 
     def calculate_net_funding(
         self,
@@ -265,8 +331,10 @@ class HistoricalFundingCache:
         """
         Calculate total funding PnL for a position over its lifetime.
 
-        Funding is paid/received at each funding interval (8h normalized).
-        We sum up all funding payments between entry and exit.
+        Funding is paid/received at each symbol's actual funding event using
+        the raw event rate. ``leverage`` is accepted for backwards-compatible
+        callers but intentionally does not affect PnL because sizes are
+        exchange notionals, not margin amounts.
 
         Args:
             coin_symbol: Coin symbol
@@ -284,49 +352,30 @@ class HistoricalFundingCache:
         if coin_symbol not in self._cache or primary_symbol not in self._cache:
             return 0.0
 
-        total_funding_pnl = 0.0
+        coin_direction = 1.0 if spread_side == "long" else -1.0
+        primary_direction = -coin_direction
 
-        # Get all funding events for COIN between entry and exit
-        coin_rates = self._cache.get(coin_symbol, [])
-        primary_rates = self._cache.get(primary_symbol, [])
+        def leg_funding(
+            events: List[Tuple[datetime, float]],
+            notional: float,
+            direction: float,
+        ) -> float:
+            total = 0.0
+            for event_time, raw_rate in events:
+                if entry_time < event_time <= exit_time:
+                    # Positive funding: longs pay, shorts receive.
+                    total += -direction * notional * raw_rate
+            return total
 
-        # Build a set of funding timestamps that occurred during position
-        funding_times = set()
-
-        for ts, _ in coin_rates:
-            if entry_time <= ts < exit_time:
-                funding_times.add(ts)
-
-        for ts, _ in primary_rates:
-            if entry_time <= ts < exit_time:
-                funding_times.add(ts)
-
-        # For each funding event, calculate the PnL
-        for funding_ts in sorted(funding_times):
-            coin_rate = self.get_rate_at(coin_symbol, funding_ts)
-            primary_rate = self.get_rate_at(primary_symbol, funding_ts)
-
-            if coin_rate is None or primary_rate is None:
-                continue
-
-            # Calculate funding for each leg
-            # Funding PnL = position_size * funding_rate * leverage
-            # Sign depends on position direction
-
-            if spread_side == "long":
-                # Long COIN: pay if rate > 0, receive if rate < 0
-                coin_funding = -coin_size_usdt * coin_rate * leverage
-                # Short PRIMARY: receive if rate > 0, pay if rate < 0
-                primary_funding = primary_size_usdt * primary_rate * leverage
-            else:
-                # Short COIN: receive if rate > 0, pay if rate < 0
-                coin_funding = coin_size_usdt * coin_rate * leverage
-                # Long PRIMARY: pay if rate > 0, receive if rate < 0
-                primary_funding = -primary_size_usdt * primary_rate * leverage
-
-            total_funding_pnl += coin_funding + primary_funding
-
-        return total_funding_pnl
+        return leg_funding(
+            self._cache.get(coin_symbol, []),
+            coin_size_usdt,
+            coin_direction,
+        ) + leg_funding(
+            self._cache.get(primary_symbol, []),
+            primary_size_usdt,
+            primary_direction,
+        )
 
 
 # =============================================================================
@@ -340,11 +389,13 @@ class BacktestConfig:
 
     # Capital
     initial_balance: float = 40_000.0  # Starting capital in USDT
-    position_size_pct: float = 0.35  # 3% of capital per spread
+    position_size_pct: float = 0.05  # Fallback COIN-leg notional as equity share
     # Base size for COIN leg (matches live TradingService when > 0).
     # If <= 0, backtest falls back to percentage mode via position_size_pct.
     position_size_usdt: float = 1000.0
-    max_spreads: int = 8  # Maximum concurrent spread positions
+    max_spreads: int = 3  # Maximum concurrent spread positions
+    max_coin_notional_pct: float = 0.10
+    max_margin_utilization: float = 0.50
 
     # Strategy thresholds (from settings)
     z_entry_threshold: float = 2.1  # |Z| >= this to enter
@@ -362,10 +413,15 @@ class BacktestConfig:
     # Fees
     maker_fee: float = 0.0002  # 0.02% maker fee
     taker_fee: float = 0.0004  # 0.04% taker fee
-    use_limit_orders: bool = True  # Use maker fees (limit orders)
+    # Live orders cross at ask/bid, so taker is the honest default even though
+    # the exchange order type is LIMIT.
+    use_limit_orders: bool = False
+    # OHLCV has no order book. Estimate missing half-spread and adverse fill.
+    half_spread_bps: float = 2.0
+    slippage_bps: float = 1.0
 
     # Risk
-    leverage: int = 10  # Leverage multiplier
+    leverage: int = 5  # Affects margin/capacity only, never notional PnL
 
     # Cooldown after adverse exits (SL, CORRELATION_DROP, TIMEOUT, HURST_TRENDING)
     # 2 bars = 30 minutes for 15m timeframe
@@ -435,7 +491,7 @@ class BacktestConfig:
     )
 
     use_adf_filter: bool = True  # Enable ADF filter
-    adf_pvalue_threshold: float = 0.21  # Maximum ADF p-value to enter
+    adf_pvalue_threshold: float = 0.05  # Maximum ADF p-value to enter
     adf_lookback_candles: int = (
         300  # Number of candles to look back for ADF calculation
     )
@@ -444,9 +500,9 @@ class BacktestConfig:
     # Size = BaseSize * (TargetHalfLife / CurrentHalfLife)
     # Faster mean reversion -> larger position, slower -> smaller position
     use_dynamic_position_size: bool = True  # Enable dynamic position sizing
-    target_halflife_bars: float = 16.0  # Target half-life in bars
+    target_halflife_bars: float = 12.0  # Target half-life in bars
     halflife_multiplier_min: float = 0.5  # Minimum position size multiplier
-    halflife_multiplier_max: float = 2.1  # Maximum position size multiplier
+    halflife_multiplier_max: float = 1.25  # Avoid levering noisy fast-HL estimates
 
     # Live exit simulation (ExitObserver emulation on 1m candles)
     # When True: TP/SL checked on 1m candles with frozen parameters (like production)
@@ -459,6 +515,10 @@ class BacktestConfig:
     # This keeps live-like logic but avoids preloading large 1m datasets for
     # symbols that never generate signals.
     lazy_load_minute_data: bool = True
+    # OHLC extremes do not reveal their cross-asset ordering. Close-only is the
+    # reproducible default; heuristic O/H/L/C pseudo-ticks remain available for
+    # sensitivity analysis only.
+    use_ohlc_pseudo_ticks: bool = False
 
     # Trailing Stop Loss (smart SL that follows favorable moves)
     # When Z-score moves in our favor, we tighten the SL to lock in gains
@@ -470,8 +530,27 @@ class BacktestConfig:
     # z_extreme_level: Max Z for watch (cancel if exceeded), allows entry above z_sl
     # Extended SL = abs(entry_z) + z_sl_extreme_offset
     # This prevents immediate SL hit for positions entered after extreme pullback
-    z_extreme_level: float = 6.0  # Max Z before watch is cancelled (SL_HIT)
-    z_sl_extreme_offset: float = 0.4  # Offset for extreme entries
+    z_extreme_level: float = 5.0  # Max Z before watch is cancelled (SL_HIT)
+    z_sl_extreme_offset: float = 0.5  # Offset for extreme entries
+
+    def __post_init__(self) -> None:
+        if self.initial_balance <= 0:
+            raise ValueError("initial_balance must be positive")
+        if self.position_size_usdt < 0 or self.position_size_pct < 0:
+            raise ValueError("position size must be non-negative")
+        if self.max_spreads <= 0:
+            raise ValueError("max_spreads must be positive")
+        if self.leverage <= 0:
+            raise ValueError("leverage must be positive")
+        if not 0 < self.max_coin_notional_pct <= 1:
+            raise ValueError("max_coin_notional_pct must be in (0, 1]")
+        if not 0 < self.max_margin_utilization <= 1:
+            raise ValueError("max_margin_utilization must be in (0, 1]")
+        ExecutionAssumptions(
+            fee_rate=self.maker_fee if self.use_limit_orders else self.taker_fee,
+            half_spread_bps=self.half_spread_bps,
+            slippage_bps=self.slippage_bps,
+        )
 
 
 @dataclass
@@ -563,6 +642,10 @@ class Trade:
     exit_reason: str  # "TP", "SL", "CORRELATION_DROP"
     duration_hours: float
     funding_pnl: float = 0.0  # PnL from funding payments (positive = received)
+    fees: float = 0.0
+    gross_notional: float = 0.0
+    margin_used: float = 0.0
+    return_on_margin_pct: float = 0.0
 
 
 @dataclass
@@ -744,7 +827,10 @@ class StatArbBacktest:
         if self.config.enable_stability_filter and self._stability_windows_days:
             warmup_days = max(warmup_days, max(self._stability_windows_days) + 2)
         if self.config.enable_beta_drift_guard:
-            warmup_days = max(warmup_days, self._beta_drift_long_days + 2)
+            warmup_days = max(
+                warmup_days,
+                self.lookback_window_days + self._beta_drift_long_days + 2,
+            )
         data_start = start_date - timedelta(days=warmup_days)
 
         print(
@@ -763,23 +849,32 @@ class StatArbBacktest:
 
         if not raw_data or self.primary_pair not in raw_data:
             raise ValueError("Failed to load data for primary pair")
+        missing_symbols = sorted(set(all_symbols) - set(raw_data))
+        if missing_symbols:
+            raise ValueError(
+                "Incomplete OHLCV history for: " + ", ".join(missing_symbols)
+            )
 
         # Align all data to primary pair's index
         aligned_data = self._align_data(raw_data)
 
-        # Get candle timestamps for iteration
+        # Binance indexes every candle by OPEN time. A close-based signal can
+        # only be evaluated at open_time + timeframe.
         primary_df = aligned_data[self.primary_pair]
         all_timestamps = primary_df.index.tolist()
+        bar_delta = timedelta(minutes=self._timeframe_minutes)
 
-        # Find start index (after warmup period)
-        start_idx = None
-        for i, ts in enumerate(all_timestamps):
-            if ts >= start_date:
-                start_idx = i
-                break
-
-        if start_idx is None:
-            raise ValueError(f"No data found after {start_date}")
+        eligible_indices = [
+            i
+            for i, candle_open in enumerate(all_timestamps)
+            if start_date <= candle_open + bar_delta <= end_date
+        ]
+        if not eligible_indices:
+            raise ValueError(
+                f"No closed candles found between {start_date} and {end_date}"
+            )
+        start_idx = eligible_indices[0]
+        end_idx = eligible_indices[-1]
 
         # Calculate minimum candles needed for calculations:
         # - rolling beta needs LOOKBACK_WINDOW candles
@@ -797,17 +892,22 @@ class StatArbBacktest:
                 f"Adjusting start index."
             )
             start_idx = min_candles
+        if start_idx > end_idx:
+            raise ValueError(
+                "Backtest interval has no candles after the required warmup"
+            )
 
         print(
-            f"Backtesting {len(all_timestamps) - start_idx} candles "
-            f"({(len(all_timestamps) - start_idx) / candles_per_day:.1f} days)"
+            f"Backtesting {end_idx - start_idx + 1} closed candles "
+            f"({(end_idx - start_idx + 1) / candles_per_day:.1f} days)"
         )
 
         # Initialize equity tracking
         self.balance = self.config.initial_balance
         self.positions = {}
         self.trades = []
-        self.equity_history = [(all_timestamps[start_idx], self.balance)]
+        first_decision_time = all_timestamps[start_idx] + bar_delta
+        self.equity_history = [(first_decision_time, self.balance)]
         self.symbol_cooldowns = {}  # Reset cooldowns
 
         # Prepare 1m data mode if either trailing-entry or live-exit emulation is enabled.
@@ -834,13 +934,19 @@ class StatArbBacktest:
                 )
 
         # Main backtest loop
-        for i in range(start_idx, len(all_timestamps)):
-            current_time = all_timestamps[i]
+        last_window_data: Dict[str, pd.DataFrame] = {}
+        for i in range(start_idx, end_idx + 1):
+            candle_open = all_timestamps[i]
+            current_time = candle_open + bar_delta
 
-            # Slice data up to current candle (inclusive)
+            # Include the just-closed candle, never anything after decision_time.
             window_data = {
-                symbol: df.iloc[: i + 1] for symbol, df in aligned_data.items()
+                symbol: df.iloc[: i + 1].dropna() for symbol, df in aligned_data.items()
             }
+            window_data = {
+                symbol: df for symbol, df in window_data.items() if not df.empty
+            }
+            last_window_data = window_data
 
             # Run strategy logic
             await self._process_candle(current_time, i, window_data)
@@ -851,7 +957,7 @@ class StatArbBacktest:
 
             # Progress logging every 1000 candles
             if (i - start_idx) % 1000 == 0:
-                progress = (i - start_idx) / (len(all_timestamps) - start_idx) * 100
+                progress = (i - start_idx) / max(1, end_idx - start_idx) * 100
                 print(
                     f"Progress: {progress:.1f}% | "
                     f"Balance: ${self.balance:.2f} | "
@@ -861,7 +967,9 @@ class StatArbBacktest:
 
         # Close any remaining positions at end
         await self._close_all_positions(
-            all_timestamps[-1], aligned_data, "BACKTEST_END"
+            all_timestamps[end_idx] + bar_delta,
+            last_window_data,
+            "BACKTEST_END",
         )
 
         # Calculate results
@@ -870,34 +978,30 @@ class StatArbBacktest:
         return result
 
     def _align_data(self, raw_data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
-        """Align all data to common time index with forward fill."""
-        common_index = raw_data[self.primary_pair].index
+        """Align to the ETH clock without fabricating prices.
 
-        aligned = {}
-        for symbol, df in raw_data.items():
-            if symbol == self.primary_pair:
-                aligned[symbol] = df
-            else:
-                # Reindex to common index and forward fill missing values
-                aligned_df = df.reindex(common_index, method="ffill")
+        Missing/pre-listing bars remain NaN and are removed from each causal
+        window. In particular, never backfill a token's first future price into
+        its pre-listing history.
+        """
+        primary = raw_data[self.primary_pair].sort_index()
+        primary = primary[~primary.index.duplicated(keep="last")]
+        common_index = primary.index
 
-                # Check for NaN values after reindex
-                nan_count = aligned_df["close"].isna().sum()
-                if nan_count > 0:
-                    # Forward fill to handle any remaining NaNs
-                    aligned_df = aligned_df.ffill()
-                    # If still NaN at the start (no data before), backfill from first valid value
-                    aligned_df = aligned_df.bfill()
+        aligned: Dict[str, pd.DataFrame] = {}
+        for symbol, source in raw_data.items():
+            df = source.sort_index()
+            df = df[~df.index.duplicated(keep="last")]
+            aligned_df = df.reindex(common_index)
+            if aligned_df.dropna().empty:
+                print(
+                    f"  ❌ {symbol}: no valid candles on the primary clock - SKIPPING"
+                )
+                continue
+            aligned[symbol] = aligned_df
 
-                    remaining_nan = aligned_df["close"].isna().sum()
-                    if remaining_nan > 0:
-                        print(
-                            f"  ❌ {symbol}: Has {remaining_nan} NaN values after fill - SKIPPING"
-                        )
-                        continue
-
-                aligned[symbol] = aligned_df
-
+        if self.primary_pair not in aligned:
+            raise ValueError("Primary pair has no valid aligned candles")
         return aligned
 
     async def _load_minute_data_for_backtest(
@@ -913,6 +1017,7 @@ class StatArbBacktest:
         than 15m candles, using "frozen" entry parameters.
         """
         self._minute_data_cache = {}
+        failures = []
 
         for i, symbol in enumerate(symbols):
             try:
@@ -931,16 +1036,22 @@ class StatArbBacktest:
                     print(f"    ✓ {len(df)} candles loaded")
                 else:
                     print(f"    ⚠️ No 1m data for {symbol}")
+                    failures.append(symbol)
 
                 # Rate limiting
                 await asyncio.sleep(0.1)
 
             except Exception as e:
                 print(f"    ❌ Failed to load 1m data for {symbol}: {e}")
+                failures.append(symbol)
 
         print(
             f"  Loaded 1m data for {len(self._minute_data_cache)}/{len(symbols)} symbols\n"
         )
+        if failures:
+            raise RuntimeError(
+                "Incomplete 1m history for: " + ", ".join(sorted(set(failures)))
+            )
 
     async def _ensure_minute_data_for_symbol(
         self,
@@ -987,11 +1098,13 @@ class StatArbBacktest:
 
                 print(f"    ⚠️ No 1m data for {symbol}")
                 self._minute_data_failed.add(symbol)
-                return None
+                raise RuntimeError(f"No complete 1m history for {symbol}")
             except Exception as e:
                 print(f"    ❌ Failed to load 1m data for {symbol}: {e}")
                 self._minute_data_failed.add(symbol)
-                return None
+                raise RuntimeError(
+                    f"Failed to load complete 1m history for {symbol}"
+                ) from e
 
     async def _process_candle(
         self,
@@ -1088,12 +1201,12 @@ class StatArbBacktest:
         long_bars = self._beta_drift_long_days * self._bars_per_day
 
         if len(beta_series) < long_bars:
-            return True, None, None, None
+            return False, np.nan, np.nan, np.inf
 
         beta_short = float(beta_series.tail(short_bars).median())
         beta_long = float(beta_series.tail(long_bars).median())
         if not np.isfinite(beta_short) or not np.isfinite(beta_long):
-            return True, beta_short, beta_long, None
+            return False, beta_short, beta_long, np.inf
 
         denom = max(abs(beta_long), 1e-6)
         beta_drift = abs(beta_short - beta_long) / denom
@@ -1109,20 +1222,20 @@ class StatArbBacktest:
         coin_log_prices: pd.Series,
         primary_log_prices: pd.Series,
     ) -> Optional[float]:
-        """Estimate beta on a fixed window using log-return covariance."""
-        returns = pd.concat(
-            [coin_log_prices.diff(), primary_log_prices.diff()],
+        """Estimate the fixed-window log-price OLS hedge coefficient."""
+        levels = pd.concat(
+            [coin_log_prices, primary_log_prices],
             axis=1,
             keys=["coin", "primary"],
         ).dropna()
-        if len(returns) < 30:
+        if len(levels) < 30:
             return None
 
-        var_primary = returns["primary"].var()
+        var_primary = levels["primary"].var()
         if var_primary is None or not np.isfinite(var_primary) or var_primary <= 0:
             return None
 
-        cov = returns["coin"].cov(returns["primary"])
+        cov = levels["coin"].cov(levels["primary"])
         if cov is None or not np.isfinite(cov):
             return None
 
@@ -1154,7 +1267,7 @@ class StatArbBacktest:
             is_entry_candidate = (
                 not np.isnan(z)
                 and abs(z) >= dyn_threshold
-                and abs(z) <= self.config.z_sl_threshold
+                and abs(z) < self.config.z_extreme_level
             )
 
             if not is_entry_candidate:
@@ -1170,11 +1283,20 @@ class StatArbBacktest:
 
             for days in self._stability_windows_days:
                 bars = days * self._bars_per_day
-                if len(primary_df) < bars or len(coin_df) < bars:
+                aligned_close = pd.concat(
+                    [
+                        coin_df["close"].rename("coin"),
+                        primary_df["close"].rename("primary"),
+                    ],
+                    axis=1,
+                    join="inner",
+                ).dropna()
+                if len(aligned_close) < bars:
                     continue
 
-                coin_close = coin_df["close"].tail(bars)
-                primary_close = primary_df["close"].tail(bars)
+                aligned_close = aligned_close.tail(bars)
+                coin_close = aligned_close["coin"]
+                primary_close = aligned_close["primary"]
                 if (coin_close <= 0).any() or (primary_close <= 0).any():
                     continue
 
@@ -1222,12 +1344,11 @@ class StatArbBacktest:
                 if halflife_ok and adf_ok:
                     pass_count += 1
 
-            required = (
-                min(self.config.stability_min_pass_windows, checked)
-                if checked > 0
-                else 0
+            required = min(
+                self.config.stability_min_pass_windows,
+                len(self._stability_windows_days),
             )
-            if required == 0 or pass_count >= required:
+            if checked >= required and pass_count >= required:
                 filtered[symbol] = z_result
 
         return filtered
@@ -1242,14 +1363,16 @@ class StatArbBacktest:
 
         for symbol, result in z_score_results.items():
             corr_ok = result.current_correlation >= self.config.min_correlation
-            beta_ok = self.config.min_beta <= result.current_beta <= self.config.max_beta
+            beta_ok = (
+                self.config.min_beta <= result.current_beta <= self.config.max_beta
+            )
             if not corr_ok or not beta_ok:
                 continue
 
             corr_result = correlation_results.get(symbol)
             if corr_result is not None:
-                beta_stable, beta_short, beta_long, beta_drift = self._evaluate_beta_drift(
-                    corr_result
+                beta_stable, beta_short, beta_long, beta_drift = (
+                    self._evaluate_beta_drift(corr_result)
                 )
                 if not beta_stable:
                     continue
@@ -1724,7 +1847,9 @@ class StatArbBacktest:
                 halflife = self._get_halflife_for_symbol(
                     symbol, window_data, correlation_results
                 )
-                hurst = self._get_hurst_for_symbol(symbol, window_data, correlation_results)
+                hurst = self._get_hurst_for_symbol(
+                    symbol, window_data, correlation_results
+                )
 
                 # 3.1 ADF degradation with confirm scans
                 if self.config.use_adf_filter:
@@ -1755,7 +1880,8 @@ class StatArbBacktest:
                 # 3.4 Correlation drop (hysteresis for open positions)
                 if (
                     exit_reason is None
-                    and z_result.current_correlation < self.config.correlation_exit_threshold
+                    and z_result.current_correlation
+                    < self.config.correlation_exit_threshold
                 ):
                     exit_reason = "CORRELATION_DROP"
 
@@ -1865,13 +1991,13 @@ class StatArbBacktest:
                 bar_start = bar_start.replace(tzinfo=None)
                 bar_end = bar_end.replace(tzinfo=None)
 
-            # Slice 1m data for this bar (use >= to include first candle)
+            # 1m indexes are OPEN times. The current closed 15m bar contains
+            # minute opens in [bar_start, bar_end).
             coin_1m = coin_1m_full[
-                (coin_1m_full.index >= bar_start) & (coin_1m_full.index <= bar_end)
+                (coin_1m_full.index >= bar_start) & (coin_1m_full.index < bar_end)
             ]
             primary_1m = primary_1m_full[
-                (primary_1m_full.index >= bar_start)
-                & (primary_1m_full.index <= bar_end)
+                (primary_1m_full.index >= bar_start) & (primary_1m_full.index < bar_end)
             ]
 
             if coin_1m.empty or primary_1m.empty:
@@ -1964,9 +2090,14 @@ class StatArbBacktest:
         Returns:
             Tuple of (exit_time, exit_reason, exit_z, coin_price, primary_price) or None
         """
-        # Align indices
-        common_index = coin_1m.index.intersection(primary_1m.index)
-        if common_index.empty:
+        observations = list(
+            iter_synchronized_minute_prices(
+                coin_1m,
+                primary_1m,
+                use_ohlc_pseudo_ticks=self.config.use_ohlc_pseudo_ticks,
+            )
+        )
+        if not observations:
             if debug:
                 print(f"    ⚠️ No common index between coin and primary 1m data")
             return None
@@ -1991,7 +2122,7 @@ class StatArbBacktest:
 
         if debug:
             print(
-                f"\n    🔍 Checking {position.symbol} on {len(common_index)} 1m candles"
+                f"\n    🔍 Checking {position.symbol} on {len(observations)} observations"
             )
             print(
                 f"      Entry Z: {position.entry_z_score:.2f}, TP: {dynamic_tp:.2f}, SL: {z_sl:.2f}"
@@ -2003,9 +2134,7 @@ class StatArbBacktest:
                 f"      Bars held: {bars_held}, time_coef: {time_coef if self.config.use_dynamic_tp else 'N/A'}"
             )
 
-        for ts in common_index:
-            coin_price = coin_1m.loc[ts, "close"]
-            primary_price = primary_1m.loc[ts, "close"]
+        for ts, coin_price, primary_price in observations:
 
             # Check TIMEOUT first based on actual timestamp
             # This ensures positions are closed even if TP/SL hasn't triggered
@@ -2129,7 +2258,7 @@ class StatArbBacktest:
 
             # Check if signal is valid entry candidate using dynamic threshold
             # Entry: |Z| >= dynamic_threshold AND |Z| < z_extreme_level
-            # Note: z_extreme_level (6.0) > z_sl (4.0) to allow extreme signals
+            # z_extreme_level > z_sl allows pullback-confirmed extreme signals.
             if abs(z) >= dyn_threshold and abs(z) < self.config.z_extreme_level:
                 side = "short" if z >= dyn_threshold else "long"
                 entry_candidates.append((abs(z), symbol, side, z_result, dyn_threshold))
@@ -2137,40 +2266,72 @@ class StatArbBacktest:
         # Sort candidates by Z-score strength (highest first)
         entry_candidates.sort(key=lambda x: x[0], reverse=True)
 
-        # Open positions for valid candidates up to max_spreads
+        # Run structural tests for the candidate set first. ADF is corrected
+        # across the whole set instead of treating every p-value as an
+        # independent 5% decision.
+        quality_candidates = []
+        adf_pvalues: Dict[str, float] = {}
         for _, symbol, side, z_result, dyn_threshold in entry_candidates:
-            if len(self.positions) >= self.config.max_spreads:
-                break
-
-            # Final filter: Check Hurst exponent (mean-reversion quality)
             if not self._check_hurst_for_symbol(
                 symbol, window_data, correlation_results
             ):
-                continue  # Spread is trending, skip entry
+                continue
 
-            # Additional filter: Check Half-Life (after Hurst passes)
             if not self._check_halflife_for_symbol(
                 symbol, window_data, correlation_results
             ):
-                continue  # Spread reverts too slowly, skip entry
+                continue
 
-            # Additional filter: Check ADF stationarity (after Half-Life passes)
-            if not self._check_adf_for_symbol(symbol, window_data, correlation_results):
-                continue  # Spread is non-stationary, skip entry
+            if self.config.use_adf_filter:
+                pvalue = self._get_adf_for_symbol(
+                    symbol,
+                    window_data,
+                    correlation_results,
+                )
+                if pvalue is None:
+                    continue
+                adf_pvalues[symbol] = pvalue
 
-            # Funding filter: Check if funding cost is acceptable
-            if self.config.use_funding_filter and self.funding_cache is not None:
-                net_funding = self.funding_cache.calculate_net_funding(
-                    coin_symbol=symbol,
-                    primary_symbol=self.primary_pair,
-                    timestamp=current_time,
-                    spread_side=side,
+            quality_candidates.append((symbol, side, z_result, dyn_threshold))
+
+        adf_accepted = (
+            benjamini_hochberg_passes(
+                adf_pvalues,
+                self.config.adf_pvalue_threshold,
+            )
+            if self.config.use_adf_filter
+            else {candidate[0] for candidate in quality_candidates}
+        )
+
+        for symbol, side, z_result, dyn_threshold in quality_candidates:
+            if len(self.positions) >= self.config.max_spreads:
+                break
+            if symbol not in adf_accepted:
+                continue
+
+            # Funding data is part of the entry model. If the filter is
+            # enabled, missing history must not silently behave as zero cost.
+            if self.config.use_funding_filter:
+                net_funding = (
+                    self.funding_cache.calculate_net_funding(
+                        coin_symbol=symbol,
+                        primary_symbol=self.primary_pair,
+                        timestamp=current_time,
+                        spread_side=side,
+                    )
+                    if self.funding_cache is not None
+                    else None
                 )
 
-                if (
-                    net_funding is not None
-                    and net_funding < self.config.max_funding_cost_threshold
-                ):
+                if net_funding is None:
+                    self.funding_blocked_count += 1
+                    print(
+                        f"⛔ FUNDING FILTER: {symbol} ({side.upper()}) blocked | "
+                        "historical funding data unavailable"
+                    )
+                    continue
+
+                if net_funding < self.config.max_funding_cost_threshold:
                     self.funding_blocked_count += 1
                     print(
                         f"⛔ FUNDING FILTER: {symbol} ({side.upper()}) blocked | "
@@ -2217,25 +2378,8 @@ class StatArbBacktest:
         correlation_results: Optional[Dict] = None,
     ) -> None:
         """Start watching a symbol for trailing entry."""
-        # Calculate spread_mean and spread_std using ROLLING calculation
-        # This must match ZScoreService which uses rolling(window).mean()/std()
-        # NOT the static mean/std of the tail!
-        lookback = min(len(z_result.spread_series), 288)  # ~3 days of 15m candles
-
-        # Use ROLLING mean/std at the current point (last value of rolling series)
-        rolling_mean = z_result.spread_series.rolling(window=lookback).mean()
-        rolling_std = z_result.spread_series.rolling(window=lookback).std()
-
-        spread_mean = (
-            float(rolling_mean.iloc[-1]) if len(rolling_mean.dropna()) > 0 else 0.0
-        )
-        spread_std = (
-            float(rolling_std.iloc[-1]) if len(rolling_std.dropna()) > 0 else 1.0
-        )
-
-        # Ensure std is not zero
-        if spread_std == 0 or np.isnan(spread_std):
-            spread_std = 1.0
+        spread_mean = self._get_spread_mean(z_result)
+        spread_std = self._get_spread_std(z_result)
 
         # Calculate halflife for dynamic position sizing if enabled
         halflife = None
@@ -2342,12 +2486,26 @@ class StatArbBacktest:
                     )
 
                     if entry_result is not None:
-                        action, entry_time, entry_z = entry_result
+                        (
+                            action,
+                            entry_time,
+                            entry_z,
+                            coin_reference_price,
+                            primary_reference_price,
+                        ) = entry_result
 
                         if action == "ENTER":
-                            await self._execute_watch_entry(
-                                watch, entry_time, entry_z, current_bar_idx, window_data
+                            entered = await self._execute_watch_entry(
+                                watch,
+                                entry_time,
+                                entry_z,
+                                current_bar_idx,
+                                coin_reference_price,
+                                primary_reference_price,
                             )
+                            if not entered:
+                                watches_to_remove.append((symbol, "NO_MARGIN"))
+                                continue
                             watches_to_remove.append((symbol, None))
                             # Check intraday exit
                             await self._check_intraday_exit_after_entry(
@@ -2390,10 +2548,15 @@ class StatArbBacktest:
 
                 # Check pullback on 15m (ENTRY - first priority)
                 if abs_z <= watch.max_z - current_pullback:
-                    await self._execute_watch_entry(
-                        watch, current_time, live_z, current_bar_idx, window_data
+                    entered = await self._execute_watch_entry(
+                        watch,
+                        current_time,
+                        live_z,
+                        current_bar_idx,
+                        float(coin_price),
+                        float(primary_price),
                     )
-                    watches_to_remove.append((symbol, None))
+                    watches_to_remove.append((symbol, None if entered else "NO_MARGIN"))
                     continue
                 # Update max_z if widening (only upward!)
                 elif abs_z > watch.max_z:
@@ -2511,7 +2674,7 @@ class StatArbBacktest:
             return None
 
         # Filter to requested time range
-        df = df_full[(df_full.index > start_time) & (df_full.index <= end_time)]
+        df = df_full[(df_full.index >= start_time) & (df_full.index < end_time)]
 
         return df if not df.empty else None
 
@@ -2520,7 +2683,7 @@ class StatArbBacktest:
         watch: BacktestWatchCandidate,
         coin_1m: pd.DataFrame,
         primary_1m: pd.DataFrame,
-    ) -> Optional[Tuple[str, datetime, float]]:
+    ) -> Optional[Tuple[str, datetime, float, float, float]]:
         """
         Simulate trailing entry on 1m candles using OHLC pseudo-ticks.
 
@@ -2561,42 +2724,29 @@ class StatArbBacktest:
             minutes=self.config.trailing_timeout_minutes
         )
 
-        # 1) Align by minute timestamps
-        common_minutes = coin_1m.index.intersection(primary_1m.index)
-
-        if len(common_minutes) == 0:
+        observations = list(
+            iter_synchronized_minute_prices(
+                coin_1m,
+                primary_1m,
+                use_ohlc_pseudo_ticks=self.config.use_ohlc_pseudo_ticks,
+            )
+        )
+        if not observations:
             print(f"    ⚠️ {watch.symbol} No 1m candles in common index")
             return None
 
-        coin_slice = coin_1m.loc[common_minutes]
-        primary_slice = primary_1m.loc[common_minutes]
-
-        # 2) Generate pseudo-ticks from OHLC (4 ticks per minute)
-        coin_ticks = list(iter_pseudo_ticks(coin_slice))
-        primary_ticks = list(iter_pseudo_ticks(primary_slice))
-
-        # 3) Build lookup map for primary ticks
-        primary_map = {ts: px for ts, px in primary_ticks}
-
-        # DEBUG: Show tick count and price range
-        if coin_ticks:
-            first_ts, first_px = coin_ticks[0]
-            last_ts, last_px = coin_ticks[-1]
-            first_primary = primary_map.get(first_ts, 0)
-            last_primary = primary_map.get(last_ts, 0)
+        # DEBUG: Show observation count and price range
+        if observations:
+            first_ts, first_px, first_primary = observations[0]
+            last_ts, last_px, last_primary = observations[-1]
             print(
-                f"    🔬 DEBUG {watch.symbol}: {len(coin_ticks)} pseudo-ticks ({len(common_minutes)} minutes) "
+                f"    🔬 DEBUG {watch.symbol}: {len(observations)} observations "
                 f"| coin: {first_px:.4f} → {last_px:.4f} "
                 f"| ETH: {first_primary:.2f} → {last_primary:.2f} "
                 f"| β={watch.beta:.4f} | std={watch.spread_std:.6f}"
             )
 
-        # 4) Iterate through pseudo-ticks
-        for ts, coin_price in coin_ticks:
-            primary_price = primary_map.get(ts)
-            if primary_price is None:
-                continue
-
+        for ts, coin_price, primary_price in observations:
             # Calculate live Z-score with FROZEN parameters
             live_z = self._calculate_live_z(
                 coin_price,
@@ -2617,24 +2767,24 @@ class StatArbBacktest:
             if abs_z <= max_z - current_pullback:
                 # Update watch.max_z before returning so logs show correct peak
                 watch.max_z = max_z
-                return ("ENTER", ts, live_z)
+                return ("ENTER", ts, live_z, coin_price, primary_price)
 
             # 2. Check timeout (like production - on each tick)
             # Use minute timestamp (floor to minute) for timeout comparison
             minute_ts = ts.replace(second=0, microsecond=0)
             if minute_ts >= timeout_threshold:
-                return ("TIMEOUT", ts, live_z)
+                return ("TIMEOUT", ts, live_z, coin_price, primary_price)
 
             # 3. Check false alarm with HYSTERESIS
             # Only cancel if Z dropped SIGNIFICANTLY below threshold
             if abs_z < false_alarm_level:
-                return ("FALSE_ALARM", ts, live_z)
+                return ("FALSE_ALARM", ts, live_z, coin_price, primary_price)
 
             # 4. Check SL hit - Z exceeded extreme level (not z_sl!)
-            # We allow signals above z_sl (4.0) up to z_extreme_level (6.0)
+            # We allow signals above z_sl up to z_extreme_level.
             # Only cancel if Z exceeds the extreme level
             if abs_z >= self.config.z_extreme_level:
-                return ("SL_HIT", ts, live_z)
+                return ("SL_HIT", ts, live_z, coin_price, primary_price)
 
             # 5. Update max_z if still widening
             if abs_z > max_z:
@@ -2671,7 +2821,7 @@ class StatArbBacktest:
         pullback_type = "extreme" if max_z > z_sl else "normal"
 
         print(
-            f"    📊 {watch.symbol} 1m: {len(common_minutes)} min ({len(coin_ticks)} ticks) | "
+            f"    📊 {watch.symbol} 1m: {len(observations)} observations | "
             f"peak={max_z:.2f} | min_after_peak={min_str} | "
             f"entry_target={entry_target:.2f} ({pullback_type}) | gap={gap_str}"
         )
@@ -2723,6 +2873,19 @@ class StatArbBacktest:
         current_spread = math.log(coin_price) - beta * math.log(primary_price)
         return (current_spread - spread_mean) / spread_std
 
+    def _execution_assumptions(self) -> ExecutionAssumptions:
+        """Return the cost model used by every entry, exit and equity mark."""
+        fee_rate = (
+            self.config.maker_fee
+            if self.config.use_limit_orders
+            else self.config.taker_fee
+        )
+        return ExecutionAssumptions(
+            fee_rate=fee_rate,
+            half_spread_bps=self.config.half_spread_bps,
+            slippage_bps=self.config.slippage_bps,
+        )
+
     def _get_base_position_size(self) -> float:
         """
         Get base COIN-leg size in USDT before Half-Life multiplier.
@@ -2732,8 +2895,27 @@ class StatArbBacktest:
         2. Percentage mode: balance * position_size_pct
         """
         if self.config.position_size_usdt > 0:
-            return self.config.position_size_usdt
-        return self.balance * self.config.position_size_pct
+            requested = self.config.position_size_usdt
+        else:
+            requested = self.balance * self.config.position_size_pct
+        risk_cap = max(0.0, self.balance) * self.config.max_coin_notional_pct
+        return min(requested, risk_cap)
+
+    def _used_margin(self) -> float:
+        return sum(
+            (position.coin_size + position.primary_size) / max(1, self.config.leverage)
+            for position in self.positions.values()
+        )
+
+    def _has_margin_capacity(
+        self,
+        *,
+        coin_notional: float,
+        primary_notional: float,
+    ) -> bool:
+        required = (coin_notional + primary_notional) / max(1, self.config.leverage)
+        capacity = max(0.0, self.balance) * self.config.max_margin_utilization
+        return self._used_margin() + required <= capacity
 
     async def _execute_watch_entry(
         self,
@@ -2741,14 +2923,18 @@ class StatArbBacktest:
         entry_time: datetime,
         entry_z: float,
         current_bar_idx: int,
-        window_data: Dict[str, pd.DataFrame],
-    ) -> None:
+        coin_reference_price: float,
+        primary_reference_price: float,
+    ) -> bool:
         """Execute entry after trailing pullback confirmation."""
         symbol = watch.symbol
 
-        # Get current prices from window_data (15m)
-        coin_price = window_data[symbol]["close"].iloc[-1]
-        primary_price = window_data[self.primary_pair]["close"].iloc[-1]
+        coin_price, primary_price = entry_fill_prices(
+            spread_side=watch.side,
+            coin_reference_price=coin_reference_price,
+            primary_reference_price=primary_reference_price,
+            assumptions=self._execution_assumptions(),
+        )
 
         # Calculate base position size
         base_position_size = self._get_base_position_size()
@@ -2761,6 +2947,12 @@ class StatArbBacktest:
         beta = abs(watch.beta)
         coin_size = position_size
         primary_size = position_size * beta
+        if not self._has_margin_capacity(
+            coin_notional=coin_size,
+            primary_notional=primary_size,
+        ):
+            print(f"⛔ WATCH ENTRY {symbol} skipped: portfolio margin cap")
+            return False
 
         # Calculate SL threshold (may be extended for extreme entries)
         # If entry Z exceeds base SL threshold, use extended SL: entry_z + offset
@@ -2792,7 +2984,10 @@ class StatArbBacktest:
             # Frozen parameters from watch for ExitObserver
             spread_mean=watch.spread_mean,
             spread_std=watch.spread_std,
-            z_tp_threshold=self.config.z_tp_threshold,
+            z_tp_threshold=max(
+                self.config.z_tp_threshold,
+                entry_abs_z * 0.1,
+            ),
             z_sl_threshold=calculated_sl_threshold,
             initial_sl_threshold=calculated_sl_threshold,
             min_z_reached=entry_abs_z,  # Start from entry Z
@@ -2811,6 +3006,7 @@ class StatArbBacktest:
             f"β={beta:.3f}{multiplier_str}"
         )
         self._print_portfolio_state()
+        return True
 
     async def _check_intraday_exit_after_entry(
         self,
@@ -2838,16 +3034,28 @@ class StatArbBacktest:
         if position is None:
             return
 
-        # Get remaining 1m candles after entry
-        remaining_coin = coin_1m.loc[coin_1m.index > entry_time]
-        remaining_primary = primary_1m.loc[primary_1m.index > entry_time]
+        # A minute candle is usable only at open_time + 1m.
+        coin_close_times = coin_1m.index + timedelta(minutes=1)
+        primary_close_times = primary_1m.index + timedelta(minutes=1)
+        remaining_coin = coin_1m.loc[
+            (coin_close_times > entry_time) & (coin_close_times <= candle_end_time)
+        ]
+        remaining_primary = primary_1m.loc[
+            (primary_close_times > entry_time)
+            & (primary_close_times <= candle_end_time)
+        ]
 
         if remaining_coin.empty or remaining_primary.empty:
             return
 
-        # Align indices
-        common_index = remaining_coin.index.intersection(remaining_primary.index)
-        if common_index.empty:
+        observations = list(
+            iter_synchronized_minute_prices(
+                remaining_coin,
+                remaining_primary,
+                use_ohlc_pseudo_ticks=self.config.use_ohlc_pseudo_ticks,
+            )
+        )
+        if not observations:
             return
 
         # Calculate dynamic TP threshold (bars_held = 0 for same-candle exit)
@@ -2859,9 +3067,7 @@ class StatArbBacktest:
 
         z_sl = position.z_sl_threshold
 
-        for ts in common_index:
-            coin_price = remaining_coin.loc[ts, "close"]
-            primary_price = remaining_primary.loc[ts, "close"]
+        for ts, coin_price, primary_price in observations:
 
             # Calculate live Z-score using FROZEN parameters from position
             live_z = self._calculate_live_z(
@@ -2927,30 +3133,16 @@ class StatArbBacktest:
         self._adf_violation_counts.pop(symbol, None)
         self._halflife_violation_counts.pop(symbol, None)
 
-        # Calculate PnL for each leg
-        coin_pct_change = (
-            coin_price - position.coin_entry_price
-        ) / position.coin_entry_price
-        primary_pct_change = (
-            primary_price - position.primary_entry_price
-        ) / position.primary_entry_price
-
-        coin_pnl = position.coin_size * coin_pct_change * self.config.leverage
-        primary_pnl = position.primary_size * primary_pct_change * self.config.leverage
-
-        # Calculate spread PnL based on position side
-        if position.side == "long":
-            raw_pnl = coin_pnl - primary_pnl
-        else:
-            raw_pnl = -coin_pnl + primary_pnl
-
-        # Subtract fees
-        fee_rate = (
-            self.config.maker_fee
-            if self.config.use_limit_orders
-            else self.config.taker_fee
+        pnl_breakdown = calculate_spread_pnl(
+            spread_side=position.side,
+            coin_entry_fill=position.coin_entry_price,
+            primary_entry_fill=position.primary_entry_price,
+            coin_entry_notional=position.coin_size,
+            primary_entry_notional=position.primary_size,
+            coin_exit_reference=float(coin_price),
+            primary_exit_reference=float(primary_price),
+            assumptions=self._execution_assumptions(),
         )
-        total_fees = (position.coin_size + position.primary_size) * fee_rate * 2
 
         # Calculate funding PnL (usually 0 for intraday exits)
         funding_pnl = 0.0
@@ -2966,10 +3158,12 @@ class StatArbBacktest:
                 leverage=self.config.leverage,
             )
 
-        pnl = raw_pnl - total_fees + funding_pnl
+        pnl = pnl_breakdown.net_pnl + funding_pnl
         self.balance += pnl
 
         duration = (exit_time - position.entry_time).total_seconds() / 3600
+        gross_notional = pnl_breakdown.gross_notional
+        margin_used = gross_notional / max(1, self.config.leverage)
 
         trade = Trade(
             symbol=symbol,
@@ -2979,13 +3173,17 @@ class StatArbBacktest:
             entry_z_score=position.entry_z_score,
             exit_z_score=exit_z,
             entry_price=position.coin_entry_price,
-            exit_price=coin_price,
+            exit_price=pnl_breakdown.coin_exit_fill,
             size_usdt=position.size_usdt,
             pnl=pnl,
-            pnl_pct=pnl / position.size_usdt * 100,
+            pnl_pct=pnl / gross_notional * 100,
             exit_reason=exit_reason,
             duration_hours=duration,
             funding_pnl=funding_pnl,
+            fees=pnl_breakdown.fees,
+            gross_notional=gross_notional,
+            margin_used=margin_used,
+            return_on_margin_pct=pnl / margin_used * 100,
         )
 
         self.trades.append(trade)
@@ -3020,7 +3218,7 @@ class StatArbBacktest:
         window_data: Dict[str, pd.DataFrame],
         dynamic_threshold: float,
         correlation_results: Optional[Dict] = None,
-    ) -> None:
+    ) -> bool:
         """
         Open a spread position (two legs).
 
@@ -3047,9 +3245,18 @@ class StatArbBacktest:
 
         position_size = base_position_size * multiplier
 
-        # Get current prices
-        coin_price = window_data[symbol]["close"].iloc[-1]
-        primary_price = window_data[self.primary_pair]["close"].iloc[-1]
+        # Signal is known at the candle close. Estimate executable bid/ask
+        # fills rather than assuming both legs trade at that close/mid.
+        coin_reference_price = float(window_data[symbol]["close"].iloc[-1])
+        primary_reference_price = float(
+            window_data[self.primary_pair]["close"].iloc[-1]
+        )
+        coin_price, primary_price = entry_fill_prices(
+            spread_side=side,
+            coin_reference_price=coin_reference_price,
+            primary_reference_price=primary_reference_price,
+            assumptions=self._execution_assumptions(),
+        )
 
         # Calculate hedge ratio (beta)
         beta = abs(z_result.current_beta)  # Use absolute value for sizing
@@ -3060,6 +3267,12 @@ class StatArbBacktest:
         # Example: $3000 position, beta=0.8 → COIN=$3000, ETH=$2400
         coin_size = position_size
         primary_size = position_size * beta
+        if not self._has_margin_capacity(
+            coin_notional=coin_size,
+            primary_notional=primary_size,
+        ):
+            print(f"⛔ OPEN {symbol} skipped: portfolio margin cap")
+            return False
 
         # Calculate spread_mean and spread_std for frozen parameters
         spread_mean = self._get_spread_mean(z_result)
@@ -3095,7 +3308,10 @@ class StatArbBacktest:
             # Frozen parameters for ExitObserver
             spread_mean=spread_mean,
             spread_std=spread_std,
-            z_tp_threshold=self.config.z_tp_threshold,
+            z_tp_threshold=max(
+                self.config.z_tp_threshold,
+                entry_abs_z * 0.1,
+            ),
             z_sl_threshold=calculated_sl_threshold,
             initial_sl_threshold=calculated_sl_threshold,
             min_z_reached=entry_abs_z,  # Start from entry Z
@@ -3114,9 +3330,15 @@ class StatArbBacktest:
             f"Hedge: ${primary_size:.2f} @ {primary_price:.4f}"
         )
         self._print_portfolio_state()
+        return True
 
     def _get_spread_mean(self, result: ZScoreResult) -> float:
         """Get the latest spread mean from Z-score result."""
+        if result.spread_mean_series is not None:
+            valid_model_means = result.spread_mean_series.dropna()
+            if not valid_model_means.empty:
+                return float(valid_model_means.iloc[-1])
+
         if result.spread_series is None or result.spread_series.empty:
             return 0.0
 
@@ -3133,6 +3355,11 @@ class StatArbBacktest:
 
     def _get_spread_std(self, result: ZScoreResult) -> float:
         """Get the latest spread std from Z-score result."""
+        if result.spread_std_series is not None:
+            valid_model_stds = result.spread_std_series.replace(0, np.nan).dropna()
+            if not valid_model_stds.empty:
+                return float(valid_model_stds.iloc[-1])
+
         if result.spread_series is None or result.spread_series.empty:
             return 1.0
 
@@ -3172,39 +3399,18 @@ class StatArbBacktest:
         self._adf_violation_counts.pop(symbol, None)
         self._halflife_violation_counts.pop(symbol, None)
 
-        # Get exit prices
-        coin_exit_price = window_data[symbol]["close"].iloc[-1]
-        primary_exit_price = window_data[self.primary_pair]["close"].iloc[-1]
-
-        # Calculate PnL for each leg
-        coin_pct_change = (
-            coin_exit_price - position.coin_entry_price
-        ) / position.coin_entry_price
-        primary_pct_change = (
-            primary_exit_price - position.primary_entry_price
-        ) / position.primary_entry_price
-
-        coin_pnl = position.coin_size * coin_pct_change * self.config.leverage
-        primary_pnl = position.primary_size * primary_pct_change * self.config.leverage
-
-        # Calculate spread PnL based on position side
-        if position.side == "long":
-            # Long spread = Long COIN, Short PRIMARY
-            # Profit when COIN goes up relative to PRIMARY
-            raw_pnl = coin_pnl - primary_pnl
-        else:
-            # Short spread = Short COIN, Long PRIMARY
-            # Profit when PRIMARY goes up relative to COIN
-            raw_pnl = -coin_pnl + primary_pnl
-
-        # Subtract fees (both legs, entry + exit = 4 transactions)
-        fee_rate = (
-            self.config.maker_fee
-            if self.config.use_limit_orders
-            else self.config.taker_fee
+        coin_exit_reference = float(window_data[symbol]["close"].iloc[-1])
+        primary_exit_reference = float(window_data[self.primary_pair]["close"].iloc[-1])
+        pnl_breakdown = calculate_spread_pnl(
+            spread_side=position.side,
+            coin_entry_fill=position.coin_entry_price,
+            primary_entry_fill=position.primary_entry_price,
+            coin_entry_notional=position.coin_size,
+            primary_entry_notional=position.primary_size,
+            coin_exit_reference=coin_exit_reference,
+            primary_exit_reference=primary_exit_reference,
+            assumptions=self._execution_assumptions(),
         )
-        # 4 transactions: open coin, open primary, close coin, close primary
-        total_fees = (position.coin_size + position.primary_size) * fee_rate * 2
 
         # Calculate funding PnL
         funding_pnl = 0.0
@@ -3220,14 +3426,15 @@ class StatArbBacktest:
                 leverage=self.config.leverage,
             )
 
-        # Total PnL = spread PnL - fees + funding PnL
-        pnl = raw_pnl - total_fees + funding_pnl
+        pnl = pnl_breakdown.net_pnl + funding_pnl
 
         # Update balance
         self.balance += pnl
 
         # Record trade
         duration = (current_time - position.entry_time).total_seconds() / 3600
+        gross_notional = pnl_breakdown.gross_notional
+        margin_used = gross_notional / max(1, self.config.leverage)
 
         trade = Trade(
             symbol=symbol,
@@ -3237,13 +3444,17 @@ class StatArbBacktest:
             entry_z_score=position.entry_z_score,
             exit_z_score=np.nan,  # Would need to recalculate
             entry_price=position.coin_entry_price,
-            exit_price=coin_exit_price,
+            exit_price=pnl_breakdown.coin_exit_fill,
             size_usdt=position.size_usdt,
             pnl=pnl,
-            pnl_pct=pnl / position.size_usdt * 100,
+            pnl_pct=pnl / gross_notional * 100,
             exit_reason=exit_reason,
             duration_hours=duration,
             funding_pnl=funding_pnl,
+            fees=pnl_breakdown.fees,
+            gross_notional=gross_notional,
+            margin_used=margin_used,
+            return_on_margin_pct=pnl / margin_used * 100,
         )
 
         self.trades.append(trade)
@@ -3298,30 +3509,21 @@ class StatArbBacktest:
             if symbol not in window_data or self.primary_pair not in window_data:
                 continue
 
-            # Get current prices
-            coin_price = window_data[symbol]["close"].iloc[-1]
-            primary_price = window_data[self.primary_pair]["close"].iloc[-1]
-
-            # Calculate unrealized PnL for each leg
-            coin_pct_change = (
-                coin_price - position.coin_entry_price
-            ) / position.coin_entry_price
-            primary_pct_change = (
-                primary_price - position.primary_entry_price
-            ) / position.primary_entry_price
-
-            coin_pnl = position.coin_size * coin_pct_change * self.config.leverage
-            primary_pnl = (
-                position.primary_size * primary_pct_change * self.config.leverage
+            mark = calculate_spread_pnl(
+                spread_side=position.side,
+                coin_entry_fill=position.coin_entry_price,
+                primary_entry_fill=position.primary_entry_price,
+                coin_entry_notional=position.coin_size,
+                primary_entry_notional=position.primary_size,
+                coin_exit_reference=float(window_data[symbol]["close"].iloc[-1]),
+                primary_exit_reference=float(
+                    window_data[self.primary_pair]["close"].iloc[-1]
+                ),
+                assumptions=self._execution_assumptions(),
             )
-
-            # Calculate spread unrealized PnL
-            if position.side == "long":
-                unrealized_pnl = coin_pnl - primary_pnl
-            else:
-                unrealized_pnl = -coin_pnl + primary_pnl
-
-            equity += unrealized_pnl
+            # Net liquidation equity: include estimated exit costs, not an
+            # untradeable close/mid mark.
+            equity += mark.net_pnl
 
         return equity
 
@@ -3395,14 +3597,14 @@ class StatArbBacktest:
         gross_loss = abs(sum(t.pnl for t in self.trades if t.pnl < 0))
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
 
-        # Sharpe ratio (daily returns)
-        equity_returns = equity_curve.pct_change().dropna()
-        if len(equity_returns) > 0 and equity_returns.std() > 0:
-            # Annualize: 365 days * 96 candles per day (15m)
-            periods_per_year = 365 * 96
-            sharpe_ratio = (equity_returns.mean() / equity_returns.std()) * np.sqrt(
-                periods_per_year
-            )
+        # Use one UTC observation per day. Annualizing sparse 15m returns
+        # inflates Sharpe through serial correlation and a sea of zero returns.
+        daily_equity = equity_curve.resample("1D").last().dropna()
+        equity_returns = daily_equity.pct_change().dropna()
+        if len(equity_returns) > 1 and equity_returns.std(ddof=1) > 0:
+            sharpe_ratio = (
+                equity_returns.mean() / equity_returns.std(ddof=1)
+            ) * np.sqrt(365)
         else:
             sharpe_ratio = 0
 
@@ -3767,6 +3969,30 @@ Examples:
         help="Leverage multiplier. Default: from settings",
     )
     parser.add_argument(
+        "--env-file",
+        type=str,
+        default=None,
+        help="Explicit settings file. Default: project .env",
+    )
+    parser.add_argument(
+        "--half-spread-bps",
+        type=float,
+        default=2.0,
+        help="Estimated half-spread paid per fill. Default: 2 bps",
+    )
+    parser.add_argument(
+        "--slippage-bps",
+        type=float,
+        default=1.0,
+        help="Additional adverse slippage per fill. Default: 1 bp",
+    )
+    parser.add_argument(
+        "--use-ohlc-pseudo-ticks",
+        type=str,
+        default="false",
+        help="Use heuristic O/H/L/C intrabar ordering (true/false). Default: false",
+    )
+    parser.add_argument(
         "--no-plot",
         action="store_true",
         help="Disable chart plotting",
@@ -3829,9 +4055,7 @@ Examples:
         if normalized in ("0", "false", "no", "n", "off"):
             return False
 
-        raise ValueError(
-            f"Invalid value for {flag_name}: {value!r}. Use true/false."
-        )
+        raise ValueError(f"Invalid value for {flag_name}: {value!r}. Use true/false.")
 
     # Parse dates
     start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -3846,7 +4070,7 @@ Examples:
         sys.exit(1)
 
     # Initialize container
-    container = Container().init()
+    container = Container().init(args.env_file)
     settings = container.settings
     logger = container.logger
 
@@ -3863,10 +4087,16 @@ Examples:
 
     # Parse optional bool CLI flags
     try:
-        use_trailing_entry = _parse_bool(args.use_trailing_entry, "--use-trailing-entry")
+        use_trailing_entry = _parse_bool(
+            args.use_trailing_entry, "--use-trailing-entry"
+        )
         use_live_exit = _parse_bool(args.use_live_exit, "--use-live-exit")
         use_dynamic_tp = _parse_bool(args.use_dynamic_tp, "--use-dynamic-tp")
         lazy_minute_data = _parse_bool(args.lazy_minute_data, "--lazy-minute-data")
+        use_ohlc_pseudo_ticks = _parse_bool(
+            args.use_ohlc_pseudo_ticks,
+            "--use-ohlc-pseudo-ticks",
+        )
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -3917,6 +4147,9 @@ Examples:
         config_overrides["lazy_load_minute_data"] = lazy_minute_data
     if use_dynamic_tp is not None:
         config_overrides["use_dynamic_tp"] = use_dynamic_tp
+    config_overrides["half_spread_bps"] = args.half_spread_bps
+    config_overrides["slippage_bps"] = args.slippage_bps
+    config_overrides["use_ohlc_pseudo_ticks"] = bool(use_ohlc_pseudo_ticks)
 
     config_kwargs = build_backtest_config_kwargs(
         settings=settings,
@@ -3943,7 +4176,12 @@ Examples:
     print(f"  Initial Balance:     ${config.initial_balance:,.2f}")
     if config.position_size_usdt > 0:
         print(f"  Position Size Mode:  fixed USDT")
-        print(f"  Base COIN Size:      ${config.position_size_usdt:,.2f}")
+        effective_size = min(
+            config.position_size_usdt,
+            config.initial_balance * config.max_coin_notional_pct,
+        )
+        print(f"  Requested COIN Size: ${config.position_size_usdt:,.2f}")
+        print(f"  Effective Max Size:  ${effective_size:,.2f}")
         print(f"  Equivalent Risk:     {config.position_size_pct * 100:.1f}%")
     else:
         print(f"  Position Size Mode:  percent")
@@ -3952,6 +4190,15 @@ Examples:
         f"  Max Spreads:         {config.max_spreads} (COIN vs {settings.PRIMARY_PAIR})"
     )
     print(f"  Leverage:            {config.leverage}x")
+    print(f"  Margin Utilization:  <= {config.max_margin_utilization * 100:.0f}%")
+    print(
+        f"  Execution Costs:     taker + {config.half_spread_bps:.1f}bps half-spread "
+        f"+ {config.slippage_bps:.1f}bps slippage per fill"
+    )
+    print(
+        f"  Intrabar Model:      "
+        f"{'heuristic OHLC pseudo-ticks' if config.use_ohlc_pseudo_ticks else 'synchronized 1m closes'}"
+    )
     print(f"\n  Z Entry Threshold:   ±{config.z_entry_threshold}")
     print(f"  Z TP Threshold:      ±{config.z_tp_threshold}")
     print(f"  Z SL Threshold:      ±{config.z_sl_threshold}")

@@ -5,7 +5,8 @@ Uses lazy initialization to avoid circular imports.
 All dependencies are created on first access.
 """
 
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional, Union
 
 from src.config.settings import Settings
 
@@ -24,7 +25,10 @@ class Container:
         self._settings: Settings = None  # type: ignore
         self._initialized = False
 
-    def init(self) -> "Container":
+    def init(
+        self,
+        env_file: Optional[Union[str, Path]] = None,
+    ) -> "Container":
         """
         Initialize the container with configuration.
 
@@ -33,7 +37,7 @@ class Container:
         """
         from src.config import load_settings
 
-        self._settings = load_settings()
+        self._settings = load_settings(env_file)
         self._initialized = True
         return self
 
@@ -262,6 +266,7 @@ class Container:
                 consistent_pairs=self._settings.CONSISTENT_PAIRS,
                 timeframe=self._settings.TIMEFRAME,
                 trading_pair_repository=self.trading_pair_repository,
+                position_state_service=self.position_state_service,
                 enable_beta_drift_guard=self._settings.ENABLE_BETA_DRIFT_GUARD,
                 beta_drift_short_days=self._settings.BETA_DRIFT_SHORT_DAYS,
                 beta_drift_long_days=self._settings.BETA_DRIFT_LONG_DAYS,
@@ -269,6 +274,7 @@ class Container:
                 enable_stability_filter=self._settings.ENABLE_STABILITY_FILTER,
                 stability_windows_days=self._settings.STABILITY_WINDOWS_DAYS,
                 stability_min_pass_windows=self._settings.STABILITY_MIN_PASS_WINDOWS,
+                z_extreme_level=self._settings.Z_EXTREME_LEVEL,
             )
         return self._instances["screener_service"]
 
@@ -371,6 +377,8 @@ class Container:
                 target_halflife_bars=self._settings.TARGET_HALFLIFE_BARS,
                 min_size_multiplier=self._settings.MIN_SIZE_MULTIPLIER,
                 max_size_multiplier=self._settings.MAX_SIZE_MULTIPLIER,
+                max_coin_notional_pct=self._settings.MAX_COIN_NOTIONAL_PCT,
+                max_margin_utilization=self._settings.MAX_MARGIN_UTILIZATION,
             )
         return self._instances["trading_service"]
 
@@ -388,6 +396,7 @@ class Container:
                 trading_service=self.trading_service,
                 entry_observer_service=self.entry_observer_service,
                 scan_cron_expression=self._settings.SCAN_CRON_EXPRESSION,
+                health_file=self._settings.SIGMA_HEALTH_FILE,
             )
         return self._instances["planner_service"]
 

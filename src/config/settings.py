@@ -100,16 +100,14 @@ class Settings:
     HURST_WATCH_THRESHOLD: float = (
         0.46  # Tolerance для watches и открытых позиций (0.45 + 0.01 = 0.46)
     )
-    HURST_TRENDING_FOR_EXIT: float = (
-        0.46  # Threshold для выхода из позиции (0.45 + 0.02 = 0.47)
-    )
+    HURST_TRENDING_FOR_EXIT: float = 0.47
     HURST_TRENDING_CONFIRM_SCANS: int = (
         2  # Количество сканов для подтверждения trending
     )
     HURST_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета Hurst
 
     # ADF settings
-    ADF_PVALUE_THRESHOLD: float = 0.08  # Максимальный p-value для стационарности
+    ADF_PVALUE_THRESHOLD: float = 0.05  # Maximum p-value for stationarity
     ADF_LOOKBACK_CANDLES: int = 300  # 300 свечей для расчета ADF
     ADF_EXIT_CONFIRM_SCANS: int = 2  # Подтверждение ADF-деградации для выхода
 
@@ -125,7 +123,7 @@ class Settings:
     # Fast reversion (low HL) → larger size, slow reversion (high HL) → smaller size
     TARGET_HALFLIFE_BARS: float = 12.0  # Target HL = 12 bars (3h for 15m) as baseline
     MIN_SIZE_MULTIPLIER: float = 0.5  # Minimum multiplier (slow reversion protection)
-    MAX_SIZE_MULTIPLIER: float = 2.0  # Maximum multiplier (fast reversion cap)
+    MAX_SIZE_MULTIPLIER: float = 1.25  # Cap noisy fast-half-life estimates
 
     # Volatility filter
     VOLATILITY_WINDOW: int = 24  # 6 hours (24 x 15min candles)
@@ -154,9 +152,9 @@ class Settings:
     TRAILING_ENTRY_PULLBACK_EXTREME: float = (
         0.6  # Z-score pullback for extreme signals (when |Z| > z_sl)
     )
-    TRAILING_ENTRY_TIMEOUT_MINUTES: int = 45  # Max watch duration before cancellation
+    TRAILING_ENTRY_TIMEOUT_MINUTES: int = 90  # Max watch duration before cancellation
     FALSE_ALARM_HYSTERESIS: float = (
-        0.2  # Cancel watch only if Z drops this much below threshold
+        0.45  # Cancel only after a meaningful move back through the threshold
     )
     Z_EXTREME_LEVEL: float = 5.0  # Maximum Z-score to allow entry (replaces z_sl check)
 
@@ -171,10 +169,12 @@ class Settings:
 
     # Position sizing
     POSITION_SIZE_USDT: float = 1000.0  # USDT размер позиции на COIN ногу
+    MAX_COIN_NOTIONAL_PCT: float = 0.10  # Per-spread COIN leg cap vs equity
+    MAX_MARGIN_UTILIZATION: float = 0.50  # Keep margin reserve for exits/funding
 
     # Trading settings
-    ALLOW_TRADING: bool = True  # Enable/disable real trading
-    MAX_OPEN_SPREADS: int = 6  # Maximum number of open spread positions
+    ALLOW_TRADING: bool = False  # Fail closed unless explicitly enabled
+    MAX_OPEN_SPREADS: int = 3  # Maximum number of open spread positions
 
     # Position state settings
     COOLDOWN_BARS: int = 16  # Cooldown after SL/CORRELATION_DROP (16 bars = 4h for 15m)
@@ -182,6 +182,8 @@ class Settings:
 
     # Planner/Scan settings
     SCAN_CRON_EXPRESSION: str = "*/15 * * * *"  # Every 15 minutes
+    SIGMA_HEALTH_FILE: str = "/tmp/sigma-core-health"
+    SIGMA_HEALTH_MAX_AGE_SECONDS: int = 1800
 
     # Exchange Settings
     EXCHANGE_NAME: str = "binance"
@@ -226,22 +228,26 @@ class Settings:
         self.TIMEFRAME = os.getenv("TIMEFRAME", "15m")
         self.PRIMARY_PAIR = os.getenv("PRIMARY_PAIR", "ETH/USDT:USDT")
         # Remove duplicates while preserving order
-        pairs = os.getenv("CONSISTENT_PAIRS", "").split(", ")
-        self.CONSISTENT_PAIRS = list(dict.fromkeys(p for p in pairs if p))
+        pairs_raw = os.getenv("CONSISTENT_PAIRS", "")
+        if pairs_raw.strip():
+            pairs = [part.strip() for part in pairs_raw.split(",")]
+            self.CONSISTENT_PAIRS = list(dict.fromkeys(p for p in pairs if p))
+        else:
+            self.CONSISTENT_PAIRS = list(type(self).CONSISTENT_PAIRS)
 
         # Screener
         self.LOOKBACK_WINDOW_DAYS = int(os.getenv("LOOKBACK_WINDOW_DAYS", "3"))
         self.MIN_CORRELATION = float(os.getenv("MIN_CORRELATION", "0.8"))
         # Correlation hysteresis
         self.CORRELATION_EXIT_THRESHOLD = float(
-            os.getenv("CORRELATION_EXIT_THRESHOLD", "0.70")
+            os.getenv("CORRELATION_EXIT_THRESHOLD", "0.75")
         )
         self.CORRELATION_WATCH_THRESHOLD = float(
-            os.getenv("CORRELATION_WATCH_THRESHOLD", "0.75")
+            os.getenv("CORRELATION_WATCH_THRESHOLD", "0.77")
         )
-        self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.0"))
+        self.Z_ENTRY_THRESHOLD = float(os.getenv("Z_ENTRY_THRESHOLD", "2.1"))
         self.Z_TP_THRESHOLD = float(os.getenv("Z_TP_THRESHOLD", "0.25"))
-        self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "0"))
+        self.Z_SL_THRESHOLD = float(os.getenv("Z_SL_THRESHOLD", "4.0"))
         self.Z_SL_EXTREME_OFFSET = float(os.getenv("Z_SL_EXTREME_OFFSET", "0.5"))
         self.Z_SCORE_PROGRESS_EXIT_THRESHOLD = float(
             os.getenv("Z_SCORE_PROGRESS_EXIT_THRESHOLD", "0.30")
@@ -306,14 +312,14 @@ class Settings:
         # Dynamic Position Sizing based on Half-Life
         self.TARGET_HALFLIFE_BARS = float(os.getenv("TARGET_HALFLIFE_BARS", "12.0"))
         self.MIN_SIZE_MULTIPLIER = float(os.getenv("MIN_SIZE_MULTIPLIER", "0.5"))
-        self.MAX_SIZE_MULTIPLIER = float(os.getenv("MAX_SIZE_MULTIPLIER", "2.0"))
+        self.MAX_SIZE_MULTIPLIER = float(os.getenv("MAX_SIZE_MULTIPLIER", "1.25"))
 
         # Trailing Stop Loss
-        self.TRAILING_SL_OFFSET = float(os.getenv("TRAILING_SL_OFFSET", "1.3"))
-        self.TRAILING_SL_ACTIVATION = float(os.getenv("TRAILING_SL_ACTIVATION", "1.4"))
+        self.TRAILING_SL_OFFSET = float(os.getenv("TRAILING_SL_OFFSET", "1.0"))
+        self.TRAILING_SL_ACTIVATION = float(os.getenv("TRAILING_SL_ACTIVATION", "1.0"))
         # Volatility filter
         self.VOLATILITY_WINDOW = int(os.getenv("VOLATILITY_WINDOW", "24"))
-        self.VOLATILITY_THRESHOLD = float(os.getenv("VOLATILITY_THRESHOLD", "0.008"))
+        self.VOLATILITY_THRESHOLD = float(os.getenv("VOLATILITY_THRESHOLD", "0.012"))
         self.VOLATILITY_CRASH_WINDOW = int(os.getenv("VOLATILITY_CRASH_WINDOW", "16"))
         self.VOLATILITY_CRASH_THRESHOLD = float(
             os.getenv("VOLATILITY_CRASH_THRESHOLD", "0.05")
@@ -344,13 +350,15 @@ class Settings:
             os.getenv("TRAILING_ENTRY_PULLBACK_EXTREME", "0.6")
         )
         self.TRAILING_ENTRY_TIMEOUT_MINUTES = int(
-            os.getenv("TRAILING_ENTRY_TIMEOUT_MINUTES", "60")
+            os.getenv("TRAILING_ENTRY_TIMEOUT_MINUTES", "90")
         )
-        self.FALSE_ALARM_HYSTERESIS = float(os.getenv("FALSE_ALARM_HYSTERESIS", "0.3"))
+        self.FALSE_ALARM_HYSTERESIS = float(os.getenv("FALSE_ALARM_HYSTERESIS", "0.45"))
         self.Z_EXTREME_LEVEL = float(os.getenv("Z_EXTREME_LEVEL", "5.0"))
 
         # Position sizing
         self.POSITION_SIZE_USDT = float(os.getenv("POSITION_SIZE_USDT", "1000.0"))
+        self.MAX_COIN_NOTIONAL_PCT = float(os.getenv("MAX_COIN_NOTIONAL_PCT", "0.10"))
+        self.MAX_MARGIN_UTILIZATION = float(os.getenv("MAX_MARGIN_UTILIZATION", "0.50"))
 
         # Trading
         self.ALLOW_TRADING = os.getenv("ALLOW_TRADING", "false").lower() == "true"
@@ -359,6 +367,15 @@ class Settings:
         # Position state
         self.COOLDOWN_BARS = int(os.getenv("COOLDOWN_BARS", "16"))
         self.MAX_POSITION_BARS = int(os.getenv("MAX_POSITION_BARS", "96"))
+
+        # Planner/health
+        self.SCAN_CRON_EXPRESSION = os.getenv("SCAN_CRON_EXPRESSION", "*/15 * * * *")
+        self.SIGMA_HEALTH_FILE = os.getenv(
+            "SIGMA_HEALTH_FILE", "/tmp/sigma-core-health"
+        )
+        self.SIGMA_HEALTH_MAX_AGE_SECONDS = int(
+            os.getenv("SIGMA_HEALTH_MAX_AGE_SECONDS", "1800")
+        )
 
         # Exchange
         self.EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "binance")
@@ -451,9 +468,7 @@ class Settings:
         logger.info(f"  BETA_DRIFT_MAX_RELATIVE: {self.BETA_DRIFT_MAX_RELATIVE}")
         logger.info(f"  ENABLE_STABILITY_FILTER: {self.ENABLE_STABILITY_FILTER}")
         logger.info(f"  STABILITY_WINDOWS_DAYS: {self.STABILITY_WINDOWS_DAYS}")
-        logger.info(
-            f"  STABILITY_MIN_PASS_WINDOWS: {self.STABILITY_MIN_PASS_WINDOWS}"
-        )
+        logger.info(f"  STABILITY_MIN_PASS_WINDOWS: {self.STABILITY_MIN_PASS_WINDOWS}")
         logger.info("-" * 40)
         logger.info("🔬 Hurst Settings:")
         logger.info(f"  HURST_THRESHOLD: {self.HURST_THRESHOLD}")
@@ -500,6 +515,8 @@ class Settings:
         logger.info("-" * 40)
         logger.info("💰 Position Settings:")
         logger.info(f"  POSITION_SIZE_USDT: {self.POSITION_SIZE_USDT}")
+        logger.info(f"  MAX_COIN_NOTIONAL_PCT: {self.MAX_COIN_NOTIONAL_PCT}")
+        logger.info(f"  MAX_MARGIN_UTILIZATION: {self.MAX_MARGIN_UTILIZATION}")
         logger.info(f"  MAX_OPEN_SPREADS: {self.MAX_OPEN_SPREADS}")
         logger.info(f"  COOLDOWN_BARS: {self.COOLDOWN_BARS}")
         logger.info(f"  MAX_POSITION_BARS: {self.MAX_POSITION_BARS}")

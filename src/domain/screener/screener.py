@@ -29,6 +29,7 @@ from src.domain.screener.volatility_filter import (
     VolatilityCheckResult,
 )
 from src.domain.screener.z_score import ZScoreResult, ZScoreService
+from src.domain.screener.statistics import benjamini_hochberg_passes
 from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
 from src.domain.trading_pairs import TradingPairRepository
 from src.domain.utils import get_timeframe_minutes
@@ -63,7 +64,9 @@ class LastScanState:
     hurst_values: Optional[Dict[str, float]] = None
     adf_pvalues: Optional[Dict[str, float]] = None
     halflife_values: Optional[Dict[str, float]] = None
-    dynamic_thresholds: Optional[Dict[str, float]] = None  # symbol -> dynamic_entry_threshold
+    dynamic_thresholds: Optional[Dict[str, float]] = (
+        None  # symbol -> dynamic_entry_threshold
+    )
 
     def is_empty(self) -> bool:
         """Check if state is empty (no scan performed yet)."""
@@ -72,7 +75,7 @@ class LastScanState:
     def get_age_seconds(self) -> float:
         """Get age of scan in seconds."""
         if self.scan_time is None:
-            return float('inf')
+            return float("inf")
         return (datetime.now(timezone.utc) - self.scan_time).total_seconds()
 
 
@@ -109,6 +112,7 @@ class ScreenerService:
         consistent_pairs: list[str],
         timeframe: str,
         trading_pair_repository: Optional[TradingPairRepository] = None,
+        position_state_service=None,
         enable_beta_drift_guard: bool = True,
         beta_drift_short_days: int = 3,
         beta_drift_long_days: int = 9,
@@ -116,6 +120,7 @@ class ScreenerService:
         enable_stability_filter: bool = True,
         stability_windows_days: Optional[list[int]] = None,
         stability_min_pass_windows: int = 2,
+        z_extreme_level: float = 5.0,
     ):
         """
         Initialize Screener Service.
@@ -143,6 +148,7 @@ class ScreenerService:
         self._consistent_pairs = consistent_pairs
         self._timeframe = timeframe
         self._trading_pair_repository = trading_pair_repository
+        self._position_state = position_state_service
         self._bars_per_day = max(1, 24 * 60 // get_timeframe_minutes(timeframe))
 
         # Beta drift guard (regime stability)
@@ -160,6 +166,10 @@ class ScreenerService:
         if not self._stability_windows_days:
             self._stability_windows_days = [3, 6, 9]
         self._stability_min_pass_windows = max(1, stability_min_pass_windows)
+        self._z_extreme_level = max(
+            self._z_score_service.z_sl_threshold,
+            z_extreme_level,
+        )
 
         # Internal state for last scan results
         self._last_scan_state = LastScanState()
@@ -249,14 +259,15 @@ class ScreenerService:
         Returns:
             List of trading pair symbols.
         """
+        pairs = list(self._consistent_pairs)
         if self._trading_pair_repository is not None:
             try:
-                pairs = self._trading_pair_repository.get_active_symbols()
-                if pairs:
+                repository_pairs = self._trading_pair_repository.get_active_symbols()
+                if repository_pairs:
                     self._logger.debug(
-                        f"Loaded {len(pairs)} trading pairs from MongoDB"
+                        f"Loaded {len(repository_pairs)} trading pairs from MongoDB"
                     )
-                    return pairs
+                    pairs = repository_pairs
                 else:
                     self._logger.warning(
                         "No active trading pairs in MongoDB, using config fallback"
@@ -266,8 +277,30 @@ class ScreenerService:
                     f"Failed to load trading pairs from MongoDB: {e}, using config fallback"
                 )
 
-        # Fallback to config
-        return self._consistent_pairs
+        # A refreshed universe may remove a symbol while its spread is still
+        # open. Keep loading that coin until the position closes so structural
+        # exits and the real-time exit observer retain complete market data.
+        if self._position_state is not None:
+            try:
+                active_position_pairs = [
+                    position.coin_symbol
+                    for position in self._position_state.get_active_positions()
+                ]
+                missing = [
+                    symbol for symbol in active_position_pairs if symbol not in pairs
+                ]
+                if missing:
+                    self._logger.info(
+                        f"Keeping {len(missing)} removed pair(s) in monitoring "
+                        f"universe until their positions close: {', '.join(missing)}"
+                    )
+                    pairs = [*pairs, *missing]
+            except Exception as exc:
+                self._logger.error(
+                    f"Failed to load open-position symbols for monitoring: {exc}"
+                )
+
+        return list(dict.fromkeys(pairs))
 
     # =========================================================================
     # Main Scan Method
@@ -327,7 +360,7 @@ class ScreenerService:
             lambda: self._correlation_service.calculate(
                 primary_symbol=self._primary_pair,
                 ohlcv=raw_data,
-            )
+            ),
         )
 
         if not correlation_results:
@@ -341,7 +374,7 @@ class ScreenerService:
                 primary_symbol=self._primary_pair,
                 correlation_results=correlation_results,
                 ohlcv=raw_data,
-            )
+            ),
         )
 
         symbols_scanned = len(z_score_results)
@@ -354,10 +387,7 @@ class ScreenerService:
 
         # 7. Stability-over-time filter across multiple windows
         filtered_results, _ = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: self._filter_by_stability(
-                filtered_results, raw_data
-            )
+            None, lambda: self._filter_by_stability(filtered_results, raw_data)
         )
 
         # 8. Filter by Hurst exponent (CPU-bound, run in thread pool)
@@ -365,15 +395,18 @@ class ScreenerService:
             None,
             lambda: self._filter_by_hurst(
                 filtered_results, raw_data, correlation_results
-            )
+            ),
         )
 
         # 9. Filter by Half-Life mean-reversion speed (CPU-bound, run in thread pool)
-        filtered_results, halflife_values = await asyncio.get_event_loop().run_in_executor(
+        (
+            filtered_results,
+            halflife_values,
+        ) = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: self._filter_by_halflife(
                 filtered_results, raw_data, correlation_results, hurst_values
-            )
+            ),
         )
 
         # 10. Filter by ADF stationarity (CPU-bound, run in thread pool)
@@ -381,7 +414,7 @@ class ScreenerService:
             None,
             lambda: self._filter_by_adf(
                 filtered_results, raw_data, correlation_results, halflife_values
-            )
+            ),
         )
 
         # 11. Log results
@@ -451,14 +484,13 @@ class ScreenerService:
         long_bars = self._beta_drift_long_days * self._bars_per_day
 
         if len(beta_series) < long_bars:
-            # Not enough history yet - don't block signal.
-            return True, None, None, None
+            return False, np.nan, np.nan, np.inf
 
         short_beta = float(beta_series.tail(short_bars).median())
         long_beta = float(beta_series.tail(long_bars).median())
 
         if not np.isfinite(short_beta) or not np.isfinite(long_beta):
-            return True, short_beta, long_beta, None
+            return False, short_beta, long_beta, np.inf
 
         denom = max(abs(long_beta), 1e-6)
         relative_drift = abs(short_beta - long_beta) / denom
@@ -470,21 +502,21 @@ class ScreenerService:
         coin_log_prices: pd.Series,
         primary_log_prices: pd.Series,
     ) -> Optional[float]:
-        """Estimate beta on a fixed window using log-return covariance."""
-        returns = pd.concat(
-            [coin_log_prices.diff(), primary_log_prices.diff()],
+        """Estimate the fixed-window log-price OLS hedge coefficient."""
+        levels = pd.concat(
+            [coin_log_prices, primary_log_prices],
             axis=1,
             keys=["coin", "primary"],
         ).dropna()
 
-        if len(returns) < 30:
+        if len(levels) < 30:
             return None
 
-        var_primary = returns["primary"].var()
+        var_primary = levels["primary"].var()
         if var_primary is None or not np.isfinite(var_primary) or var_primary <= 0:
             return None
 
-        cov = returns["coin"].cov(returns["primary"])
+        cov = levels["coin"].cov(levels["primary"])
         if cov is None or not np.isfinite(cov):
             return None
 
@@ -521,7 +553,6 @@ class ScreenerService:
 
         filtered: Dict[str, ZScoreResult] = {}
         skipped: list[str] = []
-        z_sl = self._z_score_service.z_sl_threshold
         adf_threshold = self._adf_filter_service.threshold
         halflife_threshold = self._halflife_filter_service.threshold
 
@@ -533,7 +564,7 @@ class ScreenerService:
             z = result.current_z_score
             z_entry = result.dynamic_entry_threshold
             is_entry_candidate = (
-                not np.isnan(z) and abs(z) >= z_entry and abs(z) <= z_sl
+                not np.isnan(z) and abs(z) >= z_entry and abs(z) < self._z_extreme_level
             )
             if not is_entry_candidate:
                 filtered[symbol] = result
@@ -549,11 +580,20 @@ class ScreenerService:
 
             for days in self._stability_windows_days:
                 bars = days * self._bars_per_day
-                if len(primary_df) < bars or len(coin_df) < bars:
+                aligned_close = pd.concat(
+                    [
+                        coin_df["close"].rename("coin"),
+                        primary_df["close"].rename("primary"),
+                    ],
+                    axis=1,
+                    join="inner",
+                ).dropna()
+                if len(aligned_close) < bars:
                     continue
 
-                coin_close = coin_df["close"].tail(bars)
-                primary_close = primary_df["close"].tail(bars)
+                aligned_close = aligned_close.tail(bars)
+                coin_close = aligned_close["coin"]
+                primary_close = aligned_close["primary"]
                 if (coin_close <= 0).any() or (primary_close <= 0).any():
                     continue
 
@@ -587,8 +627,11 @@ class ScreenerService:
                 ):
                     pass_count += 1
 
-            required = min(self._stability_min_pass_windows, checked) if checked > 0 else 0
-            if required == 0 or pass_count >= required:
+            required = min(
+                self._stability_min_pass_windows,
+                len(self._stability_windows_days),
+            )
+            if checked >= required and pass_count >= required:
                 filtered[symbol] = result
                 stability_passes[symbol] = pass_count
             else:
@@ -692,9 +735,6 @@ class ScreenerService:
         if not self._hurst_filter_service:
             return z_score_results, hurst_values
 
-        # Get SL threshold from z_score_service (static)
-        z_sl = self._z_score_service.z_sl_threshold
-
         filtered = {}
         skipped = []
 
@@ -710,9 +750,8 @@ class ScreenerService:
             z_entry = result.dynamic_entry_threshold
 
             # Check if this is an entry candidate
-            # Entry candidate: |Z| >= dynamic_entry_threshold AND |Z| <= sl_threshold
             is_entry_candidate = (
-                not np.isnan(z) and abs(z) >= z_entry and abs(z) <= z_sl
+                not np.isnan(z) and abs(z) >= z_entry and abs(z) < self._z_extreme_level
             )
 
             if not is_entry_candidate:
@@ -807,6 +846,7 @@ class ScreenerService:
             self._logger.warning("No primary pair data for ADF calculation")
             return z_score_results, adf_pvalues
 
+        tested: Dict[str, tuple[ZScoreResult, float, float]] = {}
         for symbol, result in z_score_results.items():
             # Only check ADF for symbols that passed Half-Life filter
             # (i.e., symbols that are in halflife_values)
@@ -837,19 +877,33 @@ class ScreenerService:
             )
 
             adf_pvalues[symbol] = pvalue
+            tested[symbol] = (
+                result,
+                pvalue,
+                halflife_values.get(symbol, float("inf")),
+            )
 
+        accepted = benjamini_hochberg_passes(
+            adf_pvalues,
+            self._adf_filter_service.threshold,
+        )
+        for symbol, (result, pvalue, halflife) in tested.items():
             z = result.current_z_score
-            halflife = halflife_values.get(symbol, float("inf"))
-
-            if self._adf_filter_service.is_stationary(pvalue):
+            if symbol in accepted:
                 filtered[symbol] = result
                 self._logger.info(
-                    f"✅ {symbol}: Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f} < {self._adf_filter_service.threshold} (stationary)"
+                    f"✅ {symbol}: Z={z:.2f}, HL={halflife:.1f}, "
+                    f"ADF p={pvalue:.4f} passed BH-FDR "
+                    f"q={self._adf_filter_service.threshold}"
                 )
             else:
-                skipped.append(f"{symbol} (Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f})")
+                skipped.append(
+                    f"{symbol} (Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f})"
+                )
                 self._logger.warning(
-                    f"⚠️ {symbol}: Z={z:.2f}, HL={halflife:.1f}, ADF p={pvalue:.4f} >= {self._adf_filter_service.threshold} (non-stationary, skip)"
+                    f"⚠️ {symbol}: Z={z:.2f}, HL={halflife:.1f}, "
+                    f"ADF p={pvalue:.4f} failed BH-FDR "
+                    f"q={self._adf_filter_service.threshold}"
                 )
 
         if skipped:
@@ -890,7 +944,10 @@ class ScreenerService:
         """
         halflife_values: Dict[str, float] = {}
 
-        if not self._halflife_filter_service or not self._halflife_filter_service.is_available:
+        if (
+            not self._halflife_filter_service
+            or not self._halflife_filter_service.is_available
+        ):
             return z_score_results, halflife_values
 
         filtered = {}
@@ -942,7 +999,9 @@ class ScreenerService:
                     f"<= {self._halflife_filter_service.threshold} (fast reversion)"
                 )
             else:
-                skipped.append(f"{symbol} (Z={z:.2f}, H={hurst:.3f}, HL={halflife:.1f})")
+                skipped.append(
+                    f"{symbol} (Z={z:.2f}, H={hurst:.3f}, HL={halflife:.1f})"
+                )
                 self._logger.warning(
                     f"⚠️ {symbol}: Z={z:.2f}, Hurst={hurst:.3f}, HL={halflife:.1f} bars "
                     f"> {self._halflife_filter_service.threshold} (slow reversion, skip)"
@@ -966,8 +1025,9 @@ class ScreenerService:
         Uses single DB query to load cached data, then batch fetches
         missing data from exchange.
 
-        IMPORTANT: Only uses intersection of timestamps across all symbols.
-        No forward fill - only real closed candles are used.
+        Each coin keeps its own history. Downstream pair estimators align that
+        coin with the primary pair only; one recent listing or data gap must
+        not truncate every other pair in the universe.
         """
         end_time = datetime.now(timezone.utc)
         # Calculate required data window:
@@ -982,9 +1042,14 @@ class ScreenerService:
 
         # Extend warmup for stability/beta-drift windows if enabled.
         if self._enable_stability_filter and self._stability_windows_days:
-            data_window_days = max(data_window_days, max(self._stability_windows_days) + 2)
+            data_window_days = max(
+                data_window_days, max(self._stability_windows_days) + 2
+            )
         if self._enable_beta_drift_guard:
-            data_window_days = max(data_window_days, self._beta_drift_long_days + 2)
+            data_window_days = max(
+                data_window_days,
+                self._lookback_window_days + self._beta_drift_long_days + 2,
+            )
         start_time = end_time - timedelta(days=data_window_days)
 
         # Get trading pairs (from MongoDB if available, otherwise from config)
@@ -1011,67 +1076,62 @@ class ScreenerService:
         if self._primary_pair not in raw_data:
             self._logger.warning(
                 f"Primary pair {self._primary_pair} not found in data. "
-                "Cannot align time index."
+                "Cannot calculate pair metrics."
             )
             return raw_data
 
-        primary_index = raw_data[self._primary_pair].index
-
-        # Find common timestamps across ALL symbols (intersection)
-        # This ensures we only use timestamps where ALL symbols have data
-        common_index = primary_index
+        clean_data: Dict[str, pd.DataFrame] = {}
         for symbol, df in raw_data.items():
-            if symbol != self._primary_pair:
-                common_index = common_index.intersection(df.index)
-
-        self._logger.info(
-            f"Common timestamps: {len(common_index)} "
-            f"(primary has {len(primary_index)})"
-        )
-
-        if len(common_index) == 0:
-            self._logger.error("No common timestamps found across symbols!")
-            return {}
-
-        # Align all DataFrames to common index (no ffill - only real data)
-        aligned_data: Dict[str, pd.DataFrame] = {}
-        for symbol, df in raw_data.items():
-            aligned_df = df.loc[common_index].copy()
-
-            # Verify no NaN values
-            nan_count = aligned_df.isna().sum().sum()
+            clean_df = df.sort_index().copy()
+            nan_count = clean_df.isna().sum().sum()
             if nan_count > 0:
                 self._logger.warning(
-                    f"{symbol}: {nan_count} NaN values found after alignment, dropping"
+                    f"{symbol}: {nan_count} NaN values found, dropping affected rows"
                 )
-                aligned_df = aligned_df.dropna()
+                clean_df = clean_df.dropna()
 
-            aligned_data[symbol] = aligned_df
+            if not clean_df.empty:
+                clean_data[symbol] = clean_df
+
+        primary_df = clean_data.get(self._primary_pair)
+        if primary_df is None or primary_df.empty:
+            self._logger.error("Primary pair has no clean OHLCV rows")
+            return {}
+
+        primary_latest = primary_df.index[-1]
+        for symbol in list(clean_data):
+            if symbol == self._primary_pair:
+                continue
+            common_index = clean_data[symbol].index.intersection(primary_df.index)
+            if len(common_index) == 0 or common_index[-1] != primary_latest:
+                symbol_latest = clean_data[symbol].index[-1]
+                self._logger.warning(
+                    f"{symbol}: latest synchronized candle is stale "
+                    f"(coin={symbol_latest}, primary={primary_latest}); skipping pair"
+                )
+                clean_data.pop(symbol)
 
         # Log per-symbol candle count for debugging
-        candle_counts = {s: len(df) for s, df in aligned_data.items()}
+        candle_counts = {s: len(df) for s, df in clean_data.items()}
         min_candles = min(candle_counts.values()) if candle_counts else 0
         max_candles = max(candle_counts.values()) if candle_counts else 0
 
         self._logger.info(
-            f"Aligned {len(aligned_data)} symbols to common time index "
-            f"({len(common_index)} candles, per-symbol: {min_candles}-{max_candles})"
+            f"Loaded {len(clean_data)} independent symbol histories "
+            f"(per-symbol candles: {min_candles}-{max_candles})"
         )
 
         # Log first/last timestamp for primary pair (for debugging timezone issues)
-        if self._primary_pair in aligned_data:
-            primary_df = aligned_data[self._primary_pair]
-            if not primary_df.empty:
-                first_ts = primary_df.index[0]
-                last_ts = primary_df.index[-1]
-                last_close = primary_df["close"].iloc[-1]
-                self._logger.info(
-                    f"📊 Data range: {first_ts.isoformat()} → {last_ts.isoformat()} "
-                    f"({len(primary_df)} candles for {self._primary_pair}) | "
-                    f"last_close=${last_close:.2f}"
-                )
+        first_ts = primary_df.index[0]
+        last_ts = primary_df.index[-1]
+        last_close = primary_df["close"].iloc[-1]
+        self._logger.info(
+            f"📊 Data range: {first_ts.isoformat()} → {last_ts.isoformat()} "
+            f"({len(primary_df)} candles for {self._primary_pair}) | "
+            f"last_close=${last_close:.2f}"
+        )
 
-        return aligned_data
+        return clean_data
 
     def _format_results(
         self,
@@ -1102,7 +1162,7 @@ class ScreenerService:
         hurst_values = hurst_values or {}
         adf_pvalues = adf_pvalues or {}
         halflife_values = halflife_values or {}
-        z_sl = self._z_score_service.z_sl_threshold
+        z_limit = self._z_extreme_level
 
         # Build list of tuples for sorting
         data = []
@@ -1166,9 +1226,9 @@ class ScreenerService:
             # Determine signal based on z-score and dynamic threshold
             if np.isnan(z):
                 signal = "N/A"
-            elif z >= dyn_thr and z <= z_sl:
+            elif z >= dyn_thr and z < z_limit:
                 signal = "🔴 SHORT"
-            elif z <= -dyn_thr and z >= -z_sl:
+            elif z <= -dyn_thr and z > -z_limit:
                 signal = "🟢 LONG"
             elif abs(z) >= 1.5:
                 signal = "⚠️ WATCH"
@@ -1184,7 +1244,11 @@ class ScreenerService:
             # ADF: show value only for entry candidates, "-" otherwise
             adf_str = f"{adf:>8.4f}" if adf is not None else f"{'—':>8}"
             # Half-Life: show value only for entry candidates, "-" otherwise
-            hl_str = f"{halflife:>6.1f}" if halflife is not None and halflife != float("inf") else f"{'—':>6}"
+            hl_str = (
+                f"{halflife:>6.1f}"
+                if halflife is not None and halflife != float("inf")
+                else f"{'—':>6}"
+            )
 
             lines.append(
                 f"{row['symbol']:<20} {z_str} {dyn_thr_str} {beta_str} {corr_str} {hurst_str} {adf_str} {hl_str} {signal:>12}"

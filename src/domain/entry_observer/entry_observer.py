@@ -671,7 +671,10 @@ class EntryObserverService:
             spread_std=watch.spread_std,
             coin_price=watch.coin_price,
             primary_price=watch.primary_price,
-            z_tp_threshold=max(watch.z_tp_threshold, current_z * 0.1),  # dynamic TP
+            z_tp_threshold=max(
+                watch.z_tp_threshold,
+                abs(current_z) * 0.1,
+            ),
             z_sl_threshold=watch.z_sl_threshold,
         )
 

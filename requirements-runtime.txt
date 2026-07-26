@@ -1,0 +1,28 @@
+# Exchange and market data
+python-binance==1.0.37
+websockets==13.1
+
+# Statistics and backtest reporting
+pandas==3.0.5
+numpy==2.5.1
+hurst==0.0.5
+statsmodels==0.14.6
+matplotlib==3.11.1
+seaborn==0.13.2
+
+# Application infrastructure
+python-dotenv==1.2.2
+loguru==0.7.3
+loguru-loki-handler==0.1.1
+requests==2.34.2
+pyee==13.0.1
+apscheduler==3.11.3
+asyncio-redis==0.16.0
+redis==8.0.1
+
+# Persistence
+pymongo==4.17.0
+psycopg2-binary==2.9.12
+
+# Telegram
+aiogram==3.30.0

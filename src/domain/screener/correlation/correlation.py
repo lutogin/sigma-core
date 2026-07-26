@@ -1,12 +1,7 @@
-"""
-Correlation Service.
+"""Rolling cointegration regression and return-correlation service."""
 
-Calculates rolling beta and correlation between crypto pairs
-for statistical arbitrage strategy.
-"""
-
+from dataclasses import dataclass, field
 from typing import Dict
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -16,21 +11,32 @@ from src.domain.utils import calculate_lookback_window
 
 @dataclass
 class CorrelationResult:
-    """Result of correlation calculation for a single symbol."""
+    """Rolling pair-model estimates for one symbol."""
+
     symbol: str
     rolling_beta: pd.Series
     rolling_corr: pd.Series
     latest_beta: float
     latest_corr: float
+    rolling_intercept: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
+    rolling_residual_std: pd.Series = field(
+        default_factory=lambda: pd.Series(dtype=float)
+    )
+    latest_intercept: float = np.nan
+    latest_residual_std: float = np.nan
 
 
 class CorrelationService:
-    """
-    Service for calculating rolling beta and correlation metrics.
+    """Estimate a consistent log-price hedge model and return correlation.
 
-    Uses log returns and rolling OLS to calculate:
-    - Beta (hedge coefficient): β = Cov(COIN, PRIMARY) / Var(PRIMARY)
-    - Correlation: for safety filtering
+    The hedge ratio, intercept and residual volatility come from one rolling
+    OLS regression on log-price levels:
+
+        log(COIN) = intercept + beta * log(PRIMARY) + residual
+
+    Return correlation remains a separate regime/safety filter. Estimating
+    beta on returns and applying it to price levels would mix two different
+    models and produce a spread unrelated to the stationarity tests.
     """
 
     def __init__(
@@ -39,14 +45,6 @@ class CorrelationService:
         lookback_window_days: int,
         timeframe: str = "15m",
     ):
-        """
-        Initialize CorrelationService.
-
-        Args:
-            logger: Application logger.
-            lookback_window_days: Number of days for lookback window.
-            timeframe: Candle timeframe (e.g., "15m", "1h").
-        """
         self._logger = logger
         self._lookback_window_days = lookback_window_days
         self._timeframe = timeframe
@@ -59,157 +57,138 @@ class CorrelationService:
         primary_symbol: str,
         ohlcv: Dict[str, pd.DataFrame],
     ) -> Dict[str, CorrelationResult]:
-        """
-        Calculate rolling beta and correlation for all symbols relative to primary.
-
-        Args:
-            primary_symbol: Primary symbol to compare against (e.g., "ETH/USDT:USDT").
-            ohlcv: Dictionary mapping symbol -> OHLCV DataFrame.
-                   Each DataFrame must have 'close' column.
-
-        Returns:
-            Dictionary mapping symbol -> CorrelationResult.
-        """
-        # self._logger.debug(
-        #     f"Calculating correlation for {len(ohlcv)} symbols "
-        #     f"against {primary_symbol} (window={self._lookback_window} candles)"
-        # )
-
-        # Step 1: Preprocess - calculate log returns
-        log_returns = self._preprocess_log_returns(ohlcv)
-
-        if primary_symbol not in log_returns.columns:
+        """Calculate point-in-time rolling estimates relative to primary."""
+        log_prices = self._preprocess_log_prices(ohlcv)
+        if primary_symbol not in log_prices.columns:
             self._logger.error(f"Primary symbol {primary_symbol} not found in data")
             return {}
 
-        # Step 2: Calculate rolling beta and correlation for each symbol
-        results = self._calculate_rolling_metrics(
-            log_returns=log_returns,
+        return self._calculate_rolling_metrics(
+            log_prices=log_prices,
+            log_returns=log_prices.diff(),
             primary_symbol=primary_symbol,
         )
 
-        return results
-
-    def _preprocess_log_returns(
+    def _preprocess_log_prices(
         self,
         ohlcv: Dict[str, pd.DataFrame],
     ) -> pd.DataFrame:
-        """
-        Preprocess OHLCV data to log returns.
-
-        Takes close prices and calculates log returns:
-        log_return = log(price_t / price_{t-1}) = log(price_t) - log(price_{t-1})
-
-        Args:
-            ohlcv: Dictionary mapping symbol -> OHLCV DataFrame.
-
-        Returns:
-            DataFrame with log returns, columns are symbols, index is time.
-        """
+        """Extract positive closes without truncating older pair histories."""
         close_prices = {}
-
         for symbol, df in ohlcv.items():
             if df.empty:
                 self._logger.warning(f"Empty DataFrame for {symbol}, skipping")
                 continue
 
-            # Get close price column (handle different column name cases)
-            close_col = None
-            for col in ["close", "Close", "CLOSE"]:
-                if col in df.columns:
-                    close_col = col
-                    break
-
+            close_col = next(
+                (column for column in ("close", "Close", "CLOSE") if column in df),
+                None,
+            )
             if close_col is None:
                 self._logger.warning(f"No close column found for {symbol}, skipping")
                 continue
 
-            close_prices[symbol] = df[close_col]
+            prices = pd.to_numeric(df[close_col], errors="coerce")
+            close_prices[symbol] = prices.where(prices > 0)
 
         if not close_prices:
             self._logger.error("No valid close prices found")
             return pd.DataFrame()
 
-        # Build DataFrame with close prices
-        df_close = pd.DataFrame(close_prices)
-
-        # Calculate log prices and then log returns (diff of log prices)
-        log_prices = pd.DataFrame(np.log(df_close), columns=df_close.columns, index=df_close.index)
-        log_returns = log_prices.diff().dropna()
-
+        log_prices = np.log(pd.DataFrame(close_prices))
         self._logger.debug(
-            f"[Correlation] Preprocessed {len(df_close.columns)} symbols: "
-            f"close_prices={len(df_close)}, log_prices={len(log_prices)}, "
-            f"log_returns={len(log_returns)} (lost {len(log_prices) - len(log_returns)} from diff)"
+            f"[Correlation] Preprocessed {len(log_prices.columns)} symbols, "
+            f"{len(log_prices)} timestamps"
         )
-
-        return log_returns
+        return log_prices
 
     def _calculate_rolling_metrics(
         self,
+        log_prices: pd.DataFrame,
         log_returns: pd.DataFrame,
         primary_symbol: str,
     ) -> Dict[str, CorrelationResult]:
-        """
-        Calculate rolling beta and correlation for each symbol.
+        """Calculate rolling OLS parameters and return correlation."""
+        results: Dict[str, CorrelationResult] = {}
+        window = self._lookback_window
 
-        Beta = Cov(COIN, PRIMARY) / Var(PRIMARY)
-        This is the hedge coefficient from OLS regression.
-
-        Args:
-            log_returns: DataFrame with log returns for all symbols.
-            primary_symbol: Primary symbol column name.
-
-        Returns:
-            Dictionary mapping symbol -> CorrelationResult.
-        """
-        results = {}
-        primary_returns = log_returns[primary_symbol]
-
-        for symbol in log_returns.columns:
+        for symbol in log_prices.columns:
             if symbol == primary_symbol:
                 continue
 
-            coin_returns = log_returns[symbol]
+            pair_prices = pd.concat(
+                [
+                    log_prices[symbol].rename("coin"),
+                    log_prices[primary_symbol].rename("primary"),
+                ],
+                axis=1,
+                join="inner",
+            ).dropna()
+            pair_returns = pd.concat(
+                [
+                    log_returns[symbol].rename("coin"),
+                    log_returns[primary_symbol].rename("primary"),
+                ],
+                axis=1,
+                join="inner",
+            ).dropna()
+            if len(pair_prices) < window or len(pair_returns) < window:
+                continue
 
-            # Rolling covariance between coin and primary
-            rolling_cov = coin_returns.rolling(
-                window=self._lookback_window
-            ).cov(primary_returns)
-
-            # Rolling variance of primary
-            rolling_var = primary_returns.rolling(
-                window=self._lookback_window
+            coin_prices = pair_prices["coin"]
+            primary_prices = pair_prices["primary"]
+            rolling_cov = coin_prices.rolling(window, min_periods=window).cov(
+                primary_prices
+            )
+            rolling_var_primary = primary_prices.rolling(
+                window, min_periods=window
             ).var()
+            rolling_beta = rolling_cov / rolling_var_primary.replace(0, np.nan)
 
-            # Beta = Cov / Var
-            rolling_beta = rolling_cov / rolling_var
-
-            # Rolling correlation for safety filter
-            rolling_corr = coin_returns.rolling(
-                window=self._lookback_window
-            ).corr(primary_returns)
-
-            # Get latest values (drop NaN from rolling window)
-            valid_beta = rolling_beta.dropna()
-            valid_corr = rolling_corr.dropna()
-
-            latest_beta = valid_beta.iloc[-1] if len(valid_beta) > 0 else np.nan
-            latest_corr = valid_corr.iloc[-1] if len(valid_corr) > 0 else np.nan
-
-            self._logger.debug(
-                f"[Correlation] {symbol}: rolling_beta={len(rolling_beta)}, "
-                f"valid_beta={len(valid_beta)}, rolling_corr={len(rolling_corr)}, "
-                f"valid_corr={len(valid_corr)}, latest_beta={latest_beta:.4f}, "
-                f"latest_corr={latest_corr:.4f}"
+            rolling_intercept = (
+                coin_prices.rolling(window, min_periods=window).mean()
+                - rolling_beta
+                * primary_prices.rolling(window, min_periods=window).mean()
             )
 
+            rolling_var_coin = coin_prices.rolling(window, min_periods=window).var()
+            residual_variance = rolling_var_coin - rolling_beta * rolling_cov
+            if window > 2:
+                residual_variance *= (window - 1) / (window - 2)
+            rolling_residual_std = np.sqrt(residual_variance.clip(lower=0))
+
+            rolling_corr = (
+                pair_returns["coin"]
+                .rolling(window, min_periods=window)
+                .corr(pair_returns["primary"])
+            )
+
+            latest_beta = self._latest(rolling_beta)
+            latest_corr = self._latest(rolling_corr)
+            latest_intercept = self._latest(rolling_intercept)
+            latest_residual_std = self._latest(rolling_residual_std.replace(0, np.nan))
+
+            self._logger.debug(
+                f"[Correlation] {symbol}: beta={latest_beta:.4f}, "
+                f"intercept={latest_intercept:.4f}, "
+                f"residual_std={latest_residual_std:.6f}, "
+                f"return_corr={latest_corr:.4f}"
+            )
             results[symbol] = CorrelationResult(
                 symbol=symbol,
                 rolling_beta=rolling_beta,
                 rolling_corr=rolling_corr,
                 latest_beta=latest_beta,
                 latest_corr=latest_corr,
+                rolling_intercept=rolling_intercept,
+                rolling_residual_std=rolling_residual_std,
+                latest_intercept=latest_intercept,
+                latest_residual_std=latest_residual_std,
             )
 
         return results
+
+    @staticmethod
+    def _latest(series: pd.Series) -> float:
+        valid = series.replace([np.inf, -np.inf], np.nan).dropna()
+        return float(valid.iloc[-1]) if not valid.empty else np.nan
