@@ -23,7 +23,9 @@ import time
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Literal
+from typing import Any, Dict, List, Literal, Optional, Tuple
+
+import pandas as pd
 
 # Add the parent directory to sys.path so we can import from src
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -71,15 +73,21 @@ class _SilentLogger:
 
 class _InMemoryOHLCVCacheLoader:
     """
-    Lightweight in-memory cache wrapper for AsyncDataLoaderService.
+    Range-aware in-memory cache wrapper for AsyncDataLoaderService.
 
-    Reuses identical OHLCV requests across many per-coin backtests in a WF run.
+    Rolling train windows overlap heavily. Keeping covered time ranges avoids
+    re-reading the same ETH/coin rows for every window and coalesces concurrent
+    lazy 1m requests.
     """
 
     def __init__(self, base_loader: AsyncDataLoaderService):
         self._base_loader = base_loader
-        self._bulk_cache: Dict[Tuple[str, str, str, str], Any] = {}
         self._single_cache: Dict[Tuple[str, str, int, str, str], Any] = {}
+        self._range_cache: Dict[
+            Tuple[str, str],
+            Tuple[datetime, datetime, Any],
+        ] = {}
+        self._range_locks: Dict[Tuple[str, str], asyncio.Lock] = {}
 
     @staticmethod
     def _dt_key(value: Optional[datetime]) -> str:
@@ -91,6 +99,40 @@ class _InMemoryOHLCVCacheLoader:
     def _safe_copy(df):
         return df.copy(deep=True) if hasattr(df, "copy") else df
 
+    @classmethod
+    def _slice(
+        cls,
+        df,
+        start_time: datetime,
+        end_time: datetime,
+    ):
+        if df is None or not hasattr(df, "index"):
+            return cls._safe_copy(df)
+        selected = df.loc[(df.index >= start_time) & (df.index < end_time)]
+        return cls._safe_copy(selected)
+
+    async def prime_ohlcv_bulk(
+        self,
+        symbols: List[str],
+        start_time: datetime,
+        end_time: datetime,
+        timeframe: str = "15m",
+    ) -> None:
+        """Load the complete WF range once before overlapping train windows."""
+        fetched = await self._base_loader.load_ohlcv_bulk(
+            symbols=symbols,
+            start_time=start_time,
+            end_time=end_time,
+            batch_size=10,
+            timeframe=timeframe,
+        )
+        for symbol, df in fetched.items():
+            self._range_cache[(symbol, timeframe)] = (
+                start_time,
+                end_time,
+                self._safe_copy(df),
+            )
+
     async def load_ohlcv_bulk(
         self,
         symbols: List[str],
@@ -101,32 +143,30 @@ class _InMemoryOHLCVCacheLoader:
     ) -> Dict[str, Any]:
         result: Dict[str, Any] = {}
         missing: List[str] = []
-        start_key = self._dt_key(start_time)
-        end_key = self._dt_key(end_time)
 
         for symbol in symbols:
-            key = (symbol, timeframe, start_key, end_key)
-            cached = self._bulk_cache.get(key)
-            if cached is not None:
-                result[symbol] = self._safe_copy(cached)
+            cached = self._range_cache.get((symbol, timeframe))
+            if cached is not None and cached[0] <= start_time and cached[1] >= end_time:
+                result[symbol] = self._slice(cached[2], start_time, end_time)
             else:
                 missing.append(symbol)
 
         if missing:
-            fetched = await self._base_loader.load_ohlcv_bulk(
-                symbols=missing,
-                start_time=start_time,
-                end_time=end_time,
-                batch_size=batch_size,
-                timeframe=timeframe,
+            loaded = await asyncio.gather(
+                *(
+                    self.load_ohlcv_with_cache(
+                        symbol=symbol,
+                        num_bars=0,
+                        timeframe=timeframe,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                    for symbol in missing
+                )
             )
-            for symbol in missing:
-                key = (symbol, timeframe, start_key, end_key)
-                df = fetched.get(symbol)
-                if df is None:
-                    continue
-                self._bulk_cache[key] = self._safe_copy(df)
-                result[symbol] = self._safe_copy(df)
+            for symbol, df in zip(missing, loaded):
+                if df is not None:
+                    result[symbol] = df
 
         return result
 
@@ -138,6 +178,72 @@ class _InMemoryOHLCVCacheLoader:
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
     ):
+        if start_time is not None and end_time is not None:
+            range_key = (symbol, timeframe)
+            lock = self._range_locks.setdefault(range_key, asyncio.Lock())
+            async with lock:
+                cached = self._range_cache.get(range_key)
+                if (
+                    cached is not None
+                    and cached[0] <= start_time
+                    and cached[1] >= end_time
+                ):
+                    return self._slice(cached[2], start_time, end_time)
+
+                if cached is None:
+                    df = await self._base_loader.load_ohlcv_with_cache(
+                        symbol=symbol,
+                        num_bars=num_bars,
+                        timeframe=timeframe,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                    self._range_cache[range_key] = (
+                        start_time,
+                        end_time,
+                        self._safe_copy(df),
+                    )
+                    return self._safe_copy(df)
+
+                covered_start, covered_end, covered_df = cached
+                pieces = [covered_df]
+                new_start = min(start_time, covered_start)
+                new_end = max(end_time, covered_end)
+
+                if start_time < covered_start:
+                    pieces.append(
+                        await self._base_loader.load_ohlcv_with_cache(
+                            symbol=symbol,
+                            num_bars=0,
+                            timeframe=timeframe,
+                            start_time=start_time,
+                            end_time=covered_start,
+                        )
+                    )
+                if end_time > covered_end:
+                    pieces.append(
+                        await self._base_loader.load_ohlcv_with_cache(
+                            symbol=symbol,
+                            num_bars=0,
+                            timeframe=timeframe,
+                            start_time=covered_end,
+                            end_time=end_time,
+                        )
+                    )
+
+                valid_pieces = [
+                    piece
+                    for piece in pieces
+                    if piece is not None and not getattr(piece, "empty", False)
+                ]
+                if valid_pieces:
+                    merged = pd.concat(valid_pieces).sort_index()
+                    merged = merged[~merged.index.duplicated(keep="last")]
+                else:
+                    merged = covered_df
+                self._range_cache[range_key] = (new_start, new_end, merged)
+                return self._slice(merged, start_time, end_time)
+
         key = (
             symbol,
             timeframe,
@@ -430,6 +536,33 @@ class UniverseWalkForwardRunner:
         )
         print(f"   Coins: {len(self.coins)}")
         print("=" * 100 + "\n")
+
+        settings = self.services["settings"]
+        warmup_days = settings.LOOKBACK_WINDOW_DAYS * 3 + 2
+        if settings.ENABLE_STABILITY_FILTER and settings.STABILITY_WINDOWS_DAYS:
+            warmup_days = max(
+                warmup_days,
+                max(settings.STABILITY_WINDOWS_DAYS) + 2,
+            )
+        if settings.ENABLE_BETA_DRIFT_GUARD:
+            warmup_days = max(
+                warmup_days,
+                settings.LOOKBACK_WINDOW_DAYS + settings.BETA_DRIFT_LONG_DAYS + 2,
+            )
+        preload_started = time.perf_counter()
+        await self._cached_data_loader.prime_ohlcv_bulk(
+            symbols=[
+                settings.PRIMARY_PAIR,
+                *(f"{coin}/USDT:USDT" for coin in self.coins),
+            ],
+            start_time=start_date - timedelta(days=warmup_days),
+            end_time=end_date,
+            timeframe=settings.TIMEFRAME,
+        )
+        print(
+            f"📦 Primed shared 15m range cache in "
+            f"{time.perf_counter() - preload_started:.1f}s\n"
+        )
 
         # Generate WF windows
         self.steps = []

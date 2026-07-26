@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import pytest
 
+from backtests.backtest_shared import compute_trailing_pullback_calibration
 from backtests.run_backtest import (
     BacktestConfig,
     HistoricalFundingCache,
@@ -109,6 +110,23 @@ def test_latest_funding_is_normalized_only_for_entry_comparison() -> None:
     assert cache.get_rate_at("COIN", ts) == pytest.approx(0.002)
 
 
+@pytest.mark.asyncio
+async def test_historical_funding_load_fails_closed_on_transport_error() -> None:
+    cache = HistoricalFundingCache(NullLogger())
+
+    class BrokenExchange:
+        async def get_historical_funding_rates(self, **_kwargs):
+            raise ConnectionError("funding endpoint unavailable")
+
+    with pytest.raises(RuntimeError, match="COIN"):
+        await cache.load(
+            BrokenExchange(),
+            ["COIN"],
+            datetime(2025, 1, 1, tzinfo=timezone.utc),
+            datetime(2025, 2, 1, tzinfo=timezone.utc),
+        )
+
+
 def test_rate_limiter_can_be_constructed_without_an_event_loop() -> None:
     limiter = RateLimiter(requests_per_second=10.0, burst_size=20)
     assert limiter._tokens == 20.0
@@ -124,3 +142,15 @@ def test_fixed_notional_is_capped_by_equity_risk_budget() -> None:
     backtest.balance = 10_000.0
 
     assert backtest._get_base_position_size() == pytest.approx(1_000.0)
+
+
+def test_backtest_uses_same_z_pullback_as_live_observer() -> None:
+    normal, extreme, scale = compute_trailing_pullback_calibration(
+        timeframe="15m",
+        trailing_pullback_base=0.2,
+        trailing_pullback_extreme_base=0.6,
+    )
+
+    assert normal == 0.2
+    assert extreme == 0.6
+    assert scale == 1.0

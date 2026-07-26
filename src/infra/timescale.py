@@ -54,11 +54,11 @@ class TimescaleDB:
 
         try:
             self._pool = pool.ThreadedConnectionPool(
-                min_connections,
-                max_connections,
-                self.db_url
+                min_connections, max_connections, self.db_url
             )
-            self.logger.info(f"💾 TimescaleDB connected (pool: {min_connections}-{max_connections})")
+            self.logger.info(
+                f"💾 TimescaleDB connected (pool: {min_connections}-{max_connections})"
+            )
         except Exception as e:
             self.logger.error(f"❌ TimescaleDB connection failed: {e}")
             raise
@@ -119,6 +119,33 @@ class TimescaleDB:
             with conn.cursor() as cur:
                 extras.execute_batch(cur, query, params_list, page_size=1000)
                 return cur.rowcount
+
+    def execute_values(
+        self,
+        query: str,
+        params_list: list,
+        *,
+        page_size: int = 5000,
+    ) -> int:
+        """
+        Insert many rows using multi-value statements.
+
+        ``query`` must contain one ``%s`` placeholder for the VALUES list.
+        Returning the attempted row count is deterministic even for upserts;
+        psycopg2's cursor.rowcount only reflects the final generated page.
+        """
+        if not params_list:
+            return 0
+
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                extras.execute_values(
+                    cur,
+                    query,
+                    params_list,
+                    page_size=page_size,
+                )
+        return len(params_list)
 
     def fetch_one(self, query: str, params: tuple = None) -> Optional[tuple]:
         """
@@ -192,4 +219,3 @@ class TimescaleDB:
         except Exception:
             # TimescaleDB extension might not be installed
             return False
-

@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import MethodType
 
@@ -8,6 +9,7 @@ from src.integrations.exchange import (
     ExchangeConfig,
     MarketData,
     Order,
+    SymbolInfo,
 )
 
 
@@ -65,6 +67,80 @@ def test_multiple_child_fills_are_aggregated_by_quantity_and_price() -> None:
     assert combined.filled == 10.0
     assert combined.remaining == 0.0
     assert combined.price == pytest.approx(100.2)
+
+
+@pytest.mark.asyncio
+async def test_liquidity_filter_fails_closed_when_ticker_load_fails() -> None:
+    client = BinanceClient(ExchangeConfig(), _Logger())
+    client._is_connected = True
+    client._markets_cache["LINK/USDT:USDT"] = SymbolInfo(
+        symbol="LINK/USDT:USDT",
+        base_asset="LINK",
+        quote_asset="USDT",
+        price_precision=3,
+        quantity_precision=2,
+        tick_size=Decimal("0.001"),
+        step_size=Decimal("0.01"),
+        min_qty=Decimal("0.01"),
+        max_qty=Decimal("1000000"),
+        min_notional=Decimal("5"),
+    )
+
+    class _Api:
+        async def futures_ticker(self):
+            raise ConnectionError("ticker endpoint unavailable")
+
+    async def get_client(self):
+        return _Api()
+
+    client._get_client = MethodType(get_client, client)
+
+    with pytest.raises(RuntimeError, match="liquidity filter"):
+        await client.get_tradable_symbols(min_volume_usdt=10_000_000)
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_request_uses_exact_exclusive_end_timestamp() -> None:
+    client = BinanceClient(ExchangeConfig(), _Logger())
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = start + timedelta(hours=1)
+    requested = []
+
+    class _Api:
+        async def futures_klines(self, **params):
+            requested.append(params)
+            open_ms = int(start.timestamp() * 1000)
+            return [
+                [
+                    open_ms,
+                    "1",
+                    "1",
+                    "1",
+                    "1",
+                    "1",
+                    open_ms + 59_999,
+                    "0",
+                    0,
+                    "0",
+                    "0",
+                    "0",
+                ]
+            ]
+
+    async def get_client(self):
+        return _Api()
+
+    client._get_client = MethodType(get_client, client)
+
+    frame = await client.fetch_ohlcv(
+        "ETH/USDT:USDT",
+        "1m",
+        start,
+        end,
+    )
+
+    assert len(frame) == 1
+    assert requested[0]["endTime"] == int(end.timestamp() * 1000)
 
 
 @pytest.mark.asyncio

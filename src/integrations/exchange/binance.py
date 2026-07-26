@@ -522,8 +522,9 @@ class BinanceClient:
                 )
             except Exception as e:
                 self.logger.error(f"Failed to load 24h volumes: {e}")
-                # If failed, don't filter by volume
-                min_volume_usdt = 0
+                raise RuntimeError(
+                    "Cannot enforce the requested liquidity filter"
+                ) from e
 
         symbols = []
         for symbol, info in self._markets_cache.items():
@@ -590,7 +591,7 @@ class BinanceClient:
         :param symbol: Trading symbol
         :param interval: Timeframe (e.g., '1h', '4h', '1d')
         :param start_date: Start date
-        :param end_date: End date
+        :param end_date: Exclusive end timestamp
         :param limit: Limit per request
         :param max_retries: Maximum retry attempts for transient failures
         :return: DataFrame with OHLCV data
@@ -610,7 +611,7 @@ class BinanceClient:
 
         all_data: List[Any] = []
         current_since = int(start_date_utc.timestamp() * 1000)
-        end_timestamp = int((end_date_utc + timedelta(days=1)).timestamp() * 1000)
+        end_timestamp = int(end_date_utc.timestamp() * 1000)
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         while current_since < end_timestamp:

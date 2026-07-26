@@ -104,6 +104,10 @@ class AsyncDataLoaderService:
                     )
 
                     for range_start, range_end in missing_ranges:
+                        range_start = max(range_start, start_time)
+                        range_end = min(range_end, end_time)
+                        if range_start >= range_end:
+                            continue
                         missing_df = await self._exchange.fetch_ohlcv(
                             symbol=symbol,
                             interval=timeframe,
@@ -148,7 +152,9 @@ class AsyncDataLoaderService:
                         if not early_df.empty:
                             self._ohlcv_repo.save_data(symbol, timeframe, early_df)
                             df_result = pd.concat([early_df, df_result]).sort_index()
-                            df_result = df_result[~df_result.index.duplicated(keep="last")]
+                            df_result = df_result[
+                                ~df_result.index.duplicated(keep="last")
+                            ]
 
                     # Check end edge: last candle might be BEFORE requested end
                     last_cached = df_result.index[-1]
@@ -166,7 +172,9 @@ class AsyncDataLoaderService:
                         if not late_df.empty:
                             self._ohlcv_repo.save_data(symbol, timeframe, late_df)
                             df_result = pd.concat([df_result, late_df]).sort_index()
-                            df_result = df_result[~df_result.index.duplicated(keep="last")]
+                            df_result = df_result[
+                                ~df_result.index.duplicated(keep="last")
+                            ]
 
             except Exception as e:
                 self._logger.error(
@@ -295,12 +303,16 @@ class AsyncDataLoaderService:
                 result = {}
 
         # Step 2: Build expected time index (all closed candles in range)
-        expected_index = self._build_expected_index(start_time, end_time, timeframe_minutes)
+        expected_index = self._build_expected_index(
+            start_time, end_time, timeframe_minutes
+        )
         self._logger.debug(f"Expected {len(expected_index)} candles in range")
 
         # Step 3: Identify symbols that need fetching
         symbols_to_fetch: List[str] = []
-        symbols_missing_ranges: Dict[str, List[tuple]] = {}  # symbol -> [(start, end), ...]
+        symbols_missing_ranges: Dict[str, List[tuple]] = (
+            {}
+        )  # symbol -> [(start, end), ...]
 
         for symbol in symbols:
             if symbol not in result or result[symbol].empty:
@@ -320,9 +332,7 @@ class AsyncDataLoaderService:
                         f"{symbol}: found {len(missing_ranges)} missing range(s)"
                     )
 
-        self._logger.info(
-            f"Need to fetch data for {len(symbols_to_fetch)} symbols"
-        )
+        self._logger.info(f"Need to fetch data for {len(symbols_to_fetch)} symbols")
 
         # Step 4: Fetch missing data from exchange in batches
         if symbols_to_fetch:
@@ -341,7 +351,9 @@ class AsyncDataLoaderService:
                 task_info = []  # Track which symbol each task belongs to
 
                 for symbol in batch:
-                    for range_start, range_end in symbols_missing_ranges.get(symbol, []):
+                    for range_start, range_end in symbols_missing_ranges.get(
+                        symbol, []
+                    ):
                         tasks.append(
                             self._exchange.fetch_ohlcv(
                                 symbol=symbol,
@@ -362,7 +374,10 @@ class AsyncDataLoaderService:
                         self._logger.warning(
                             f"Error fetching {symbol}: {repr(fetch_result)}"
                         )
-                    elif isinstance(fetch_result, pd.DataFrame) and not fetch_result.empty:
+                    elif (
+                        isinstance(fetch_result, pd.DataFrame)
+                        and not fetch_result.empty
+                    ):
                         if symbol not in symbol_dfs:
                             symbol_dfs[symbol] = []
                         symbol_dfs[symbol].append(fetch_result)
@@ -370,7 +385,9 @@ class AsyncDataLoaderService:
                 # Merge fetched data for each symbol
                 for symbol, dfs in symbol_dfs.items():
                     merged_fetch = pd.concat(dfs).sort_index()
-                    merged_fetch = merged_fetch[~merged_fetch.index.duplicated(keep="last")]
+                    merged_fetch = merged_fetch[
+                        ~merged_fetch.index.duplicated(keep="last")
+                    ]
 
                     fetched_data[symbol] = merged_fetch
 
@@ -402,7 +419,7 @@ class AsyncDataLoaderService:
                 df = result[symbol]
 
                 # Filter to expected range
-                df = df[(df.index >= start_time) & (df.index <= end_time)]
+                df = df[(df.index >= start_time) & (df.index < end_time)]
 
                 # Drop any rows with NaN values
                 df = df.dropna()
@@ -410,7 +427,9 @@ class AsyncDataLoaderService:
                 if not df.empty:
                     final_result[symbol] = df
                     # Calculate close time of last candle (open_time + timeframe)
-                    last_candle_close = df.index.max() + timedelta(minutes=timeframe_minutes)
+                    last_candle_close = df.index.max() + timedelta(
+                        minutes=timeframe_minutes
+                    )
                     self._logger.debug(
                         f"{symbol}: {len(df)} candles "
                         f"(open: {df.index.min().isoformat()} to {df.index.max().isoformat()}, "
@@ -449,7 +468,7 @@ class AsyncDataLoaderService:
         timestamps = []
         current = start_ts
 
-        while current <= end_time:
+        while current < end_time:
             # Only include if candle is closed (current + timeframe <= now)
             candle_close_time = current + timedelta(minutes=timeframe_minutes)
             if candle_close_time <= now:
@@ -492,7 +511,9 @@ class AsyncDataLoaderService:
                 prev_ts = ts
             else:
                 # Gap found - close current range and start new one
-                ranges.append((range_start, prev_ts + timedelta(minutes=timeframe_minutes)))
+                ranges.append(
+                    (range_start, prev_ts + timedelta(minutes=timeframe_minutes))
+                )
                 range_start = ts
                 prev_ts = ts
 

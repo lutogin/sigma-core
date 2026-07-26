@@ -1,13 +1,16 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from types import MethodType, SimpleNamespace
+from unittest.mock import AsyncMock
 
+import pandas as pd
 import pytest
 
 from backtests.run_backtest import BacktestConfig, Trade
 from backtests.run_universe_walk_forward import (
     CoinTrainResult,
     UniverseWalkForwardRunner,
+    _InMemoryOHLCVCacheLoader,
 )
 
 
@@ -121,3 +124,76 @@ def test_kill_switch_discards_trades_after_trigger_on_same_coin() -> None:
     assert killed is True
     assert reason == "LOSS_STREAK_3"
     assert len(kept) == 3
+
+
+@pytest.mark.asyncio
+async def test_range_cache_reuses_primed_data_for_overlapping_windows() -> None:
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    end = start + timedelta(days=10)
+    index = pd.date_range(start, end, freq="15min")
+    frame = pd.DataFrame({"close": range(len(index))}, index=index)
+    base_loader = SimpleNamespace(
+        load_ohlcv_bulk=AsyncMock(return_value={"ETH": frame}),
+        load_ohlcv_with_cache=AsyncMock(),
+    )
+    loader = _InMemoryOHLCVCacheLoader(base_loader)
+    await loader.prime_ohlcv_bulk(["ETH"], start, end)
+
+    first = await loader.load_ohlcv_bulk(
+        ["ETH"],
+        start + timedelta(days=1),
+        start + timedelta(days=5),
+    )
+    second = await loader.load_ohlcv_bulk(
+        ["ETH"],
+        start + timedelta(days=3),
+        start + timedelta(days=8),
+    )
+
+    assert not first["ETH"].empty
+    assert not second["ETH"].empty
+    base_loader.load_ohlcv_bulk.assert_awaited_once()
+    base_loader.load_ohlcv_with_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_range_cache_fetches_only_uncovered_extension() -> None:
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    middle = start + timedelta(days=5)
+    end = start + timedelta(days=10)
+
+    async def load_range(**kwargs):
+        index = pd.date_range(
+            kwargs["start_time"],
+            kwargs["end_time"],
+            freq="1min",
+        )
+        return pd.DataFrame({"close": range(len(index))}, index=index)
+
+    base_loader = SimpleNamespace(
+        load_ohlcv_bulk=AsyncMock(),
+        load_ohlcv_with_cache=AsyncMock(side_effect=load_range),
+    )
+    loader = _InMemoryOHLCVCacheLoader(base_loader)
+
+    await loader.load_ohlcv_with_cache(
+        "ETH",
+        0,
+        "1m",
+        start_time=start,
+        end_time=middle,
+    )
+    extended = await loader.load_ohlcv_with_cache(
+        "ETH",
+        0,
+        "1m",
+        start_time=start + timedelta(days=2),
+        end_time=end,
+    )
+
+    assert extended.index.min() >= start + timedelta(days=2)
+    assert extended.index.max() < end
+    assert base_loader.load_ohlcv_with_cache.await_count == 2
+    extension_call = base_loader.load_ohlcv_with_cache.await_args_list[1].kwargs
+    assert extension_call["start_time"] == middle
+    assert extension_call["end_time"] == end

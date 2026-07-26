@@ -44,6 +44,40 @@ class OHLCVRepository:
 
     TABLE_NAME = "ohlcv"
 
+    @staticmethod
+    def _build_upsert_params(
+        symbol: str,
+        interval: str,
+        df: pd.DataFrame,
+    ) -> list[tuple]:
+        """Convert a standard OHLCV frame without the overhead of iterrows()."""
+        if df.empty:
+            return []
+
+        normalized = df.rename(columns=lambda column: str(column).lower())
+        required = ["open", "high", "low", "close", "volume"]
+        missing = [column for column in required if column not in normalized.columns]
+        if missing:
+            raise ValueError(f"OHLCV frame is missing columns: {', '.join(missing)}")
+
+        params = []
+        values = normalized[required].itertuples(index=False, name=None)
+        for timestamp, row in zip(normalized.index, values):
+            ts = (
+                timestamp.to_pydatetime()
+                if isinstance(timestamp, pd.Timestamp)
+                else timestamp
+            )
+            params.append(
+                (
+                    symbol,
+                    interval,
+                    _ensure_utc(ts),
+                    *(float(value) for value in row),
+                )
+            )
+        return params
+
     def __init__(self, db: TimescaleDB, logger):
         """
         Initialize OHLCV repository.
@@ -71,34 +105,12 @@ class OHLCVRepository:
         if df.empty:
             return 0
 
-        # Prepare data for batch insert
-        params_list = []
-
-        for timestamp, row in df.iterrows():
-            # Handle both datetime index and DatetimeIndex
-            if isinstance(timestamp, pd.Timestamp):
-                ts = timestamp.to_pydatetime()
-            else:
-                ts = timestamp
-
-            # Normalize timestamp to UTC (ensure tz-aware)
-            ts = _ensure_utc(ts)
-
-            params_list.append((
-                symbol,
-                interval,
-                ts,
-                float(row.get('open', row.get('Open', 0))),
-                float(row.get('high', row.get('High', 0))),
-                float(row.get('low', row.get('Low', 0))),
-                float(row.get('close', row.get('Close', 0))),
-                float(row.get('volume', row.get('Volume', 0))),
-            ))
+        params_list = self._build_upsert_params(symbol, interval, df)
 
         # Batch upsert
         query = """
             INSERT INTO ohlcv (symbol, interval, timestamp, open, high, low, close, volume)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES %s
             ON CONFLICT (symbol, interval, timestamp)
             DO UPDATE SET
                 open = EXCLUDED.open,
@@ -108,15 +120,11 @@ class OHLCVRepository:
                 volume = EXCLUDED.volume
         """
 
-        rows_affected = self.db.execute_many(query, params_list)
+        rows_affected = self.db.execute_values(query, params_list)
         return rows_affected
 
     def load_data(
-        self,
-        symbol: str,
-        interval: str,
-        start_date: datetime,
-        end_date: datetime
+        self, symbol: str, interval: str, start_date: datetime, end_date: datetime
     ) -> pd.DataFrame:
         """
         Load OHLCV data from database.
@@ -124,13 +132,11 @@ class OHLCVRepository:
         :param symbol: Trading symbol
         :param interval: Candle interval
         :param start_date: Start date (inclusive)
-        :param end_date: End date (inclusive)
+        :param end_date: End date (exclusive)
         :return: DataFrame with OHLCV data
         """
-        # Normalize dates to UTC start of day
-        start = _ensure_utc(start_date).replace(hour=0, minute=0, second=0, microsecond=0)
-        # End of day for end_date (UTC)
-        end = _ensure_utc(end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
+        start = _ensure_utc(start_date)
+        end = _ensure_utc(end_date)
 
         query = """
             SELECT timestamp, open, high, low, close, volume
@@ -138,7 +144,7 @@ class OHLCVRepository:
             WHERE symbol = %s
               AND interval = %s
               AND timestamp >= %s
-              AND timestamp <= %s
+              AND timestamp < %s
             ORDER BY timestamp ASC
         """
 
@@ -148,16 +154,18 @@ class OHLCVRepository:
             return pd.DataFrame()
 
         # Convert to DataFrame
-        df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df.set_index('timestamp', inplace=True)
+        df = pd.DataFrame(
+            rows, columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
+        df.set_index("timestamp", inplace=True)
 
         # Convert index to datetime and ensure UTC timezone
         df.index = pd.to_datetime(df.index, utc=True)
         # If timestamps from DB are tz-naive, assume they're UTC
         if df.index.tz is None:
-            df.index = df.index.tz_localize('UTC')
+            df.index = df.index.tz_localize("UTC")
         else:
-            df.index = df.index.tz_convert('UTC')
+            df.index = df.index.tz_convert("UTC")
 
         return df
 
@@ -184,20 +192,20 @@ class OHLCVRepository:
             date_obj = row[0]
             if isinstance(date_obj, datetime):
                 # If it's already a datetime, ensure it's UTC
-                dt = _ensure_utc(date_obj).replace(hour=0, minute=0, second=0, microsecond=0)
+                dt = _ensure_utc(date_obj).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
             else:
                 # If it's a date object, combine with min time and add UTC timezone
-                dt = datetime.combine(date_obj, datetime.min.time(), tzinfo=timezone.utc)
+                dt = datetime.combine(
+                    date_obj, datetime.min.time(), tzinfo=timezone.utc
+                )
             result.add(dt)
 
         return result
 
     def get_missing_date_ranges(
-        self,
-        symbol: str,
-        interval: str,
-        start_date: datetime,
-        end_date: datetime
+        self, symbol: str, interval: str, start_date: datetime, end_date: datetime
     ) -> List[Tuple[datetime, datetime]]:
         """
         Determine which date ranges are missing from cache.
@@ -237,11 +245,22 @@ class OHLCVRepository:
         # Group consecutive dates into ranges
         return self._group_consecutive_dates(missing_dates)
 
-    def _get_date_range(self, start_date: datetime, end_date: datetime) -> List[datetime]:
-        """Generate list of dates in range (UTC)."""
+    def _get_date_range(
+        self, start_date: datetime, end_date: datetime
+    ) -> List[datetime]:
+        """Generate UTC dates touched by the half-open interval [start, end)."""
+        if end_date <= start_date:
+            return []
         dates = []
-        current = _ensure_utc(start_date).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = _ensure_utc(end_date).replace(hour=0, minute=0, second=0, microsecond=0)
+        current = _ensure_utc(start_date).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        end = (_ensure_utc(end_date) - timedelta(microseconds=1)).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
 
         while current <= end:
             dates.append(current)
@@ -249,13 +268,18 @@ class OHLCVRepository:
 
         return dates
 
-    def _group_consecutive_dates(self, dates: List[datetime]) -> List[Tuple[datetime, datetime]]:
+    def _group_consecutive_dates(
+        self, dates: List[datetime]
+    ) -> List[Tuple[datetime, datetime]]:
         """Group consecutive dates into ranges."""
         if not dates:
             return []
 
         # Ensure all dates are UTC and tz-aware
-        dates = [_ensure_utc(d).replace(hour=0, minute=0, second=0, microsecond=0) for d in dates]
+        dates = [
+            _ensure_utc(d).replace(hour=0, minute=0, second=0, microsecond=0)
+            for d in dates
+        ]
         dates.sort()
 
         ranges = []
@@ -265,24 +289,22 @@ class OHLCVRepository:
         for date in dates[1:]:
             # Ensure both dates are tz-aware for comparison
             date = _ensure_utc(date).replace(hour=0, minute=0, second=0, microsecond=0)
-            range_end_utc = _ensure_utc(range_end).replace(hour=0, minute=0, second=0, microsecond=0)
+            range_end_utc = _ensure_utc(range_end).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
 
             if (date - range_end_utc).days == 1:
                 range_end = date
             else:
-                ranges.append((range_start, range_end))
+                ranges.append((range_start, range_end + timedelta(days=1)))
                 range_start = date
                 range_end = date
 
-        ranges.append((range_start, range_end))
+        ranges.append((range_start, range_end + timedelta(days=1)))
         return ranges
 
     def load_cached_data(
-        self,
-        symbol: str,
-        interval: str,
-        start_date: datetime,
-        end_date: datetime
+        self, symbol: str, interval: str, start_date: datetime, end_date: datetime
     ) -> pd.DataFrame:
         """
         Load cached data (alias for load_data for CacheManager compatibility).
@@ -300,7 +322,7 @@ class OHLCVRepository:
         interval: str,
         start_date: datetime,
         end_date: datetime,
-        symbols: Optional[List[str]] = None
+        symbols: Optional[List[str]] = None,
     ) -> Dict[str, pd.DataFrame]:
         """
         Load OHLCV data for symbols in one query.
@@ -310,12 +332,12 @@ class OHLCVRepository:
 
         :param interval: Candle interval (e.g., "1h")
         :param start_date: Start date (inclusive)
-        :param end_date: End date (inclusive)
+        :param end_date: End date (exclusive)
         :param symbols: Optional list of symbols to filter (loads all if None)
         :return: Dictionary mapping symbol to DataFrame
         """
-        start = _ensure_utc(start_date).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = _ensure_utc(end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
+        start = _ensure_utc(start_date)
+        end = _ensure_utc(end_date)
 
         if symbols:
             # Filter by specific symbols using IN clause
@@ -325,7 +347,7 @@ class OHLCVRepository:
                 FROM ohlcv
                 WHERE interval = %s
                   AND timestamp >= %s
-                  AND timestamp <= %s
+                  AND timestamp < %s
                   AND symbol IN ({placeholders})
                 ORDER BY symbol, timestamp ASC
             """
@@ -337,7 +359,7 @@ class OHLCVRepository:
                 FROM ohlcv
                 WHERE interval = %s
                   AND timestamp >= %s
-                  AND timestamp <= %s
+                  AND timestamp < %s
                 ORDER BY symbol, timestamp ASC
             """
             params = (interval, start, end)
@@ -372,20 +394,19 @@ class OHLCVRepository:
 
     def _rows_to_dataframe(self, rows: List[Tuple]) -> pd.DataFrame:
         """Convert rows to DataFrame with proper timestamp index."""
-        df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df.set_index('timestamp', inplace=True)
+        df = pd.DataFrame(
+            rows, columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
+        df.set_index("timestamp", inplace=True)
         df.index = pd.to_datetime(df.index, utc=True)
         if df.index.tz is None:
-            df.index = df.index.tz_localize('UTC')
+            df.index = df.index.tz_localize("UTC")
         else:
-            df.index = df.index.tz_convert('UTC')
+            df.index = df.index.tz_convert("UTC")
         return df
 
     def get_symbol_date_coverage(
-        self,
-        interval: str,
-        start_date: datetime,
-        end_date: datetime
+        self, interval: str, start_date: datetime, end_date: datetime
     ) -> Dict[str, Tuple[datetime, datetime]]:
         """
         Get the min/max timestamp for each symbol in the date range.
@@ -397,15 +418,15 @@ class OHLCVRepository:
         :param end_date: End date
         :return: Dict mapping symbol to (min_timestamp, max_timestamp)
         """
-        start = _ensure_utc(start_date).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = _ensure_utc(end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
+        start = _ensure_utc(start_date)
+        end = _ensure_utc(end_date)
 
         query = """
             SELECT symbol, MIN(timestamp), MAX(timestamp)
             FROM ohlcv
             WHERE interval = %s
               AND timestamp >= %s
-              AND timestamp <= %s
+              AND timestamp < %s
             GROUP BY symbol
         """
 
@@ -431,38 +452,17 @@ class OHLCVRepository:
         if not data:
             return 0
 
-        # Collect all params
         params_list = []
 
         for symbol, df in data.items():
-            if df.empty:
-                continue
-
-            for timestamp, row in df.iterrows():
-                if isinstance(timestamp, pd.Timestamp):
-                    ts = timestamp.to_pydatetime()
-                else:
-                    ts = timestamp
-
-                ts = _ensure_utc(ts)
-
-                params_list.append((
-                    symbol,
-                    interval,
-                    ts,
-                    float(row.get('open', row.get('Open', 0))),
-                    float(row.get('high', row.get('High', 0))),
-                    float(row.get('low', row.get('Low', 0))),
-                    float(row.get('close', row.get('Close', 0))),
-                    float(row.get('volume', row.get('Volume', 0))),
-                ))
+            params_list.extend(self._build_upsert_params(symbol, interval, df))
 
         if not params_list:
             return 0
 
         query = """
             INSERT INTO ohlcv (symbol, interval, timestamp, open, high, low, close, volume)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES %s
             ON CONFLICT (symbol, interval, timestamp)
             DO UPDATE SET
                 open = EXCLUDED.open,
@@ -472,7 +472,6 @@ class OHLCVRepository:
                 volume = EXCLUDED.volume
         """
 
-        rows_affected = self.db.execute_many(query, params_list)
+        rows_affected = self.db.execute_values(query, params_list)
         self.logger.info(f"Bulk saved {rows_affected} rows for {len(data)} symbols")
         return rows_affected
-

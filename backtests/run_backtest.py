@@ -193,6 +193,7 @@ class HistoricalFundingCache:
             f"Loading historical funding rates for {len(symbols)} symbols..."
         )
 
+        failures = []
         for symbol in symbols:
             try:
                 rates = await exchange_client.get_historical_funding_rates(
@@ -225,9 +226,14 @@ class HistoricalFundingCache:
             except Exception as e:
                 self._logger.warning(f"  {symbol}: Failed to load funding - {e}")
                 self._cache[symbol] = []
+                failures.append(symbol)
 
         total_records = sum(len(v) for v in self._cache.values())
         self._logger.info(f"Loaded {total_records} total funding records")
+        if failures:
+            raise RuntimeError(
+                "Historical funding load failed for: " + ", ".join(failures)
+            )
 
     def _normalize_to_8h(self, rate: float, interval_hours: int) -> float:
         """Normalize funding rate to 8-hour equivalent."""

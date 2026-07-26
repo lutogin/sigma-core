@@ -11,7 +11,6 @@ helpers to avoid logic drift.
 
 from __future__ import annotations
 
-import math
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 from src.domain.data_loader import AsyncDataLoaderService
@@ -31,18 +30,17 @@ def compute_trailing_pullback_calibration(
     trailing_pullback_extreme_base: float,
 ) -> Tuple[float, float, float]:
     """
-    Scale trailing pullback thresholds for 1m pseudo-tick emulation.
+    Keep live and backtest pullbacks identical in Z-score units.
+
+    Sampling more frequently changes when the reversal is observed, not the
+    distance from peak Z required to confirm it. Scaling by sqrt(timeframe)
+    made simulated entries easier than the WebSocket live path.
 
     Returns:
         (trailing_pullback, trailing_pullback_extreme, pullback_scale)
     """
-    timeframe_minutes = max(1, get_timeframe_minutes(timeframe))
-    pullback_scale = math.sqrt(1.0 / timeframe_minutes)
-    trailing_pullback = math.floor(trailing_pullback_base * pullback_scale * 100) / 100
-    trailing_pullback_extreme = (
-        math.floor(trailing_pullback_extreme_base * pullback_scale * 100) / 100
-    )
-    return trailing_pullback, trailing_pullback_extreme, pullback_scale
+    get_timeframe_minutes(timeframe)  # Validate the configured timeframe.
+    return trailing_pullback_base, trailing_pullback_extreme_base, 1.0
 
 
 def build_backtest_config_kwargs(
