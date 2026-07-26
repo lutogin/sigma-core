@@ -23,21 +23,28 @@ from dateutil.relativedelta import relativedelta
 # Add the parent directory to sys.path so we can import from src
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.domain.data_loader.async_data_loader import AsyncDataLoaderService
-from src.domain.screener.correlation import CorrelationService
-from src.domain.screener.z_score import ZScoreService
-from src.domain.screener.volatility_filter import VolatilityFilterService
-from src.domain.screener.hurst_filter import HurstFilterService
 from src.infra.container import Container
 
-# Import from existing backtest script
-from run_backtest import (
-    BacktestConfig,
-    BacktestResult,
-    StatArbBacktest,
-    print_symbol_stats,
-    SymbolStats,
-)
+try:
+    from backtests.backtest_shared import (
+        build_backtest_config_kwargs,
+        build_backtest_services,
+    )
+    from backtests.run_backtest import (
+        BacktestConfig,
+        BacktestResult,
+        HistoricalFundingCache,
+        StatArbBacktest,
+    )
+except ImportError:
+    # Support direct execution from the backtests directory.
+    from backtest_shared import build_backtest_config_kwargs, build_backtest_services
+    from run_backtest import (
+        BacktestConfig,
+        BacktestResult,
+        HistoricalFundingCache,
+        StatArbBacktest,
+    )
 
 
 class WalkForwardRunner:
@@ -113,8 +120,29 @@ class WalkForwardRunner:
         total_trades = sum(r.total_trades for _, r in self.results)
         total_wins = sum(r.winning_trades for _, r in self.results)
 
+        all_trades = [trade for _, result in self.results for trade in result.trades]
         monthly_data = []
         for period, res in self.results:
+            serialized_trades = [
+                {
+                    "symbol": trade.symbol,
+                    "side": trade.side,
+                    "entry_time": trade.entry_time.isoformat(),
+                    "exit_time": trade.exit_time.isoformat(),
+                    "exit_reason": trade.exit_reason,
+                    "coin_notional": trade.coin_notional or trade.size_usdt,
+                    "primary_notional": trade.primary_notional,
+                    "gross_notional": trade.gross_notional,
+                    "size_multiplier": trade.size_multiplier,
+                    "margin_used": trade.margin_used,
+                    "pnl": trade.pnl,
+                    "pnl_pct": trade.pnl_pct,
+                    "return_on_margin_pct": trade.return_on_margin_pct,
+                    "fees": trade.fees,
+                    "funding_pnl": trade.funding_pnl,
+                }
+                for trade in res.trades
+            ]
             monthly_data.append(
                 {
                     "period": period,
@@ -126,6 +154,25 @@ class WalkForwardRunner:
                     "max_drawdown": res.max_drawdown,
                     "max_drawdown_pct": res.max_drawdown_pct,
                     "sharpe_ratio": res.sharpe_ratio,
+                    "gross_notional": sum(
+                        trade.gross_notional for trade in res.trades
+                    ),
+                    "avg_coin_notional": (
+                        sum(
+                            trade.coin_notional or trade.size_usdt
+                            for trade in res.trades
+                        )
+                        / len(res.trades)
+                        if res.trades
+                        else 0.0
+                    ),
+                    "avg_primary_notional": (
+                        sum(trade.primary_notional for trade in res.trades)
+                        / len(res.trades)
+                        if res.trades
+                        else 0.0
+                    ),
+                    "trades_detail": serialized_trades,
                 }
             )
 
@@ -148,6 +195,24 @@ class WalkForwardRunner:
                     sum(r.sharpe_ratio for _, r in self.results) / len(self.results)
                     if self.results
                     else 0
+                ),
+                "gross_notional": sum(
+                    trade.gross_notional for trade in all_trades
+                ),
+                "avg_coin_notional": (
+                    sum(
+                        trade.coin_notional or trade.size_usdt
+                        for trade in all_trades
+                    )
+                    / len(all_trades)
+                    if all_trades
+                    else 0.0
+                ),
+                "avg_primary_notional": (
+                    sum(trade.primary_notional for trade in all_trades)
+                    / len(all_trades)
+                    if all_trades
+                    else 0.0
                 ),
             },
         }
@@ -277,9 +342,15 @@ async def main():
     )
     parser.add_argument("--end", type=str, default=None, help="End date (YYYY-MM-DD)")
     parser.add_argument(
-        "--balance", type=float, default=10000.0, help="Initial balance"
+        "--balance", type=float, default=40000.0, help="Initial balance. Default: 40000"
     )
     parser.add_argument("--leverage", type=int, default=None, help="Leverage")
+    parser.add_argument(
+        "--env-file",
+        type=str,
+        default=None,
+        help="Explicit settings file. Default: project .env",
+    )
     parser.add_argument(
         "--coin",
         type=str,
@@ -305,6 +376,10 @@ async def main():
     )
 
     args = parser.parse_args()
+    if args.balance <= 0:
+        parser.error("--balance must be positive")
+    if args.leverage is not None and args.leverage <= 0:
+        parser.error("--leverage must be positive")
 
     # Parse dates
     start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -314,7 +389,7 @@ async def main():
         end_date = datetime.now(timezone.utc)
 
     # Init container
-    container = Container().init()
+    container = Container().init(args.env_file)
     settings = container.settings
     logger = container.logger
 
@@ -327,51 +402,44 @@ async def main():
     use_trailing_entry = args.use_trailing_entry.lower() in ("true", "1", "yes")
     use_live_exit = args.use_live_exit.lower() in ("true", "1", "yes")
 
-    # Config
-    config = BacktestConfig(
+    config_kwargs = build_backtest_config_kwargs(
+        settings=settings,
         initial_balance=args.balance,
-        leverage=args.leverage or BacktestConfig.leverage,
-        z_entry_threshold=settings.Z_ENTRY_THRESHOLD,
-        z_tp_threshold=settings.Z_TP_THRESHOLD,
-        z_sl_threshold=settings.Z_SL_THRESHOLD,
-        min_correlation=settings.MIN_CORRELATION,
+        position_size_usdt=settings.POSITION_SIZE_USDT,
+        position_size_pct=settings.POSITION_SIZE_USDT / args.balance,
+        leverage=args.leverage or settings.EXCHANGE_DEFAULT_LEVERAGE,
+        max_spreads=settings.MAX_OPEN_SPREADS,
         consistent_pairs=consistent_pairs or [],
+        use_funding_filter=True,
         use_trailing_entry=use_trailing_entry,
         use_live_exit=use_live_exit,
+        use_dynamic_tp=True,
+        lazy_load_minute_data=True,
+        use_adf_filter=True,
     )
+    config = BacktestConfig(**config_kwargs)
 
     # Services
     exchange = container.exchange_client
     await exchange.connect()
 
     try:
-        services = {
-            "settings": settings,
-            "data_loader": AsyncDataLoaderService(
-                logger, exchange, container.ohlcv_repository
-            ),
-            "correlation_service": CorrelationService(
-                logger, settings.LOOKBACK_WINDOW_DAYS, settings.TIMEFRAME
-            ),
-            "z_score_service": ZScoreService(
-                logger,
-                settings.LOOKBACK_WINDOW_DAYS,
-                settings.TIMEFRAME,
-                settings.Z_ENTRY_THRESHOLD,
-                settings.Z_TP_THRESHOLD,
-                settings.Z_SL_THRESHOLD,
-            ),
-            "volatility_filter_service": VolatilityFilterService(
-                logger=logger,
-                primary_pair=settings.PRIMARY_PAIR,
-                timeframe=settings.TIMEFRAME,
-                volatility_window=settings.VOLATILITY_WINDOW,
-                volatility_threshold=settings.VOLATILITY_THRESHOLD,
-                crash_window=settings.VOLATILITY_CRASH_WINDOW,
-                crash_threshold=settings.VOLATILITY_CRASH_THRESHOLD,
-            ),
-            "hurst_filter_service": HurstFilterService(logger),
-        }
+        funding_cache = HistoricalFundingCache(logger=logger)
+        warmup_days = settings.LOOKBACK_WINDOW_DAYS * 3 + 2
+        await funding_cache.load(
+            exchange_client=exchange,
+            symbols=[settings.PRIMARY_PAIR, *(consistent_pairs or [])],
+            start_date=start_date - timedelta(days=warmup_days),
+            end_date=end_date,
+        )
+        services = build_backtest_services(
+            settings=settings,
+            logger=logger,
+            exchange_client=exchange,
+            ohlcv_repository=container.ohlcv_repository,
+            config=config,
+            funding_cache=funding_cache,
+        )
 
         runner = WalkForwardRunner(services, config, json_output=args.json_output)
         await runner.run(start_date, end_date)

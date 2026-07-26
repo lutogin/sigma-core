@@ -14,6 +14,7 @@ from backtests.run_universe_walk_forward import (
     UniverseWalkForwardRunner,
     WFStepResult,
     _InMemoryOHLCVCacheLoader,
+    _serialize_trade,
 )
 
 
@@ -197,6 +198,37 @@ def test_kill_switch_discards_trades_after_trigger_on_same_coin() -> None:
     assert killed is True
     assert reason == "LOSS_STREAK_3"
     assert len(kept) == 3
+
+
+def test_trade_report_contains_actual_leg_notionals() -> None:
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    trade = Trade(
+        symbol="LINK/USDT:USDT",
+        side="long",
+        entry_time=start,
+        exit_time=start + timedelta(hours=1),
+        entry_z_score=-2.5,
+        exit_z_score=-0.2,
+        entry_price=10.0,
+        exit_price=10.1,
+        size_usdt=10_000.0,
+        pnl=100.0,
+        pnl_pct=0.5,
+        exit_reason="TP",
+        duration_hours=1.0,
+        gross_notional=18_000.0,
+        margin_used=1_800.0,
+        coin_notional=10_000.0,
+        primary_notional=8_000.0,
+        size_multiplier=1.0,
+    )
+
+    payload = _serialize_trade(trade)
+
+    assert payload["coin_notional"] == 10_000.0
+    assert payload["primary_notional"] == 8_000.0
+    assert payload["gross_notional"] == 18_000.0
+    assert payload["size_multiplier"] == 1.0
 
 
 @pytest.mark.asyncio

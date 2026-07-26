@@ -41,6 +41,7 @@ from src.domain.screener.halflife_filter import HalfLifeFilterService
 from src.domain.screener.volatility_filter import VolatilityFilterService
 from src.domain.screener.z_score import ZScoreService, ZScoreResult
 from src.domain.screener.statistics import benjamini_hochberg_passes
+from src.domain.trading.position_sizing import calculate_coin_notional
 from src.infra.container import Container
 from src.domain.utils import get_timeframe_minutes
 
@@ -394,7 +395,8 @@ class BacktestConfig:
     # If <= 0, backtest falls back to percentage mode via position_size_pct.
     position_size_usdt: float = 1000.0
     max_spreads: int = 3  # Maximum concurrent spread positions
-    max_coin_notional_pct: float = 0.10
+    # Final dynamically-sized COIN-leg cap vs equity.
+    max_coin_notional_pct: float = 0.525
     max_margin_utilization: float = 0.50
 
     # Strategy thresholds (from settings)
@@ -598,6 +600,7 @@ class Position:
 
     # Trailing SL tracking
     min_z_reached: float = 0.0  # Minimum |Z| reached during position lifetime
+    size_multiplier: float = 1.0
 
 
 @dataclass
@@ -646,6 +649,9 @@ class Trade:
     gross_notional: float = 0.0
     margin_used: float = 0.0
     return_on_margin_pct: float = 0.0
+    coin_notional: float = 0.0
+    primary_notional: float = 0.0
+    size_multiplier: float = 1.0
 
 
 @dataclass
@@ -2895,11 +2901,17 @@ class StatArbBacktest:
         2. Percentage mode: balance * position_size_pct
         """
         if self.config.position_size_usdt > 0:
-            requested = self.config.position_size_usdt
-        else:
-            requested = self.balance * self.config.position_size_pct
-        risk_cap = max(0.0, self.balance) * self.config.max_coin_notional_pct
-        return min(requested, risk_cap)
+            return self.config.position_size_usdt
+        return self.balance * self.config.position_size_pct
+
+    def _get_position_sizing(self, multiplier: float):
+        """Apply dynamic sizing before the final per-COIN equity ceiling."""
+        return calculate_coin_notional(
+            base_notional=self._get_base_position_size(),
+            size_multiplier=multiplier,
+            equity=self.balance,
+            max_coin_notional_pct=self.config.max_coin_notional_pct,
+        )
 
     def _used_margin(self) -> float:
         return sum(
@@ -2936,12 +2948,10 @@ class StatArbBacktest:
             assumptions=self._execution_assumptions(),
         )
 
-        # Calculate base position size
-        base_position_size = self._get_base_position_size()
-
-        # Apply HalfLife-based dynamic position sizing if enabled
+        # Apply Half-Life sizing to the configured base, then the final risk cap.
         multiplier = self._calculate_halflife_multiplier(watch.halflife)
-        position_size = base_position_size * multiplier
+        sizing = self._get_position_sizing(multiplier)
+        position_size = sizing.final_notional
 
         # Position sizing
         beta = abs(watch.beta)
@@ -2991,6 +3001,7 @@ class StatArbBacktest:
             z_sl_threshold=calculated_sl_threshold,
             initial_sl_threshold=calculated_sl_threshold,
             min_z_reached=entry_abs_z,  # Start from entry Z
+            size_multiplier=multiplier,
         )
 
         self.positions[symbol] = position
@@ -3003,6 +3014,7 @@ class StatArbBacktest:
             f"✅ WATCH ENTRY {symbol} | Z={entry_z:.2f} (peak={watch.max_z:.2f}) | "
             f"pullback={watch.max_z - abs(entry_z):.2f} | "
             f"watch_duration={watch_duration:.0f}min | "
+            f"COIN=${coin_size:.2f} | ETH=${primary_size:.2f} | "
             f"β={beta:.3f}{multiplier_str}"
         )
         self._print_portfolio_state()
@@ -3184,6 +3196,9 @@ class StatArbBacktest:
             gross_notional=gross_notional,
             margin_used=margin_used,
             return_on_margin_pct=pnl / margin_used * 100,
+            coin_notional=position.coin_size,
+            primary_notional=position.primary_size,
+            size_multiplier=position.size_multiplier,
         )
 
         self.trades.append(trade)
@@ -3231,10 +3246,7 @@ class StatArbBacktest:
         IMPORTANT: Captures "frozen" parameters (beta, spread_mean, spread_std)
         for ExitObserver simulation to use for TP/SL calculations.
         """
-        # Calculate base position size
-        base_position_size = self._get_base_position_size()
-
-        # Apply HalfLife-based dynamic position sizing if enabled
+        # Apply Half-Life sizing to the configured base, then the final risk cap.
         halflife = None
         multiplier = 1.0
         if self.config.use_dynamic_position_size and correlation_results:
@@ -3243,7 +3255,8 @@ class StatArbBacktest:
             )
             multiplier = self._calculate_halflife_multiplier(halflife)
 
-        position_size = base_position_size * multiplier
+        sizing = self._get_position_sizing(multiplier)
+        position_size = sizing.final_notional
 
         # Signal is known at the candle close. Estimate executable bid/ask
         # fills rather than assuming both legs trade at that close/mid.
@@ -3315,6 +3328,7 @@ class StatArbBacktest:
             z_sl_threshold=calculated_sl_threshold,
             initial_sl_threshold=calculated_sl_threshold,
             min_z_reached=entry_abs_z,  # Start from entry Z
+            size_multiplier=multiplier,
         )
 
         self.positions[symbol] = position
@@ -3455,6 +3469,9 @@ class StatArbBacktest:
             gross_notional=gross_notional,
             margin_used=margin_used,
             return_on_margin_pct=pnl / margin_used * 100,
+            coin_notional=position.coin_size,
+            primary_notional=position.primary_size,
+            size_multiplier=position.size_multiplier,
         )
 
         self.trades.append(trade)
@@ -3942,7 +3959,7 @@ Examples:
         "--balance",
         type=float,
         default=None,
-        help="Initial balance in USDT. Default: 10000",
+        help="Initial balance in USDT. Default: 40000",
     )
     parser.add_argument(
         "--risk",
@@ -4100,7 +4117,7 @@ Examples:
     except ValueError as exc:
         parser.error(str(exc))
 
-    initial_balance = args.balance if args.balance is not None else 10_000.0
+    initial_balance = args.balance if args.balance is not None else 40_000.0
     max_spreads = (
         args.max_spreads if args.max_spreads is not None else settings.MAX_OPEN_SPREADS
     )
@@ -4176,12 +4193,20 @@ Examples:
     print(f"  Initial Balance:     ${config.initial_balance:,.2f}")
     if config.position_size_usdt > 0:
         print(f"  Position Size Mode:  fixed USDT")
-        effective_size = min(
-            config.position_size_usdt,
-            config.initial_balance * config.max_coin_notional_pct,
+        final_cap = config.initial_balance * config.max_coin_notional_pct
+        effective_min = min(
+            config.position_size_usdt * config.halflife_multiplier_min,
+            final_cap,
+        )
+        effective_max = min(
+            config.position_size_usdt * config.halflife_multiplier_max,
+            final_cap,
         )
         print(f"  Requested COIN Size: ${config.position_size_usdt:,.2f}")
-        print(f"  Effective Max Size:  ${effective_size:,.2f}")
+        print(
+            f"  Effective COIN Range:${effective_min:,.2f} - ${effective_max:,.2f}"
+        )
+        print(f"  Final COIN Cap:      ${final_cap:,.2f}")
         print(f"  Equivalent Risk:     {config.position_size_pct * 100:.1f}%")
     else:
         print(f"  Position Size Mode:  percent")

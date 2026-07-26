@@ -24,6 +24,7 @@ from src.domain.position_state import (
     PositionStateService,
     SpreadSide as StateSpreadSide,
 )
+from src.domain.trading.position_sizing import calculate_coin_notional
 from src.infra.event_emitter import (
     BaseEvent,
     EventEmitter,
@@ -66,7 +67,7 @@ class TradingService:
         target_halflife_bars: float = 12.0,
         min_size_multiplier: float = 0.5,
         max_size_multiplier: float = 2.0,
-        max_coin_notional_pct: float = 0.10,
+        max_coin_notional_pct: float = 0.525,
         max_margin_utilization: float = 0.50,
     ):
         """
@@ -341,18 +342,21 @@ class TradingService:
             size_multiplier = self._calculate_size_multiplier(event.halflife)
             balance = await self._exchange.get_balance("USDT")
             equity = max(0.0, balance.total)
-            base_size = min(
-                self._position_size_usdt,
-                equity * self._max_coin_notional_pct,
+            sizing = calculate_coin_notional(
+                base_notional=self._position_size_usdt,
+                size_multiplier=size_multiplier,
+                equity=equity,
+                max_coin_notional_pct=self._max_coin_notional_pct,
             )
-            coin_size_usdt = base_size * size_multiplier
+            coin_size_usdt = sizing.final_notional
             primary_size_usdt = coin_size_usdt * abs(event.beta)
             total_required = coin_size_usdt + primary_size_usdt
 
             self._logger.info(
                 f"📊 Position sizing: requested={self._position_size_usdt:.0f}, "
-                f"risk_capped_base={base_size:.0f} × "
-                f"mult={size_multiplier:.2f}x (HL={event.halflife:.1f}) = "
+                f"mult={size_multiplier:.2f}x (HL={event.halflife:.1f}) → "
+                f"desired={sizing.desired_notional:.2f}, "
+                f"final_cap={sizing.equity_cap_notional:.2f}, "
                 f"coin={coin_size_usdt:.2f} USDT"
             )
 

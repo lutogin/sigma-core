@@ -14,7 +14,7 @@ import argparse
 import asyncio
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -35,6 +35,10 @@ class MonthlyResult:
     max_drawdown: float
     max_drawdown_pct: float
     sharpe_ratio: float
+    gross_notional: float = 0.0
+    avg_coin_notional: float = 0.0
+    avg_primary_notional: float = 0.0
+    trades_detail: List[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -53,6 +57,9 @@ class CoinResult:
     max_drawdown_pct: float
     avg_sharpe: float
     monthly_results: List[MonthlyResult]
+    gross_notional: float = 0.0
+    avg_coin_notional: float = 0.0
+    avg_primary_notional: float = 0.0
     error: Optional[str] = None
 
 
@@ -66,6 +73,7 @@ class CoinWalkForwardRunner:
         end_date: str,
         balance: float,
         leverage: Optional[int],
+        env_file: Optional[str] = None,
         workers: int = DEFAULT_WORKERS,
         use_trailing_entry: bool = True,
         use_live_exit: bool = True,
@@ -75,6 +83,7 @@ class CoinWalkForwardRunner:
         self.end_date = end_date
         self.balance = balance
         self.leverage = leverage
+        self.env_file = env_file
         self.workers = workers
         self.use_trailing_entry = use_trailing_entry
         self.use_live_exit = use_live_exit
@@ -170,6 +179,8 @@ class CoinWalkForwardRunner:
 
         if self.leverage:
             cmd.extend(["--leverage", str(self.leverage)])
+        if self.env_file:
+            cmd.extend(["--env-file", self.env_file])
 
         # Get backtests directory path
         backtests_dir = Path(__file__).parent
@@ -253,6 +264,10 @@ class CoinWalkForwardRunner:
                     max_drawdown=m["max_drawdown"],
                     max_drawdown_pct=m["max_drawdown_pct"],
                     sharpe_ratio=m["sharpe_ratio"],
+                    gross_notional=m.get("gross_notional", 0.0),
+                    avg_coin_notional=m.get("avg_coin_notional", 0.0),
+                    avg_primary_notional=m.get("avg_primary_notional", 0.0),
+                    trades_detail=m.get("trades_detail", []),
                 )
                 for m in monthly
             ]
@@ -270,6 +285,9 @@ class CoinWalkForwardRunner:
                 max_drawdown_pct=summary.get("max_drawdown_pct", 0),
                 avg_sharpe=summary.get("avg_sharpe", 0),
                 monthly_results=monthly_results,
+                gross_notional=summary.get("gross_notional", 0.0),
+                avg_coin_notional=summary.get("avg_coin_notional", 0.0),
+                avg_primary_notional=summary.get("avg_primary_notional", 0.0),
             )
 
         except Exception as e:
@@ -471,6 +489,9 @@ class CoinWalkForwardRunner:
                     "max_drawdown": r.max_drawdown,
                     "max_drawdown_pct": r.max_drawdown_pct,
                     "avg_sharpe": r.avg_sharpe,
+                    "gross_notional": r.gross_notional,
+                    "avg_coin_notional": r.avg_coin_notional,
+                    "avg_primary_notional": r.avg_primary_notional,
                     "monthly_results": [
                         {
                             "period": m.period,
@@ -481,6 +502,10 @@ class CoinWalkForwardRunner:
                             "max_drawdown": m.max_drawdown,
                             "max_drawdown_pct": m.max_drawdown_pct,
                             "sharpe_ratio": m.sharpe_ratio,
+                            "gross_notional": m.gross_notional,
+                            "avg_coin_notional": m.avg_coin_notional,
+                            "avg_primary_notional": m.avg_primary_notional,
+                            "trades_detail": m.trades_detail,
                         }
                         for m in r.monthly_results
                     ],
@@ -506,10 +531,16 @@ def main():
         "--end", type=str, default=None, help="End date (YYYY-MM-DD). Default: today"
     )
     parser.add_argument(
-        "--balance", type=float, default=10000.0, help="Initial balance. Default: 10000"
+        "--balance", type=float, default=40000.0, help="Initial balance. Default: 40000"
     )
     parser.add_argument(
         "--leverage", type=int, default=None, help="Leverage. Default: from settings"
+    )
+    parser.add_argument(
+        "--env-file",
+        type=str,
+        default=None,
+        help="Explicit settings file passed to subprocesses. Default: project .env",
     )
     parser.add_argument(
         "--workers",
@@ -536,6 +567,10 @@ def main():
         help="Use live exit emulation in subprocess walk-forward runs (true/false). Default: true",
     )
     args = parser.parse_args()
+    if args.balance <= 0 or args.workers <= 0:
+        parser.error("--balance and --workers must be positive")
+    if args.leverage is not None and args.leverage <= 0:
+        parser.error("--leverage must be positive")
 
     # Validate dates
     start_date = args.start
@@ -565,6 +600,7 @@ def main():
         end_date=end_date,
         balance=args.balance,
         leverage=args.leverage,
+        env_file=args.env_file,
         workers=args.workers,
         use_trailing_entry=use_trailing_entry,
         use_live_exit=use_live_exit,

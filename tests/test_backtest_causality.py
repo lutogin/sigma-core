@@ -132,16 +132,23 @@ def test_rate_limiter_can_be_constructed_without_an_event_loop() -> None:
     assert limiter._tokens == 20.0
 
 
-def test_fixed_notional_is_capped_by_equity_risk_budget() -> None:
+def test_fixed_notional_applies_halflife_before_final_equity_cap() -> None:
     backtest = StatArbBacktest.__new__(StatArbBacktest)
     backtest.config = BacktestConfig(
-        initial_balance=10_000.0,
+        initial_balance=40_000.0,
         position_size_usdt=10_000.0,
-        max_coin_notional_pct=0.10,
+        max_coin_notional_pct=0.525,
     )
-    backtest.balance = 10_000.0
+    backtest.balance = 40_000.0
 
-    assert backtest._get_base_position_size() == pytest.approx(1_000.0)
+    assert backtest._get_base_position_size() == pytest.approx(10_000.0)
+    assert backtest._get_position_sizing(0.5).final_notional == pytest.approx(5_000.0)
+    assert backtest._get_position_sizing(2.1).final_notional == pytest.approx(
+        21_000.0
+    )
+    assert backtest._get_position_sizing(3.0).final_notional == pytest.approx(
+        21_000.0
+    )
 
 
 def test_backtest_uses_same_z_pullback_as_live_observer() -> None:

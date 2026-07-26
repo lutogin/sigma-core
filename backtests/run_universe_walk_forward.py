@@ -374,6 +374,29 @@ class UniverseWFResult:
     live_selection_scores: Dict[str, float]
 
 
+def _serialize_trade(trade: Trade) -> Dict[str, Any]:
+    """Serialize execution and sizing details needed to audit backtest PnL."""
+    return {
+        "symbol": trade.symbol,
+        "side": trade.side,
+        "entry_time": trade.entry_time.isoformat(),
+        "exit_time": trade.exit_time.isoformat(),
+        "entry_z_score": trade.entry_z_score,
+        "exit_z_score": trade.exit_z_score,
+        "exit_reason": trade.exit_reason,
+        "coin_notional": trade.coin_notional or trade.size_usdt,
+        "primary_notional": trade.primary_notional,
+        "gross_notional": trade.gross_notional,
+        "size_multiplier": trade.size_multiplier,
+        "margin_used": trade.margin_used,
+        "pnl": trade.pnl,
+        "pnl_pct": trade.pnl_pct,
+        "return_on_margin_pct": trade.return_on_margin_pct,
+        "fees": trade.fees,
+        "funding_pnl": trade.funding_pnl,
+    }
+
+
 # =============================================================================
 # Universe Walk-Forward Runner
 # =============================================================================
@@ -530,6 +553,23 @@ class UniverseWalkForwardRunner:
         )
         print(
             f"   1m Data Loading: {'LAZY (on-demand)' if self.base_config.lazy_load_minute_data else 'EAGER (preload all)'}"
+        )
+        final_coin_cap = (
+            self.base_config.initial_balance
+            * self.base_config.max_coin_notional_pct
+        )
+        min_coin_size = min(
+            self._base_r_value() * self.base_config.halflife_multiplier_min,
+            final_coin_cap,
+        )
+        max_coin_size = min(
+            self._base_r_value() * self.base_config.halflife_multiplier_max,
+            final_coin_cap,
+        )
+        print(
+            f"   COIN Notional: ${self._base_r_value():,.0f} base × Half-Life "
+            f"→ ${min_coin_size:,.0f}-${max_coin_size:,.0f} "
+            f"(final cap ${final_coin_cap:,.0f})"
         )
         print(
             f"   Coin backtest logs: {'VERBOSE' if self.verbose_coin_backtests else 'QUIET'}"
@@ -1399,6 +1439,7 @@ class UniverseWalkForwardRunner:
                         "profit_factor": row.profit_factor,
                         "costs": row.costs,
                         "score": row.score,
+                        "trades": [_serialize_trade(trade) for trade in row.trades],
                     }
                     for row in result.live_selection_results
                 ],
@@ -1422,6 +1463,15 @@ class UniverseWalkForwardRunner:
                             "win_rate": r.win_rate,
                             "was_killed": r.was_killed,
                             "kill_reason": r.kill_reason,
+                            "gross_notional": sum(
+                                trade.gross_notional for trade in r.trades
+                            ),
+                            "margin_used": sum(
+                                trade.margin_used for trade in r.trades
+                            ),
+                            "trades": [
+                                _serialize_trade(trade) for trade in r.trades
+                            ],
                         }
                         for r in s.trade_results
                     ],
@@ -1485,7 +1535,7 @@ Examples:
         help="Metric for ranking coins. Default: netPnL",
     )
     parser.add_argument(
-        "--balance", type=float, default=10000.0, help="Initial balance. Default: 10000"
+        "--balance", type=float, default=40000.0, help="Initial balance. Default: 40000"
     )
     parser.add_argument(
         "--leverage", type=int, default=None, help="Leverage. Default: from settings"

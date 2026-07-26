@@ -32,7 +32,7 @@ def test_settings_have_fail_closed_balanced_defaults(monkeypatch) -> None:
     assert settings.ALLOW_TRADING is False
     assert settings.EXCHANGE_DEFAULT_LEVERAGE == 5
     assert settings.MAX_OPEN_SPREADS == 3
-    assert settings.MAX_COIN_NOTIONAL_PCT == 0.10
+    assert settings.MAX_COIN_NOTIONAL_PCT == 0.525
     assert settings.MAX_MARGIN_UTILIZATION == 0.50
     assert settings.MAX_POSITION_BARS == 96
     assert settings.MAX_FUNDING_COST_THRESHOLD == -0.0005

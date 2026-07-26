@@ -169,7 +169,7 @@ class Settings:
 
     # Position sizing
     POSITION_SIZE_USDT: float = 1000.0  # USDT размер позиции на COIN ногу
-    MAX_COIN_NOTIONAL_PCT: float = 0.10  # Per-spread COIN leg cap vs equity
+    MAX_COIN_NOTIONAL_PCT: float = 0.525  # Final dynamically-sized COIN leg cap
     MAX_MARGIN_UTILIZATION: float = 0.50  # Keep margin reserve for exits/funding
 
     # Trading settings
@@ -357,7 +357,9 @@ class Settings:
 
         # Position sizing
         self.POSITION_SIZE_USDT = float(os.getenv("POSITION_SIZE_USDT", "1000.0"))
-        self.MAX_COIN_NOTIONAL_PCT = float(os.getenv("MAX_COIN_NOTIONAL_PCT", "0.10"))
+        self.MAX_COIN_NOTIONAL_PCT = float(
+            os.getenv("MAX_COIN_NOTIONAL_PCT", "0.525")
+        )
         self.MAX_MARGIN_UTILIZATION = float(os.getenv("MAX_MARGIN_UTILIZATION", "0.50"))
 
         # Trading
