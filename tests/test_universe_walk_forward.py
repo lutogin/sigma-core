@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock
@@ -9,7 +10,9 @@ import pytest
 from backtests.run_backtest import BacktestConfig, Trade
 from backtests.run_universe_walk_forward import (
     CoinTrainResult,
+    UniverseWFResult,
     UniverseWalkForwardRunner,
+    WFStepResult,
     _InMemoryOHLCVCacheLoader,
 )
 
@@ -69,6 +72,58 @@ def test_sparse_one_trade_winner_is_not_selected_by_default() -> None:
     runner.allow_sparse_train_selection = True
     selected_with_fallback, _ = runner._select_coins(results)
     assert selected_with_fallback == ["ROBUST", "LUCKY"]
+
+
+def test_report_keeps_flat_steps_separate_from_losses(tmp_path, capsys) -> None:
+    runner = _bare_runner()
+    runner.coins = []
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    steps = [
+        WFStepResult(
+            step_num=index,
+            train_start=start,
+            train_end=start + timedelta(days=1),
+            trade_start=start + timedelta(days=1),
+            trade_end=start + timedelta(days=2),
+            train_results=[],
+            selected_coins=[],
+            selection_scores={},
+            trade_results=[],
+            portfolio_pnl=pnl,
+            portfolio_dd=0.0,
+        )
+        for index, pnl in enumerate((1.0, 0.0, -1.0), 1)
+    ]
+    result = UniverseWFResult(
+        start_date=start,
+        end_date=start + timedelta(days=2),
+        train_days=1,
+        trade_days=1,
+        top_k=2,
+        min_trades_train=3,
+        rank_metric="netPnL",
+        steps=steps,
+        total_portfolio_pnl=0.0,
+        total_trades=0,
+        max_portfolio_dd=0.0,
+        coin_selection_turnover=0.0,
+        live_selection_start=start,
+        live_selection_end=start + timedelta(days=2),
+        live_selection_results=[],
+        live_selected_coins=[],
+        live_selection_scores={},
+    )
+
+    runner._print_final_report(result)
+    assert "Losing Steps:            1/3" in capsys.readouterr().out
+
+    output_path = tmp_path / "result.json"
+    runner.save_results(result, str(output_path))
+    summary = json.loads(output_path.read_text())["summary"]
+    assert summary["profitable_steps"] == 1
+    assert summary["losing_steps"] == 1
+    assert summary["flat_steps"] == 1
 
 
 @pytest.mark.asyncio

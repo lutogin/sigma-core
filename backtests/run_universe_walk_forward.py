@@ -1079,7 +1079,12 @@ class UniverseWalkForwardRunner:
             if len(step.selected_coins) > 3:
                 coins_str += f" +{len(step.selected_coins) - 3}"
 
-            emoji = "🟢" if step.portfolio_pnl > 0 else "🔴"
+            if step.portfolio_pnl > 0:
+                emoji = "🟢"
+            elif step.portfolio_pnl < 0:
+                emoji = "🔴"
+            else:
+                emoji = "⚪"
             print(
                 f"{step.step_num:<6} | {train_str:<25} | {trade_str:<25} | "
                 f"{coins_str:<30} | {emoji} ${step.portfolio_pnl:>+10.2f}"
@@ -1104,11 +1109,13 @@ class UniverseWalkForwardRunner:
             )
         )
 
-        # Profitable vs losing steps
+        # Keep no-trade/zero-PnL windows separate from actual losing windows.
         profitable_steps = sum(1 for s in result.steps if s.portfolio_pnl > 0)
-        losing_steps = sum(1 for s in result.steps if s.portfolio_pnl <= 0)
+        losing_steps = sum(1 for s in result.steps if s.portfolio_pnl < 0)
+        flat_steps = len(result.steps) - profitable_steps - losing_steps
         print(f"  Profitable Steps:        {profitable_steps}/{len(result.steps)}")
         print(f"  Losing Steps:            {losing_steps}/{len(result.steps)}")
+        print(f"  Flat/No-trade Steps:     {flat_steps}/{len(result.steps)}")
 
         # Most selected coins
         coin_counts: Dict[str, int] = {}
@@ -1363,6 +1370,15 @@ class UniverseWalkForwardRunner:
                 "total_trades": result.total_trades,
                 "max_portfolio_dd": result.max_portfolio_dd,
                 "coin_selection_turnover": result.coin_selection_turnover,
+                "profitable_steps": sum(
+                    1 for step in result.steps if step.portfolio_pnl > 0
+                ),
+                "losing_steps": sum(
+                    1 for step in result.steps if step.portfolio_pnl < 0
+                ),
+                "flat_steps": sum(
+                    1 for step in result.steps if step.portfolio_pnl == 0
+                ),
             },
             "best_coins_over_period": best_coins,
             "best_train_candidates_over_period": best_train_candidates,
