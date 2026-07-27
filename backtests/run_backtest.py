@@ -22,7 +22,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import math
 
 import matplotlib.pyplot as plt
@@ -51,6 +51,11 @@ try:
         build_backtest_services,
         compute_trailing_pullback_calibration,
     )
+    from backtests.entry_funnel import (
+        EntryFunnel,
+        format_funnel_report,
+        format_symbol_funnel_table,
+    )
     from backtests.execution_model import (
         ExecutionAssumptions,
         calculate_spread_pnl,
@@ -62,6 +67,11 @@ except ImportError:
         build_backtest_config_kwargs,
         build_backtest_services,
         compute_trailing_pullback_calibration,
+    )
+    from entry_funnel import (
+        EntryFunnel,
+        format_funnel_report,
+        format_symbol_funnel_table,
     )
     from execution_model import (
         ExecutionAssumptions,
@@ -716,6 +726,9 @@ class BacktestResult:
     # Trailing entry stats
     trailing_cancelled_entries: int = 0  # Watches cancelled (timeout, false_alarm, SL)
 
+    # Per-filter rejection counters, serialized via EntryFunnel.to_dict()
+    entry_funnel: Dict[str, Any] = field(default_factory=dict)
+
 
 class StatArbBacktest:
     """
@@ -790,6 +803,9 @@ class StatArbBacktest:
         # Trailing entry state
         self.watch_candidates: Dict[str, BacktestWatchCandidate] = {}
         self.trailing_cancelled_count: int = 0  # Stats: cancelled watches
+
+        # Per-filter rejection accounting for the entry pipeline
+        self.entry_funnel = EntryFunnel()
 
         # Cache for 1m candles (eager or lazy-loaded depending on config)
         # symbol -> DataFrame with 1m OHLCV
@@ -1119,6 +1135,7 @@ class StatArbBacktest:
         window_data: Dict[str, pd.DataFrame],
     ) -> None:
         """Process a single candle: check exits, then entries."""
+        self.entry_funnel.count_bar()
 
         # Calculate correlation and z-score
         correlation_results = self.correlation_service.calculate(
@@ -1134,6 +1151,10 @@ class StatArbBacktest:
             correlation_results=correlation_results,
             ohlcv=window_data,
         )
+
+        for symbol in z_score_results:
+            if symbol != self.primary_pair:
+                self.entry_funnel.record(symbol, "evaluated")
 
         # Filter by correlation
         filtered_results = self._filter_by_correlation(
@@ -1168,10 +1189,14 @@ class StatArbBacktest:
                 window_data[self.primary_pair]
             )
             if not volatility_result.is_safe:
+                self.entry_funnel.count_volatility_block()
                 # Market is unsafe - clear ALL watches (like production _on_market_unsafe)
                 if self.watch_candidates:
                     cancelled_count = len(self.watch_candidates)
                     for symbol in list(self.watch_candidates.keys()):
+                        self.entry_funnel.record(
+                            symbol, "watch_volatility_cancelled"
+                        )
                         print(
                             f"❌ Watch cancelled (VOLATILITY): {symbol} | "
                             f"reason={volatility_result.stop_reason}"
@@ -1282,6 +1307,7 @@ class StatArbBacktest:
 
             coin_df = window_data.get(symbol)
             if coin_df is None or coin_df.empty:
+                self.entry_funnel.record(symbol, "reject_no_data")
                 continue
 
             pass_count = 0
@@ -1356,6 +1382,8 @@ class StatArbBacktest:
             )
             if checked >= required and pass_count >= required:
                 filtered[symbol] = z_result
+            else:
+                self.entry_funnel.record(symbol, "reject_stability")
 
         return filtered
 
@@ -1373,6 +1401,11 @@ class StatArbBacktest:
                 self.config.min_beta <= result.current_beta <= self.config.max_beta
             )
             if not corr_ok or not beta_ok:
+                # Correlation is checked first in live, so attribute it first.
+                self.entry_funnel.record(
+                    symbol,
+                    "reject_correlation" if not corr_ok else "reject_beta_range",
+                )
                 continue
 
             corr_result = correlation_results.get(symbol)
@@ -1381,6 +1414,7 @@ class StatArbBacktest:
                     self._evaluate_beta_drift(corr_result)
                 )
                 if not beta_stable:
+                    self.entry_funnel.record(symbol, "reject_beta_drift")
                     continue
 
             filtered[symbol] = result
@@ -2220,6 +2254,7 @@ class StatArbBacktest:
     ) -> None:
         """Check for new entry signals using dynamic threshold."""
         if len(self.positions) >= self.config.max_spreads:
+            self.entry_funnel.count_max_spreads_block()
             return  # Max positions reached
 
         # Process existing watches first (trailing entry logic)
@@ -2238,9 +2273,11 @@ class StatArbBacktest:
 
         for symbol, z_result in filtered_results.items():
             if symbol in self.positions:
+                self.entry_funnel.record(symbol, "reject_open_position")
                 continue  # Already have position in this symbol
 
             if symbol in self.watch_candidates:
+                self.entry_funnel.record(symbol, "reject_active_watch")
                 continue  # Already watching this symbol
 
             if symbol == self.primary_pair:
@@ -2249,6 +2286,7 @@ class StatArbBacktest:
             # Check cooldown
             if symbol in self.symbol_cooldowns:
                 if current_time < self.symbol_cooldowns[symbol]:
+                    self.entry_funnel.record(symbol, "reject_cooldown")
                     continue  # Symbol still in cooldown
                 else:
                     # Cooldown expired, remove from dict
@@ -2257,6 +2295,7 @@ class StatArbBacktest:
             z = z_result.current_z_score
 
             if np.isnan(z):
+                self.entry_funnel.record(symbol, "reject_z_nan")
                 continue
 
             # Use dynamic threshold for this symbol (adaptive upper bound)
@@ -2267,7 +2306,12 @@ class StatArbBacktest:
             # z_extreme_level > z_sl allows pullback-confirmed extreme signals.
             if abs(z) >= dyn_threshold and abs(z) < self.config.z_extreme_level:
                 side = "short" if z >= dyn_threshold else "long"
+                self.entry_funnel.record(symbol, "signal")
                 entry_candidates.append((abs(z), symbol, side, z_result, dyn_threshold))
+            elif abs(z) >= self.config.z_extreme_level:
+                self.entry_funnel.record(symbol, "reject_z_extreme")
+            else:
+                self.entry_funnel.record(symbol, "reject_z_below_threshold")
 
         # Sort candidates by Z-score strength (highest first)
         entry_candidates.sort(key=lambda x: x[0], reverse=True)
@@ -2281,11 +2325,13 @@ class StatArbBacktest:
             if not self._check_hurst_for_symbol(
                 symbol, window_data, correlation_results
             ):
+                self.entry_funnel.record(symbol, "reject_hurst")
                 continue
 
             if not self._check_halflife_for_symbol(
                 symbol, window_data, correlation_results
             ):
+                self.entry_funnel.record(symbol, "reject_halflife")
                 continue
 
             if self.config.use_adf_filter:
@@ -2295,6 +2341,7 @@ class StatArbBacktest:
                     correlation_results,
                 )
                 if pvalue is None:
+                    self.entry_funnel.record(symbol, "reject_adf_unavailable")
                     continue
                 adf_pvalues[symbol] = pvalue
 
@@ -2311,8 +2358,10 @@ class StatArbBacktest:
 
         for symbol, side, z_result, dyn_threshold in quality_candidates:
             if len(self.positions) >= self.config.max_spreads:
-                break
+                self.entry_funnel.record(symbol, "reject_max_spreads")
+                continue
             if symbol not in adf_accepted:
+                self.entry_funnel.record(symbol, "reject_adf_bh")
                 continue
 
             # Funding data is part of the entry model. If the filter is
@@ -2331,6 +2380,7 @@ class StatArbBacktest:
 
                 if net_funding is None:
                     self.funding_blocked_count += 1
+                    self.entry_funnel.record(symbol, "reject_funding_missing")
                     print(
                         f"⛔ FUNDING FILTER: {symbol} ({side.upper()}) blocked | "
                         "historical funding data unavailable"
@@ -2339,6 +2389,7 @@ class StatArbBacktest:
 
                 if net_funding < self.config.max_funding_cost_threshold:
                     self.funding_blocked_count += 1
+                    self.entry_funnel.record(symbol, "reject_funding_toxic")
                     print(
                         f"⛔ FUNDING FILTER: {symbol} ({side.upper()}) blocked | "
                         f"Net cost: {net_funding * 100:.3f}%/8h < {self.config.max_funding_cost_threshold * 100:.3f}%"
@@ -2384,6 +2435,7 @@ class StatArbBacktest:
         correlation_results: Optional[Dict] = None,
     ) -> None:
         """Start watching a symbol for trailing entry."""
+        self.entry_funnel.record(symbol, "watch_started")
         spread_mean = self._get_spread_mean(z_result)
         spread_std = self._get_spread_std(z_result)
 
@@ -2643,6 +2695,7 @@ class StatArbBacktest:
         for symbol, reason in watches_to_remove:
             if symbol in self.watch_candidates:
                 del self.watch_candidates[symbol]
+            self.entry_funnel.record_watch_reason(symbol, reason)
             if reason and reason in (
                 "FALSE_ALARM",
                 "SL_HIT",
@@ -2961,6 +3014,7 @@ class StatArbBacktest:
             coin_notional=coin_size,
             primary_notional=primary_size,
         ):
+            self.entry_funnel.record(symbol, "reject_margin")
             print(f"⛔ WATCH ENTRY {symbol} skipped: portfolio margin cap")
             return False
 
@@ -3005,6 +3059,7 @@ class StatArbBacktest:
         )
 
         self.positions[symbol] = position
+        self.entry_funnel.record(symbol, "entered")
 
         watch_duration = (entry_time - watch.start_time).total_seconds() / 60
         multiplier_str = (
@@ -3284,6 +3339,7 @@ class StatArbBacktest:
             coin_notional=coin_size,
             primary_notional=primary_size,
         ):
+            self.entry_funnel.record(symbol, "reject_margin")
             print(f"⛔ OPEN {symbol} skipped: portfolio margin cap")
             return False
 
@@ -3332,6 +3388,7 @@ class StatArbBacktest:
         )
 
         self.positions[symbol] = position
+        self.entry_funnel.record(symbol, "entered")
 
         # Log with multiplier info if dynamic sizing is used
         multiplier_str = (
@@ -3657,6 +3714,7 @@ class StatArbBacktest:
             funding_blocked_entries=self.funding_blocked_count,
             total_funding_pnl=sum(t.funding_pnl for t in self.trades),
             trailing_cancelled_entries=self.trailing_cancelled_count,
+            entry_funnel=self.entry_funnel.to_dict(),
         )
 
     def _calculate_symbol_stats(self) -> List[SymbolStats]:
@@ -3827,6 +3885,13 @@ def print_results(result: BacktestResult) -> None:
     # Print per-symbol statistics
     if result.symbol_stats:
         print_symbol_stats(result.symbol_stats)
+
+    if result.entry_funnel:
+        funnel = EntryFunnel.from_dict(result.entry_funnel)
+        for line in format_funnel_report(funnel):
+            print(line)
+        for line in format_symbol_funnel_table(funnel):
+            print(line)
 
     print("\n" + "=" * 70)
 

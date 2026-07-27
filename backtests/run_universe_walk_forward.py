@@ -17,9 +17,13 @@ Usage:
 
 import argparse
 import asyncio
+import atexit
 import json
+import multiprocessing
+import os
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +43,13 @@ try:
         build_backtest_config_kwargs,
         build_backtest_services,
     )
+    from backtests.entry_funnel import (
+        EntryFunnel,
+        format_funnel_report,
+        format_symbol_funnel_table,
+        summarize_totals,
+        top_blockers,
+    )
     from backtests.run_backtest import (
         BacktestConfig,
         BacktestResult,
@@ -51,6 +62,13 @@ except ImportError:
     from backtest_shared import (
         build_backtest_config_kwargs,
         build_backtest_services,
+    )
+    from entry_funnel import (
+        EntryFunnel,
+        format_funnel_report,
+        format_symbol_funnel_table,
+        summarize_totals,
+        top_blockers,
     )
     from run_backtest import (
         BacktestConfig,
@@ -287,6 +305,147 @@ def _set_run_backtest_print_enabled(enabled: bool) -> None:
 # =============================================================================
 
 
+@dataclass(frozen=True)
+class _CoinBacktestProcessJob:
+    """Serializable input for one isolated coin backtest."""
+
+    coin: str
+    start_date: datetime
+    end_date: datetime
+    env_file: Optional[str]
+    base_config: Dict[str, Any]
+    funding_events: Dict[str, List[Tuple[datetime, float]]]
+    funding_intervals: Dict[str, int]
+    verbose: bool
+
+
+@dataclass
+class _CoinBacktestProcessResult:
+    """Small picklable subset of BacktestResult used by universe WF."""
+
+    total_pnl: float
+    total_trades: int
+    winning_trades: int
+    win_rate: float
+    max_drawdown: float
+    max_drawdown_pct: float
+    sharpe_ratio: float
+    profit_factor: float
+    avg_trade_pnl: float
+    trades: List[Trade]
+    worker_pid: int
+    entry_funnel: Dict[str, Any]
+
+
+class _CoinBacktestProcessRuntime:
+    """Persistent per-process runtime with its own DB/exchange connections."""
+
+    def __init__(self, job: _CoinBacktestProcessJob):
+        self.runtime_key = (
+            job.env_file,
+            json.dumps(job.base_config, sort_keys=True),
+            job.verbose,
+        )
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.container = Container().init(job.env_file)
+        self.settings = self.container.settings
+        self.logger = self.container.logger if job.verbose else _SilentLogger()
+        self.exchange = self.container.exchange_client
+        self.loop.run_until_complete(self.exchange.connect())
+        base_loader = AsyncDataLoaderService(
+            logger=self.logger,
+            exchange_client=self.exchange,
+            ohlcv_repository=self.container.ohlcv_repository,
+        )
+        self.data_loader = _InMemoryOHLCVCacheLoader(base_loader)
+        self.base_config = BacktestConfig(**job.base_config)
+        self.funding_cache = HistoricalFundingCache(logger=self.logger)
+        _set_run_backtest_print_enabled(job.verbose)
+
+    def _merge_funding(self, job: _CoinBacktestProcessJob) -> None:
+        for symbol, events in job.funding_events.items():
+            self.funding_cache._cache[symbol] = list(events)
+        self.funding_cache._intervals.update(job.funding_intervals)
+
+    def run(
+        self,
+        job: _CoinBacktestProcessJob,
+    ) -> _CoinBacktestProcessResult:
+        runtime_key = (
+            job.env_file,
+            json.dumps(job.base_config, sort_keys=True),
+            job.verbose,
+        )
+        if runtime_key != self.runtime_key:
+            raise RuntimeError("Process worker received incompatible runtime config")
+
+        self._merge_funding(job)
+        symbol = f"{job.coin}/USDT:USDT"
+        config = replace(
+            self.base_config,
+            max_spreads=1,
+            consistent_pairs=[symbol],
+        )
+        services = build_backtest_services(
+            settings=self.settings,
+            logger=self.logger,
+            exchange_client=self.exchange,
+            ohlcv_repository=self.container.ohlcv_repository,
+            config=config,
+            data_loader_override=self.data_loader,
+            funding_cache=self.funding_cache,
+        )
+        backtester = StatArbBacktest(config=config, **services)
+        result = self.loop.run_until_complete(
+            backtester.run(
+                job.start_date,
+                job.end_date - timedelta(seconds=1),
+            )
+        )
+        return _CoinBacktestProcessResult(
+            total_pnl=result.total_pnl,
+            total_trades=result.total_trades,
+            winning_trades=result.winning_trades,
+            win_rate=result.win_rate,
+            max_drawdown=result.max_drawdown,
+            max_drawdown_pct=result.max_drawdown_pct,
+            sharpe_ratio=result.sharpe_ratio,
+            profit_factor=result.profit_factor,
+            avg_trade_pnl=result.avg_trade_pnl,
+            trades=result.trades,
+            worker_pid=os.getpid(),
+            entry_funnel=result.entry_funnel,
+        )
+
+    def close(self) -> None:
+        try:
+            self.loop.run_until_complete(self.container.shutdown_async())
+        finally:
+            self.loop.close()
+
+
+_PROCESS_RUNTIME: Optional[_CoinBacktestProcessRuntime] = None
+
+
+def _close_process_runtime() -> None:
+    global _PROCESS_RUNTIME
+    if _PROCESS_RUNTIME is not None:
+        _PROCESS_RUNTIME.close()
+        _PROCESS_RUNTIME = None
+
+
+def _run_coin_backtest_in_process(
+    job: _CoinBacktestProcessJob,
+) -> _CoinBacktestProcessResult:
+    """ProcessPool entry point. Runtime and range caches survive across jobs."""
+    global _PROCESS_RUNTIME
+    if _PROCESS_RUNTIME is None:
+        _PROCESS_RUNTIME = _CoinBacktestProcessRuntime(job)
+        atexit.register(_close_process_runtime)
+    return _PROCESS_RUNTIME.run(job)
+
+
 @dataclass
 class CoinTrainResult:
     """Training phase result for a single coin."""
@@ -306,6 +465,7 @@ class CoinTrainResult:
     costs: float  # fees + negative funding
     score: float  # ranking score (net_pnl / max(1, abs(max_drawdown)))
     trades: List[Trade] = field(default_factory=list)
+    worker_pid: Optional[int] = field(default=None, repr=False)
 
 
 @dataclass
@@ -432,6 +592,7 @@ class UniverseWalkForwardRunner:
         allow_negative_train_selection: bool = False,
         allow_sparse_train_selection: bool = False,
         verbose_coin_backtests: bool = False,
+        env_file: Optional[str] = None,
     ):
         self.services = services
         self.base_config = base_config
@@ -447,12 +608,13 @@ class UniverseWalkForwardRunner:
         self.allow_negative_train_selection = allow_negative_train_selection
         self.allow_sparse_train_selection = allow_sparse_train_selection
         self.verbose_coin_backtests = verbose_coin_backtests
+        self.env_file = str(Path(env_file).resolve()) if env_file else None
 
         # Silence inner backtest logs by default to keep universe WF readable/fast.
         _set_run_backtest_print_enabled(self.verbose_coin_backtests)
 
-        # Shared cached OHLCV loader to avoid repeated DB/cache reads
-        # for identical symbol/window requests across coins.
+        # Cached loader for direct/programmatic execution without process workers.
+        # Normal CLI runs create one equivalent cache inside each worker process.
         loader_logger = (
             self.services["logger"] if self.verbose_coin_backtests else _SilentLogger()
         )
@@ -465,6 +627,91 @@ class UniverseWalkForwardRunner:
 
         self.steps: List[WFStepResult] = []
         self._print_lock = asyncio.Lock()
+        self._process_executors: List[ProcessPoolExecutor] = []
+        self._coin_worker_index: Dict[str, int] = {}
+        self._worker_seeded_symbols: List[set[str]] = []
+        self._observed_worker_pids: set[int] = set()
+
+        # Entry-pipeline rejection counters accumulated over every train window.
+        # Train covers the whole universe, so this is the funnel that explains
+        # why a coin never became a candidate.
+        self._train_funnel = EntryFunnel()
+        self._trade_funnel = EntryFunnel()
+
+    def _start_process_workers(self) -> None:
+        """Start persistent single-process executors with stable coin affinity."""
+        if self._process_executors:
+            return
+
+        process_count = min(self.workers, max(1, len(self.coins)))
+        spawn_context = multiprocessing.get_context("spawn")
+        self._process_executors = [
+            ProcessPoolExecutor(
+                max_workers=1,
+                mp_context=spawn_context,
+            )
+            for _ in range(process_count)
+        ]
+        self._coin_worker_index = {
+            coin: index % process_count for index, coin in enumerate(self.coins)
+        }
+        self._worker_seeded_symbols = [set() for _ in range(process_count)]
+
+    def shutdown_process_workers(self) -> None:
+        """Stop child processes. Safe to call more than once."""
+        executors = self._process_executors
+        self._process_executors = []
+        self._coin_worker_index = {}
+        self._worker_seeded_symbols = []
+        for executor in executors:
+            executor.shutdown(wait=True, cancel_futures=True)
+
+    def _build_process_job(
+        self,
+        coin: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> Tuple[int, _CoinBacktestProcessJob]:
+        if not self._process_executors:
+            raise RuntimeError("Process workers are not started")
+
+        worker_index = self._coin_worker_index.get(coin)
+        if worker_index is None:
+            worker_index = len(self._coin_worker_index) % len(
+                self._process_executors
+            )
+            self._coin_worker_index[coin] = worker_index
+
+        primary_symbol = self.services["settings"].PRIMARY_PAIR
+        coin_symbol = f"{coin}/USDT:USDT"
+        required_symbols = {primary_symbol, coin_symbol}
+        seeded = self._worker_seeded_symbols[worker_index]
+        symbols_to_seed = required_symbols - seeded
+        funding_events: Dict[str, List[Tuple[datetime, float]]] = {}
+        funding_intervals: Dict[str, int] = {}
+        funding_cache = self.services.get("funding_cache")
+        if funding_cache is not None:
+            funding_events = {
+                symbol: list(funding_cache._cache.get(symbol, []))
+                for symbol in symbols_to_seed
+            }
+            funding_intervals = {
+                symbol: funding_cache._intervals[symbol]
+                for symbol in symbols_to_seed
+                if symbol in funding_cache._intervals
+            }
+        seeded.update(symbols_to_seed)
+
+        return worker_index, _CoinBacktestProcessJob(
+            coin=coin,
+            start_date=start_date,
+            end_date=end_date,
+            env_file=self.env_file,
+            base_config=asdict(self.base_config),
+            funding_events=funding_events,
+            funding_intervals=funding_intervals,
+            verbose=self.verbose_coin_backtests,
+        )
 
     def _base_r_value(self) -> float:
         """Base risk unit for kill-switch thresholding."""
@@ -577,31 +824,11 @@ class UniverseWalkForwardRunner:
         print(f"   Coins: {len(self.coins)}")
         print("=" * 100 + "\n")
 
-        settings = self.services["settings"]
-        warmup_days = settings.LOOKBACK_WINDOW_DAYS * 3 + 2
-        if settings.ENABLE_STABILITY_FILTER and settings.STABILITY_WINDOWS_DAYS:
-            warmup_days = max(
-                warmup_days,
-                max(settings.STABILITY_WINDOWS_DAYS) + 2,
-            )
-        if settings.ENABLE_BETA_DRIFT_GUARD:
-            warmup_days = max(
-                warmup_days,
-                settings.LOOKBACK_WINDOW_DAYS + settings.BETA_DRIFT_LONG_DAYS + 2,
-            )
-        preload_started = time.perf_counter()
-        await self._cached_data_loader.prime_ohlcv_bulk(
-            symbols=[
-                settings.PRIMARY_PAIR,
-                *(f"{coin}/USDT:USDT" for coin in self.coins),
-            ],
-            start_time=start_date - timedelta(days=warmup_days),
-            end_time=end_date,
-            timeframe=settings.TIMEFRAME,
-        )
+        process_started = time.perf_counter()
+        self._start_process_workers()
         print(
-            f"📦 Primed shared 15m range cache in "
-            f"{time.perf_counter() - preload_started:.1f}s\n"
+            f"⚙️ Started {len(self._process_executors)} persistent process workers "
+            f"in {time.perf_counter() - process_started:.1f}s\n"
         )
 
         # Generate WF windows
@@ -664,6 +891,7 @@ class UniverseWalkForwardRunner:
         # Print final report
         self._print_final_report(result)
 
+        self.shutdown_process_workers()
         return result
 
     def _generate_windows(
@@ -755,18 +983,28 @@ class UniverseWalkForwardRunner:
         train_end: datetime,
     ) -> List[CoinTrainResult]:
         """Run backtest for all coins in parallel."""
-        semaphore = asyncio.Semaphore(self.workers)
+        concurrency = (
+            len(self.coins)
+            if getattr(self, "_process_executors", [])
+            else self.workers
+        )
+        semaphore = asyncio.Semaphore(max(1, concurrency))
 
         async def run_coin(
             coin: str, idx: int
         ) -> Tuple[
-            Literal["with_trades", "no_trades", "error"], Optional[CoinTrainResult]
+            Literal["with_trades", "no_trades", "error"],
+            Optional[CoinTrainResult],
+            Optional[Dict[str, Any]],
         ]:
             async with semaphore:
                 try:
                     result = await self._run_single_coin_backtest(
                         coin, train_start, train_end
                     )
+                    # Zero-trade coins are exactly the ones worth explaining,
+                    # so the funnel is kept even when no result is built.
+                    funnel = getattr(result, "entry_funnel", None) if result else None
                     if result and result.total_trades > 0:
                         reliability = result.total_trades / (
                             result.total_trades + max(3, self.min_trades_train)
@@ -803,6 +1041,7 @@ class UniverseWalkForwardRunner:
                             costs=estimated_costs,
                             score=score,
                             trades=result.trades,
+                            worker_pid=getattr(result, "worker_pid", None),
                         )
 
                         async with self._print_lock:
@@ -814,29 +1053,43 @@ class UniverseWalkForwardRunner:
                                 f"Score={score:.2f}"
                             )
 
-                        return "with_trades", train_result
+                        return "with_trades", train_result, funnel
                     else:
                         async with self._print_lock:
                             print(f"  [{idx}/{len(self.coins)}] ⚪ {coin}: No trades")
-                        return "no_trades", None
+                        return "no_trades", None, funnel
 
                 except Exception as e:
                     async with self._print_lock:
                         print(f"  [{idx}/{len(self.coins)}] ❌ {coin}: {e}")
-                    return "error", None
+                    return "error", None, None
 
         # Run all coins in parallel
         tasks = [run_coin(coin, i) for i, coin in enumerate(self.coins, 1)]
         coin_results = await asyncio.gather(*tasks)
 
-        no_trades_count = sum(1 for status, _ in coin_results if status == "no_trades")
-        error_count = sum(1 for status, _ in coin_results if status == "error")
+        no_trades_count = sum(
+            1 for status, _, _ in coin_results if status == "no_trades"
+        )
+        error_count = sum(1 for status, _, _ in coin_results if status == "error")
         results = [
-            r for status, r in coin_results if status == "with_trades" and r is not None
+            r
+            for status, r, _ in coin_results
+            if status == "with_trades" and r is not None
         ]
+        for _, _, funnel in coin_results:
+            self._train_funnel.merge(funnel)
+
+        funnel_summary = summarize_totals(self._train_funnel.totals())
         print(
             f"  ↳ Train diagnostics: with_trades={len(results)} | "
-            f"no_trades={no_trades_count} | errors={error_count}"
+            f"no_trades={no_trades_count} | errors={error_count} | "
+            f"processes={len(getattr(self, '_observed_worker_pids', set()))}"
+        )
+        print(
+            f"  ↳ Entry funnel (cumulative): signals={funnel_summary['signal']} | "
+            f"watches={funnel_summary['watch_started']} | "
+            f"entries={funnel_summary['entered']}"
         )
         if error_count:
             raise RuntimeError(
@@ -927,7 +1180,12 @@ class UniverseWalkForwardRunner:
         selected_coins: List[str],
     ) -> List[CoinTradeResult]:
         """Run each selected coin on its own account, then apply its kill switch."""
-        semaphore = asyncio.Semaphore(self.workers)
+        concurrency = (
+            len(selected_coins)
+            if getattr(self, "_process_executors", [])
+            else self.workers
+        )
+        semaphore = asyncio.Semaphore(max(1, concurrency))
 
         async def run_coin(
             coin: str,
@@ -942,6 +1200,8 @@ class UniverseWalkForwardRunner:
                     )
                     if result is None:
                         return None
+
+                    self._trade_funnel.merge(getattr(result, "entry_funnel", None))
 
                     (
                         effective_trades,
@@ -1015,8 +1275,23 @@ class UniverseWalkForwardRunner:
         coin: str,
         start_date: datetime,
         end_date: datetime,
-    ) -> Optional[BacktestResult]:
+    ) -> Optional[BacktestResult | _CoinBacktestProcessResult]:
         """Run backtest for a single coin."""
+        if getattr(self, "_process_executors", []):
+            worker_index, job = self._build_process_job(
+                coin,
+                start_date,
+                end_date,
+            )
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                self._process_executors[worker_index],
+                _run_coin_backtest_in_process,
+                job,
+            )
+            self._observed_worker_pids.add(result.worker_pid)
+            return result
+
         symbol = f"{coin}/USDT:USDT"
         effective_end = end_date - timedelta(seconds=1)
 
@@ -1219,6 +1494,18 @@ class UniverseWalkForwardRunner:
                     f"train_pnl=${item['train_net_pnl']:+.2f} | "
                     f"train_steps={item['train_steps_tested']}"
                 )
+
+        for line in format_funnel_report(
+            self._train_funnel,
+            title="ENTRY FUNNEL — ALL TRAIN WINDOWS (whole universe)",
+            width=100,
+        ):
+            print(line)
+        for line in format_symbol_funnel_table(
+            self._train_funnel,
+            title="ENTRY FUNNEL BY COIN — TRAIN WINDOWS",
+        ):
+            print(line)
 
         ranked_fallback = self._build_ranked_fallback_over_period(result, top_n=10)
         if ranked_fallback:
@@ -1424,6 +1711,7 @@ class UniverseWalkForwardRunner:
             "best_train_candidates_over_period": best_train_candidates,
             "ranked_fallback_over_period": ranked_fallback,
             "coin_period_stats": coin_period_stats,
+            "entry_funnel": self._build_entry_funnel_report(),
             "live_selection": {
                 "train_start": result.live_selection_start.isoformat(),
                 "train_end": result.live_selection_end.isoformat(),
@@ -1524,8 +1812,8 @@ Examples:
     parser.add_argument(
         "--minTradesTrain",
         type=int,
-        default=3,
-        help="Minimum trades in train phase to qualify. Default: 3",
+        default=1,
+        help="Minimum trades in train phase to qualify. Default: 1",
     )
     parser.add_argument(
         "--rankMetric",
@@ -1561,8 +1849,8 @@ Examples:
     parser.add_argument(
         "--workers",
         type=int,
-        default=6,
-        help="Number of parallel workers. Default: 6",
+        default=10,
+        help="Number of parallel workers. Default: 10",
     )
     parser.add_argument(
         "--coinsFile",
@@ -1725,6 +2013,7 @@ Examples:
     # Connect to exchange
     exchange = container.exchange_client
     await exchange.connect()
+    runner: Optional[UniverseWalkForwardRunner] = None
 
     try:
         # Keep only symbols that exist on current Binance USDT-M universe
@@ -1796,6 +2085,7 @@ Examples:
             allow_negative_train_selection=allow_negative_train_selection,
             allow_sparse_train_selection=allow_sparse_train_selection,
             verbose_coin_backtests=verbose_coin_backtests,
+            env_file=args.env_file,
         )
 
         result = await runner.run(start_date, end_date)
@@ -1807,6 +2097,8 @@ Examples:
         runner.save_results(result, output_file)
 
     finally:
+        if runner is not None:
+            runner.shutdown_process_workers()
         _set_run_backtest_print_enabled(True)
         await exchange.disconnect()
         container.shutdown()

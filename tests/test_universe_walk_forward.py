@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 import pandas as pd
 import pytest
 
+import backtests.run_universe_walk_forward as universe_module
+from backtests.entry_funnel import EntryFunnel
 from backtests.run_backtest import BacktestConfig, Trade
 from backtests.run_universe_walk_forward import (
     CoinTrainResult,
@@ -57,7 +59,98 @@ def _bare_runner() -> UniverseWalkForwardRunner:
         position_size_usdt=1_000,
     )
     runner._print_lock = asyncio.Lock()
+    runner._train_funnel = EntryFunnel()
+    runner._trade_funnel = EntryFunnel()
     return runner
+
+
+def test_process_workers_use_spawn_and_stable_coin_affinity(monkeypatch) -> None:
+    created_executors = []
+
+    class FakeProcessPoolExecutor:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.shutdown_calls = []
+            created_executors.append(self)
+
+        def shutdown(self, **kwargs):
+            self.shutdown_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        universe_module,
+        "ProcessPoolExecutor",
+        FakeProcessPoolExecutor,
+    )
+    runner = _bare_runner()
+    runner.coins = ["ARB", "ENS", "IMX", "MOVE", "APE"]
+    runner.workers = 3
+    runner._process_executors = []
+    runner._coin_worker_index = {}
+    runner._worker_seeded_symbols = []
+
+    runner._start_process_workers()
+
+    assert len(created_executors) == 3
+    assert all(executor.kwargs["max_workers"] == 1 for executor in created_executors)
+    assert all(
+        executor.kwargs["mp_context"].get_start_method() == "spawn"
+        for executor in created_executors
+    )
+    assert runner._coin_worker_index == {
+        "ARB": 0,
+        "ENS": 1,
+        "IMX": 2,
+        "MOVE": 0,
+        "APE": 1,
+    }
+
+    runner.shutdown_process_workers()
+
+    assert all(
+        executor.shutdown_calls == [{"wait": True, "cancel_futures": True}]
+        for executor in created_executors
+    )
+
+
+def test_process_job_seeds_funding_only_once_per_worker() -> None:
+    runner = _bare_runner()
+    runner.coins = ["ARB"]
+    runner.env_file = None
+    runner.verbose_coin_backtests = False
+    runner._process_executors = [object()]
+    runner._coin_worker_index = {"ARB": 0}
+    runner._worker_seeded_symbols = [set()]
+    eth_symbol = "ETH/USDT:USDT"
+    arb_symbol = "ARB/USDT:USDT"
+    funding_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    runner.services = {
+        "settings": SimpleNamespace(PRIMARY_PAIR=eth_symbol),
+        "funding_cache": SimpleNamespace(
+            _cache={
+                eth_symbol: [(funding_time, 0.0001)],
+                arb_symbol: [(funding_time, -0.0002)],
+            },
+            _intervals={eth_symbol: 8, arb_symbol: 8},
+        ),
+    }
+    end = funding_time + timedelta(days=60)
+
+    worker_index, first_job = runner._build_process_job(
+        "ARB",
+        funding_time,
+        end,
+    )
+    _, second_job = runner._build_process_job(
+        "ARB",
+        funding_time + timedelta(days=14),
+        end + timedelta(days=14),
+    )
+
+    assert worker_index == 0
+    assert set(first_job.funding_events) == {eth_symbol, arb_symbol}
+    assert first_job.funding_intervals == {eth_symbol: 8, arb_symbol: 8}
+    assert second_job.funding_events == {}
+    assert second_job.funding_intervals == {}
 
 
 def test_sparse_one_trade_winner_is_not_selected_by_default() -> None:
